@@ -1,0 +1,44 @@
+# DavisZeroClaw 运行时模板
+# 由 scripts/start_davis.sh 渲染到 .runtime/davis/config.toml
+
+default_provider = "openrouter"
+default_model = "openai/gpt-4o"
+default_temperature = 0.3
+
+[gateway]
+host = "0.0.0.0"
+port = 3000
+require_pairing = false
+allow_public_bind = true
+
+[channels_config.webhook]
+port = 3001
+listen_path = "/shortcut"
+# secret = "replace-with-your-shortcut-hmac-secret"
+
+[memory]
+backend = "sqlite"
+auto_save = true
+
+[scheduler]
+enabled = false
+
+[autonomy]
+# 局域网开发默认值：Webhook 请求可直接进入工具调用链。
+level = "full"
+
+[mcp]
+enabled = true
+deferred_loading = false
+
+[[mcp.servers]]
+name = "homeassistant"
+transport = "sse"
+url = "__DAVIS_HA_URL__"
+headers = { Authorization = "Bearer __DAVIS_HA_TOKEN__" }
+
+# 可选：后续需要本地生活服务 MCP 时再打开。
+# [[mcp.servers]]
+# name = "life_services"
+# command = "npx"
+# args = ["-y", "@greater-china/local-life-services-mcp"]
