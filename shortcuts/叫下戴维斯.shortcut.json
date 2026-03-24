@@ -1,0 +1,105 @@
+{
+  "WFWorkflowClientVersion": "4018.0.4",
+  "WFWorkflowMinimumClientVersion": 900,
+  "WFWorkflowMinimumClientVersionString": "900",
+  "WFWorkflowName": "叫下戴维斯",
+  "WFWorkflowIcon": {
+    "WFWorkflowIconGlyphNumber": 61440,
+    "WFWorkflowIconStartColor": 463140863
+  },
+  "WFWorkflowOutputContentItemClasses": [],
+  "WFWorkflowHasOutputFallback": false,
+  "WFWorkflowInputContentItemClasses": [
+    "WFAppContentItem",
+    "WFAppStoreAppContentItem",
+    "WFArticleContentItem",
+    "WFContactContentItem",
+    "WFDateContentItem",
+    "WFEmailAddressContentItem",
+    "WFFolderContentItem",
+    "WFGenericFileContentItem",
+    "WFImageContentItem",
+    "WFiTunesProductContentItem",
+    "WFLocationContentItem",
+    "WFDCMapsLinkContentItem",
+    "WFAVAssetContentItem",
+    "WFPDFContentItem",
+    "WFPhoneNumberContentItem",
+    "WFRichTextContentItem",
+    "WFSafariWebPageContentItem",
+    "WFStringContentItem",
+    "WFURLContentItem"
+  ],
+  "WFWorkflowTypes": [],
+  "WFQuickActionSurfaces": [],
+  "WFWorkflowHasShortcutInputVariables": false,
+  "WFWorkflowImportQuestions": [
+    {
+      "ActionIndex": 1,
+      "Category": "Parameter",
+      "DefaultValue": "http://192.168.1.2:3001/shortcut",
+      "ParameterKey": "WFURL",
+      "Text": "请输入 DavisZeroClaw 的 Shortcut Webhook 地址"
+    }
+  ],
+  "WFWorkflowActions": [
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.ask",
+      "WFWorkflowActionParameters": {
+        "WFAskActionPrompt": "想让 Davis 做什么？",
+        "UUID": "A82DA5FE-13BE-4DAA-BAFA-8DA23A931723"
+      }
+    },
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.downloadurl",
+      "WFWorkflowActionParameters": {
+        "UUID": "A6F2D8F5-974F-48E3-B398-4D2E362B547F",
+        "WFURL": "http://192.168.1.2:3001/shortcut",
+        "WFHTTPMethod": "POST",
+        "WFHTTPBodyType": "JSON",
+        "WFJSONValues": {
+          "Value": {
+            "WFDictionaryFieldValueItems": [
+              {
+                "WFItemType": 0,
+                "WFKey": "sender",
+                "WFValue": "ios-shortcuts"
+              },
+              {
+                "WFItemType": 0,
+                "WFKey": "content",
+                "WFValue": {
+                  "Value": {
+                    "string": "￼",
+                    "attachmentsByRange": {
+                      "{0, 1}": {
+                        "OutputUUID": "A82DA5FE-13BE-4DAA-BAFA-8DA23A931723",
+                        "Type": "ActionOutput",
+                        "OutputName": "Ask for Input"
+                      }
+                    }
+                  },
+                  "WFSerializationType": "WFTextTokenString"
+                }
+              },
+              {
+                "WFItemType": 0,
+                "WFKey": "thread_id",
+                "WFValue": "iphone-shortcuts"
+              }
+            ]
+          },
+          "WFSerializationType": "WFDictionaryFieldValue"
+        }
+      }
+    },
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.speaktext",
+      "WFWorkflowActionParameters": {
+        "UUID": "B59B6C11-B3F1-4E6B-8342-417E99EA582D",
+        "Text": "正在处理",
+        "Language": "zh-CN"
+      }
+    }
+  ]
+}

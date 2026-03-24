@@ -113,6 +113,19 @@ DAVIS_HA_TOKEN=your_home_assistant_long_lived_access_token
 
 ## 第五步：配置 iPhone Shortcut
 
+仓库内保留了 Shortcut 模板源码和重建脚本：
+
+- 源模板：[shortcuts/叫下戴维斯.shortcut.json](/Users/xietian/Projects/DavisZeroClaw/shortcuts/叫下戴维斯.shortcut.json)
+- 重建脚本：[scripts/build_shortcut.sh](/Users/xietian/Projects/DavisZeroClaw/scripts/build_shortcut.sh)
+
+建议先执行：
+
+```bash
+./scripts/build_shortcut.sh
+```
+
+脚本会在本地生成 `shortcuts/叫下戴维斯.shortcut`。然后导入这个 `.shortcut` 文件，并把模板里的 `Webhook` 地址改成你的 `http://<mac-ip>:3001/shortcut`。
+
 Shortcut 应该向下面这个地址发请求：
 
 ```json
@@ -122,17 +135,20 @@ Content-Type: application/json
 {"sender":"ios-shortcuts","content":"关闭书房灯带","thread_id":"iphone-shortcuts"}
 ```
 
-推荐在 Shortcut 里这样组织动作：
+模板已经固定为这条动作链：
 
-1. 获取语音输入或文本输入
-2. 组装一个字典
-   - `sender = ios-shortcuts`
-   - `content = 上一步文本`
-   - `thread_id = iphone-shortcuts`
+1. 语音/文本输入
+2. 组装 JSON 请求
 3. 使用“获取 URL 内容”发起 `POST`
 4. 在收到 `200 OK` 后朗读“正在处理”
 
 这里的 `200 OK` 只表示 ZeroClaw 已接单，不表示最终动作已经执行完成。
+
+MVP 边界也已经固定：
+
+- 默认模板只负责接收输入、发送结构化 JSON、播报接单确认
+- 如果未来同步返回结构化结果，建议在 `获取 URL 内容` 后追加解析 `speech / open_url / handoff` 的动作
+- 当前不把 Siri / HomePod 异步播报当成成功条件
 
 更细的 Shortcut 配置细节见 [docs/Shortcut_and_Companion_Setup.md](/Users/xietian/Projects/DavisZeroClaw/docs/Shortcut_and_Companion_Setup.md)。
 
