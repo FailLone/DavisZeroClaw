@@ -13,8 +13,10 @@ CONFIG_TEMPLATE="${DAVIS_DIR}/config/davis/config.toml"
 CONFIG_DEST="${RUNTIME_DIR}/config.toml"
 GATEWAY_LOG="${RUNTIME_DIR}/gateway.log"
 CHANNEL_LOG="${RUNTIME_DIR}/channel.log"
+AUDIT_PROXY_LOG="${RUNTIME_DIR}/ha_audit_proxy.log"
 GATEWAY_PID_FILE="${RUNTIME_DIR}/gateway.pid"
 CHANNEL_PID_FILE="${RUNTIME_DIR}/channel.pid"
+AUDIT_PROXY_PID_FILE="${RUNTIME_DIR}/ha_audit_proxy.pid"
 ENV_FILE=""
 
 echo "======================================"
@@ -91,6 +93,11 @@ fi
 
 if grep -q 'REPLACE_WITH_YOUR' "${CONFIG_DEST}" || grep -q '__DAVIS_HA_' "${CONFIG_DEST}"; then
   echo "❌ 运行时配置中仍然存在未替换的占位符，请检查 ${CONFIG_DEST}、.env.local 或 .env。"
+  exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "❌ 找不到 python3，无法启动本地只读 HA 审计代理。"
   exit 1
 fi
 
@@ -177,12 +184,16 @@ start_process() {
 echo "🚀 正在启动 DavisZeroClaw 官方运行时进程 (后台运行)..."
 echo "ℹ️ 采用 zeroclaw gateway + zeroclaw channel start，以确保 Webhook Channel 真正监听。"
 
+start_process "HA Audit Proxy" "${AUDIT_PROXY_PID_FILE}" "${AUDIT_PROXY_LOG}" "http" "http://127.0.0.1:3010/health" \
+  python3 "${DAVIS_DIR}/scripts/ha_audit_proxy.py"
+
 start_process "Gateway" "${GATEWAY_PID_FILE}" "${GATEWAY_LOG}" "http" "http://127.0.0.1:3000/health" \
   zeroclaw gateway start --host 0.0.0.0
 
 start_process "Channel Server" "${CHANNEL_PID_FILE}" "${CHANNEL_LOG}" "port" "3001" \
   zeroclaw channel start
 
+echo "🔎 本地只读 HA 审计代理: http://127.0.0.1:3010/health"
 echo "🌐 Gateway 健康检查: http://<mac-ip>:3000/health"
 echo "🔗 Shortcut Webhook Channel: http://<mac-ip>:3001/shortcut"
 echo "🛑 停止服务: ./scripts/stop_davis.sh"

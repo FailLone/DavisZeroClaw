@@ -31,5 +31,6 @@ echo "======================================"
 echo "    停止 DavisZeroClaw 智能管家"
 echo "======================================"
 
+stop_process "HA Audit Proxy" "${RUNTIME_DIR}/ha_audit_proxy.pid"
 stop_process "Channel Server" "${RUNTIME_DIR}/channel.pid"
 stop_process "Gateway" "${RUNTIME_DIR}/gateway.pid"

@@ -20,6 +20,13 @@ listen_path = "/shortcut"
 backend = "sqlite"
 auto_save = true
 
+[http_request]
+enabled = true
+allow_private_hosts = true
+allowed_domains = ["127.0.0.1", "localhost"]
+timeout_secs = 30
+max_response_size = 1000000
+
 [scheduler]
 enabled = false
 
