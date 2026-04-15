@@ -1,0 +1,72 @@
+[home_assistant]
+url = "http://homeassistant.local:8123/api/mcp"
+token = "your_home_assistant_long_lived_access_token"
+
+[imessage]
+allowed_contacts = ["+8613800138000", "user@icloud.com"]
+
+[webhook]
+secret = "replace-with-your-webhook-secret"
+
+[[providers]]
+name = "openrouter"
+api_key = "your_openrouter_api_key"
+base_url = ""
+allowed_models = ["openai/gpt-4o", "anthropic/claude-sonnet-4.6"]
+
+[[providers]]
+name = "deepseek"
+api_key = "your_deepseek_api_key"
+base_url = ""
+allowed_models = ["deepseek-chat"]
+
+[routing]
+recompute_interval_minutes = 30
+restart_debounce_minutes = 10
+
+[routing.profiles.home_control]
+weights = { task_success = 0.45, safety = 0.30, stability = 0.15, latency = 0.08, cost = 0.02 }
+minimums = { task_success = 80, safety = 90 }
+max_fallbacks = 2
+
+[routing.profiles.general_qa]
+weights = { task_success = 0.42, latency = 0.28, stability = 0.15, safety = 0.10, cost = 0.05 }
+minimums = { task_success = 60, safety = 40 }
+max_fallbacks = 2
+
+[routing.profiles.research]
+weights = { task_success = 0.50, stability = 0.20, latency = 0.15, safety = 0.10, cost = 0.05 }
+minimums = { task_success = 70, safety = 50 }
+max_fallbacks = 2
+
+[routing.profiles.structured_lookup]
+weights = { task_success = 0.40, latency = 0.25, stability = 0.20, safety = 0.10, cost = 0.05 }
+minimums = { task_success = 75, safety = 60 }
+max_fallbacks = 2
+
+[browser_bridge]
+enabled = true
+worker_port = 3011
+default_profile = "user"
+
+[[browser_bridge.profiles]]
+name = "user"
+mode = "existing_session"
+browser = "chrome"
+
+[[browser_bridge.profiles]]
+name = "managed"
+mode = "managed"
+browser = "chromium"
+
+[browser_bridge.write_policy]
+allowed_origins = [
+  "https://buyertrade.taobao.com",
+  "https://order.jd.com",
+]
+default_non_whitelist_behavior = "requires_confirmation"
+
+[browser_bridge.user_session]
+require_remote_debugging = true
+allow_applescript_fallback = true
+remote_debugging_url = "http://127.0.0.1:9222"

@@ -1,9 +1,11 @@
 # DavisZeroClaw 运行时模板
 # 由 scripts/start_davis.sh 渲染到 .runtime/davis/config.toml
 
-default_provider = "openrouter"
-default_model = "openai/gpt-4o"
-default_temperature = 0.3
+default_provider = "__DAVIS_DEFAULT_PROVIDER__"
+default_model = "__DAVIS_DEFAULT_MODEL__"
+default_temperature = __DAVIS_DEFAULT_TEMPERATURE__
+
+__DAVIS_MODEL_PROVIDERS__
 
 [gateway]
 host = "0.0.0.0"
@@ -14,11 +16,20 @@ allow_public_bind = true
 [channels_config.webhook]
 port = 3001
 listen_path = "/shortcut"
-# secret = "replace-with-your-shortcut-hmac-secret"
+__DAVIS_WEBHOOK_SECRET_CONFIG__
+
+__DAVIS_IMESSAGE_CONFIG__
 
 [memory]
 backend = "sqlite"
 auto_save = true
+
+[observability]
+backend = "none"
+# 本地默认保留最近一段 ZeroClaw 运行时 trace，方便排查 tool/provider 异常。
+runtime_trace_mode = "rolling"
+runtime_trace_path = "state/runtime-trace.jsonl"
+runtime_trace_max_entries = 200
 
 [http_request]
 enabled = true
@@ -27,6 +38,9 @@ allowed_domains = ["127.0.0.1", "localhost"]
 timeout_secs = 30
 max_response_size = 1000000
 
+[skills]
+allow_scripts = true
+
 [scheduler]
 enabled = false
 
@@ -34,15 +48,19 @@ enabled = false
 # 局域网开发默认值：Webhook 请求可直接进入工具调用链。
 level = "full"
 
+__DAVIS_QUERY_CLASSIFICATION_CONFIG__
+__DAVIS_MODEL_ROUTES_CONFIG__
+
+[reliability]
+fallback_providers = __DAVIS_FALLBACK_PROVIDERS__
+__DAVIS_MODEL_FALLBACKS__
+
 [mcp]
 enabled = true
 deferred_loading = false
 
-[[mcp.servers]]
-name = "homeassistant"
-transport = "sse"
-url = "__DAVIS_HA_URL__"
-headers = { Authorization = "Bearer __DAVIS_HA_TOKEN__" }
+# 当前默认不把原始 Home Assistant MCP 直接暴露给 ZeroClaw。
+# HA 控制 / 审计统一走本地 Davis Rust 代理 + ha-control / ha-audit skill。
 
 # 可选：后续需要本地生活服务 MCP 时再打开。
 # [[mcp.servers]]

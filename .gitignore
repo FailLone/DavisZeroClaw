@@ -1,5 +1,9 @@
 /target
 .env
 .env.*
-!.env.example
 .runtime/
+node_modules/
+browser-worker/node_modules/
+config/davis/local.toml
+shortcuts/*.shortcut
+skills/*

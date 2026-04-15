@@ -13,6 +13,18 @@ description: Investigate Home Assistant history in a strict read-only way. Use w
 - Do not fabricate actors, causes, or timelines. If evidence is weak, say so.
 - Use this skill only for historical questions. If the user is asking about the current state right now, do not use this skill.
 
+## Trigger Hints
+
+Prefer `ha-audit` immediately when the request includes cues such as:
+
+- `昨晚`、`之前`、` earlier today`
+- `某个时间段`、`几点到几点`
+- `谁关的`、`谁开的`
+- `为什么反复开关`
+- `调查`、`审计`、`只允许读取`
+
+If any of those cues are present, route to this skill before considering live context or control.
+
 ## Workflow
 
 1. Confirm that the request is historical.
@@ -29,6 +41,14 @@ Default to the last 60 minutes unless the user specifies another window.
 
 4. Call the local audit proxy.
 Read [references/ha_audit_api.md](references/ha_audit_api.md) for the endpoint, query parameters, and response fields.
+
+Execution rules:
+
+- Use `http_request` with a simple `GET`.
+- Put the target in the `entity_id` query parameter.
+- When the user gives a relative window such as “最近一小时”, pass `hours=1`.
+- Do not switch to a write endpoint. Do not call any Home Assistant write tool.
+- Do not invent a custom audit endpoint name.
 
 5. Interpret the result.
 - `evidence`: synthesize your own concise answer from `resolved_entity_id`, `findings`, `actor`, `source`, `confidence`, and the per-entity timelines.
