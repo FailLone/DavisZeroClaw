@@ -1,0 +1,79 @@
+[skill]
+name = "my-parcels"
+description = "Check the user's recent parcels, orders, or purchase platform from the local Davis express proxy. Use for generic parcel questions, delivery status, pending pickups, what arrived recently, or where an item was bought."
+version = "0.1.0"
+tags = ["express", "parcels", "orders", "shopping"]
+
+prompts = [
+  """When the user asks about parcels, packages, deliveries, orders, purchases, or where they bought an item, you must call a my-parcels tool in the current turn before answering. Never answer from memory or give a placeholder-only response.""",
+  """Tool routing rules: for generic questions like '帮我查一下最近的快递', '我最近有什么包裹', or '我买的东西到了吗', call my-parcels.recent_packages immediately. If the user asks about 最近, 刚刚, 最新, 今天, or explicitly wants a refresh, call my-parcels.recent_packages_refresh instead. If the user restricts the platform to 淘宝 or 天猫, use source='ali'. If the user restricts the platform to 京东, use source='jd'.""",
+  """Use my-parcels.search_packages or my-parcels.search_packages_refresh when the user gives a product, merchant, or status hint. Use the source-specific search tool only when the user clearly limits the platform. Prefer the proxy's speech field when present, otherwise summarize package_count and the most relevant 1-3 packages. If the result reports needs_reauth, tell the user to run daviszeroclaw crawl profile login express-ali or daviszeroclaw crawl profile login express-jd as appropriate."""
+]
+
+[[tools]]
+name = "recent_packages"
+description = "Query recent parcels across Taobao and JD with the default local proxy behavior."
+kind = "http"
+command = "http://127.0.0.1:3010/express/packages"
+
+[[tools]]
+name = "recent_packages_refresh"
+description = "Refresh and query recent parcels across Taobao and JD."
+kind = "http"
+command = "http://127.0.0.1:3010/express/packages?refresh=true"
+
+[[tools]]
+name = "packages_by_source"
+description = "Query recent parcels for a specific source. Use source='ali' for Taobao/Tmall and source='jd' for JD."
+kind = "http"
+command = "http://127.0.0.1:3010/express/packages?source={{source}}"
+
+[tools.args]
+source = "Parcel source: ali for Taobao/Tmall, jd for JD."
+
+[[tools]]
+name = "packages_by_source_refresh"
+description = "Refresh and query recent parcels for a specific source. Use source='ali' for Taobao/Tmall and source='jd' for JD."
+kind = "http"
+command = "http://127.0.0.1:3010/express/packages?source={{source}}&refresh=true"
+
+[tools.args]
+source = "Parcel source: ali for Taobao/Tmall, jd for JD."
+
+[[tools]]
+name = "search_packages"
+description = "Search parcels across Taobao and JD by product title, merchant, status, carrier, or masked tracking text."
+kind = "http"
+command = "http://127.0.0.1:3010/express/search?q={{q}}"
+
+[tools.args]
+q = "Search text such as a product name, merchant, status, or tracking hint."
+
+[[tools]]
+name = "search_packages_refresh"
+description = "Refresh and search parcels across Taobao and JD by product title, merchant, status, carrier, or masked tracking text."
+kind = "http"
+command = "http://127.0.0.1:3010/express/packages?q={{q}}&refresh=true"
+
+[tools.args]
+q = "Search text such as a product name, merchant, status, or tracking hint."
+
+[[tools]]
+name = "search_packages_by_source"
+description = "Search parcels for a specific source by product title, merchant, status, carrier, or masked tracking text."
+kind = "http"
+command = "http://127.0.0.1:3010/express/search?source={{source}}&q={{q}}"
+
+[tools.args]
+source = "Parcel source: ali for Taobao/Tmall, jd for JD."
+q = "Search text such as a product name, merchant, status, or tracking hint."
+
+[[tools]]
+name = "search_packages_by_source_refresh"
+description = "Refresh and search parcels for a specific source by product title, merchant, status, carrier, or masked tracking text."
+kind = "http"
+command = "http://127.0.0.1:3010/express/packages?source={{source}}&q={{q}}&refresh=true"
+
+[tools.args]
+source = "Parcel source: ali for Taobao/Tmall, jd for JD."
+q = "Search text such as a product name, merchant, status, or tracking hint."
