@@ -12,7 +12,7 @@ secret = "replace-with-your-webhook-secret"
 name = "openrouter"
 api_key = "your_openrouter_api_key"
 base_url = "https://openrouter.ai/api/v1"
-allowed_models = ["openai/gpt-4.1", "openai/gpt-5.2", "google/gemini-2.5-flash"]
+allowed_models = ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.2", "google/gemini-2.5-flash"]
 
 [[providers]]
 name = "deepseek"
@@ -44,32 +44,21 @@ weights = { task_success = 0.40, latency = 0.25, stability = 0.20, safety = 0.10
 minimums = { task_success = 75, safety = 60 }
 max_fallbacks = 2
 
-[browser_bridge]
+[crawl4ai]
 enabled = true
-worker_port = 3011
-default_profile = "user"
-
-[[browser_bridge.profiles]]
-name = "user"
-mode = "existing_session"
-browser = "chrome"
-
-[[browser_bridge.profiles]]
-name = "managed"
-mode = "managed"
-browser = "chromium"
-
-[browser_bridge.write_policy]
-allowed_origins = [
-  "https://buyertrade.taobao.com",
-  "https://order.jd.com",
-]
-default_non_whitelist_behavior = "requires_confirmation"
-
-[browser_bridge.user_session]
-require_remote_debugging = true
-allow_applescript_fallback = true
-remote_debugging_url = "http://127.0.0.1:9222"
+transport = "python"
+# Optional override. Empty means use .runtime/davis/crawl4ai-venv/bin/python when present,
+# otherwise fall back to python3 from PATH.
+python = ""
+# Optional when transport = "server".
+base_url = "http://127.0.0.1:11235"
+timeout_secs = 90
+headless = true
+magic = true
+simulate_user = true
+override_navigator = true
+remove_overlay_elements = true
+enable_stealth = true
 
 [memory_integrations.mempalace]
 enabled = false

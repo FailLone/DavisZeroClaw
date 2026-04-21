@@ -36,7 +36,7 @@ async fn health_route_reports_local_proxy_service() {
     assert!(body
         .get("features")
         .and_then(Value::as_array)
-        .is_some_and(|features| features.iter().any(|feature| feature == "browser_status")));
+        .is_some_and(|features| features.iter().any(|feature| feature == "express_packages")));
 }
 
 #[tokio::test]

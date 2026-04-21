@@ -12,7 +12,7 @@ pub struct LocalConfig {
     pub providers: Vec<ModelProviderConfig>,
     pub routing: RoutingConfig,
     #[serde(default)]
-    pub browser_bridge: BrowserBridgeConfig,
+    pub crawl4ai: Crawl4aiConfig,
     #[serde(default)]
     pub memory_integrations: MemoryIntegrationsConfig,
     #[serde(default)]
@@ -69,44 +69,37 @@ pub struct RoutingProfileConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrowserBridgeConfig {
-    #[serde(default = "default_true")]
+pub struct Crawl4aiConfig {
+    #[serde(default)]
     pub enabled: bool,
-    #[serde(default = "default_browser_worker_port")]
-    pub worker_port: u16,
-    #[serde(default = "default_browser_profile_name")]
-    pub default_profile: String,
-    #[serde(default = "default_browser_profiles")]
-    pub profiles: Vec<BrowserProfileConfig>,
     #[serde(default)]
-    pub write_policy: BrowserWritePolicyConfig,
+    pub transport: Crawl4aiTransport,
+    #[serde(default = "default_crawl4ai_base_url")]
+    pub base_url: String,
     #[serde(default)]
-    pub user_session: BrowserUserSessionConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrowserProfileConfig {
-    pub name: String,
-    pub mode: String,
-    pub browser: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrowserWritePolicyConfig {
-    #[serde(default)]
-    pub allowed_origins: Vec<String>,
-    #[serde(default = "default_non_whitelist_behavior")]
-    pub default_non_whitelist_behavior: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrowserUserSessionConfig {
+    pub python: String,
+    #[serde(default = "default_crawl4ai_timeout_secs")]
+    pub timeout_secs: u64,
     #[serde(default = "default_true")]
-    pub require_remote_debugging: bool,
+    pub headless: bool,
     #[serde(default = "default_true")]
-    pub allow_applescript_fallback: bool,
-    #[serde(default = "default_remote_debugging_url")]
-    pub remote_debugging_url: String,
+    pub magic: bool,
+    #[serde(default = "default_true")]
+    pub simulate_user: bool,
+    #[serde(default = "default_true")]
+    pub override_navigator: bool,
+    #[serde(default = "default_true")]
+    pub remove_overlay_elements: bool,
+    #[serde(default = "default_true")]
+    pub enable_stealth: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Crawl4aiTransport {
+    Server,
+    #[default]
+    Python,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -198,20 +191,12 @@ fn default_true() -> bool {
     true
 }
 
-fn default_browser_worker_port() -> u16 {
-    3011
+fn default_crawl4ai_base_url() -> String {
+    "http://127.0.0.1:11235".to_string()
 }
 
-fn default_browser_profile_name() -> String {
-    "user".to_string()
-}
-
-fn default_non_whitelist_behavior() -> String {
-    "requires_confirmation".to_string()
-}
-
-fn default_remote_debugging_url() -> String {
-    "http://127.0.0.1:9222".to_string()
+fn default_crawl4ai_timeout_secs() -> u64 {
+    90
 }
 
 fn default_mempalace_package() -> String {
@@ -250,55 +235,20 @@ fn default_article_normalize_fallback_min_ratio() -> f32 {
     0.70
 }
 
-fn default_browser_profiles() -> Vec<BrowserProfileConfig> {
-    vec![
-        BrowserProfileConfig {
-            name: "user".to_string(),
-            mode: "existing_session".to_string(),
-            browser: "chrome".to_string(),
-        },
-        BrowserProfileConfig {
-            name: "managed".to_string(),
-            mode: "managed".to_string(),
-            browser: "chromium".to_string(),
-        },
-    ]
-}
-
-impl Default for BrowserBridgeConfig {
+impl Default for Crawl4aiConfig {
     fn default() -> Self {
         Self {
-            enabled: default_true(),
-            worker_port: default_browser_worker_port(),
-            default_profile: default_browser_profile_name(),
-            profiles: default_browser_profiles(),
-            write_policy: BrowserWritePolicyConfig::default(),
-            user_session: BrowserUserSessionConfig::default(),
-        }
-    }
-}
-
-impl BrowserBridgeConfig {
-    pub fn profile(&self, name: &str) -> Option<&BrowserProfileConfig> {
-        self.profiles.iter().find(|profile| profile.name == name)
-    }
-}
-
-impl Default for BrowserWritePolicyConfig {
-    fn default() -> Self {
-        Self {
-            allowed_origins: Vec::new(),
-            default_non_whitelist_behavior: default_non_whitelist_behavior(),
-        }
-    }
-}
-
-impl Default for BrowserUserSessionConfig {
-    fn default() -> Self {
-        Self {
-            require_remote_debugging: default_true(),
-            allow_applescript_fallback: default_true(),
-            remote_debugging_url: default_remote_debugging_url(),
+            enabled: false,
+            transport: Crawl4aiTransport::default(),
+            base_url: default_crawl4ai_base_url(),
+            python: String::new(),
+            timeout_secs: default_crawl4ai_timeout_secs(),
+            headless: default_true(),
+            magic: default_true(),
+            simulate_user: default_true(),
+            override_navigator: default_true(),
+            remove_overlay_elements: default_true(),
+            enable_stealth: default_true(),
         }
     }
 }
@@ -427,81 +377,18 @@ fn validate_local_config(mut config: LocalConfig) -> Result<LocalConfig> {
         return Err(anyhow!("routing.restart_debounce_minutes must be > 0"));
     }
 
-    config.browser_bridge.default_profile =
-        config.browser_bridge.default_profile.trim().to_string();
-    if config.browser_bridge.worker_port == 0 {
-        return Err(anyhow!("browser_bridge.worker_port must be > 0"));
-    }
-    if config.browser_bridge.default_profile.is_empty() {
-        return Err(anyhow!("browser_bridge.default_profile is required"));
-    }
-    if config.browser_bridge.profiles.is_empty() {
-        return Err(anyhow!("browser_bridge.profiles must not be empty"));
-    }
-    let mut seen_browser_profiles = BTreeSet::new();
-    for profile in &mut config.browser_bridge.profiles {
-        profile.name = profile.name.trim().to_string();
-        profile.mode = profile.mode.trim().to_string();
-        profile.browser = profile.browser.trim().to_string();
-        if profile.name.is_empty() {
-            return Err(anyhow!("browser_bridge.profiles.name is required"));
-        }
-        if !matches!(profile.mode.as_str(), "existing_session" | "managed") {
-            return Err(anyhow!(
-                "browser_bridge.profiles.{}.mode must be existing_session or managed",
-                profile.name
-            ));
-        }
-        if !matches!(profile.browser.as_str(), "chrome" | "chromium") {
-            return Err(anyhow!(
-                "browser_bridge.profiles.{}.browser must be chrome or chromium",
-                profile.name
-            ));
-        }
-        if !seen_browser_profiles.insert(profile.name.clone()) {
-            return Err(anyhow!(
-                "duplicate browser_bridge profile name: {}",
-                profile.name
-            ));
-        }
-    }
-    if config
-        .browser_bridge
-        .profile(&config.browser_bridge.default_profile)
-        .is_none()
-    {
-        return Err(anyhow!(
-            "browser_bridge.default_profile must match one of browser_bridge.profiles"
-        ));
-    }
-    config.browser_bridge.write_policy.allowed_origins = config
-        .browser_bridge
-        .write_policy
-        .allowed_origins
-        .into_iter()
-        .map(|origin| origin.trim().to_string())
-        .filter(|origin| !origin.is_empty())
-        .collect();
-    if config
-        .browser_bridge
-        .write_policy
-        .default_non_whitelist_behavior
+    config.crawl4ai.base_url = config
+        .crawl4ai
+        .base_url
         .trim()
-        .is_empty()
-    {
-        config
-            .browser_bridge
-            .write_policy
-            .default_non_whitelist_behavior = default_non_whitelist_behavior();
+        .trim_end_matches('/')
+        .to_string();
+    config.crawl4ai.python = config.crawl4ai.python.trim().to_string();
+    if config.crawl4ai.base_url.is_empty() {
+        config.crawl4ai.base_url = default_crawl4ai_base_url();
     }
-    if config
-        .browser_bridge
-        .user_session
-        .remote_debugging_url
-        .trim()
-        .is_empty()
-    {
-        config.browser_bridge.user_session.remote_debugging_url = default_remote_debugging_url();
+    if config.crawl4ai.timeout_secs == 0 {
+        config.crawl4ai.timeout_secs = default_crawl4ai_timeout_secs();
     }
 
     config.memory_integrations.mempalace.python = config

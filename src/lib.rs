@@ -1,12 +1,12 @@
 mod advisor;
 mod app_config;
-mod article_ingest;
 mod article_memory;
 mod audit;
-mod browser;
 pub mod cli;
 mod constants;
 mod control;
+mod crawl4ai;
+mod crawl_sources;
 mod entity;
 mod express;
 mod ha_client;
@@ -23,14 +23,9 @@ pub use advisor::{
 };
 pub use app_config::{
     ArticleMemoryConfig, ArticleMemoryEmbeddingConfig, ArticleMemoryNormalizeConfig,
-    BrowserBridgeConfig, BrowserProfileConfig, BrowserUserSessionConfig, BrowserWritePolicyConfig,
-    HomeAssistantConfig, ImessageConfig, LocalConfig, MemoryIntegrationsConfig, MempalaceConfig,
-    MetricWeights, ModelProviderConfig, ProfileMinimums, RoutingConfig, RoutingProfileConfig,
-    RoutingProfilesConfig, WebhookConfig,
-};
-pub use article_ingest::{
-    ingest_article_from_browser, ArticleExtraction, ArticleMemoryIngestRequest,
-    ArticleMemoryIngestResponse,
+    Crawl4aiConfig, Crawl4aiTransport, HomeAssistantConfig, ImessageConfig, LocalConfig,
+    MemoryIntegrationsConfig, MempalaceConfig, MetricWeights, ModelProviderConfig, ProfileMinimums,
+    RoutingConfig, RoutingProfileConfig, RoutingProfilesConfig, WebhookConfig,
 };
 pub use article_memory::{
     add_article_memory, article_cleaning_preferred_selectors, article_memory_status,
@@ -51,10 +46,6 @@ pub use article_memory::{
     ResolvedArticleEmbeddingConfig, ResolvedArticleNormalizeConfig, ResolvedArticleValueConfig,
 };
 pub use audit::{audit_entity, parse_window};
-pub use browser::{
-    browser_action, browser_evaluate, browser_focus, browser_open, browser_profiles,
-    browser_screenshot, browser_snapshot, browser_status, browser_tabs, browser_wait,
-};
 pub use constants::{
     CONTROL_FAILURE_THRESHOLD, CONTROL_FAILURE_WINDOW_HOURS, DEFAULT_WINDOW_MINUTES, USER_AGENT,
 };
@@ -63,6 +54,11 @@ pub use control::{
     load_failure_state, maybe_consume_advisor_suggestion, prune_failure_state,
     record_control_failure, resolve_control_target, resolve_control_target_with_states,
     save_failure_state,
+};
+pub use crawl4ai::{crawl4ai_crawl, Crawl4aiPageRequest, Crawl4aiPageResult};
+pub use crawl_sources::{
+    builtin_crawl_sources, find_builtin_crawl_source, run_builtin_crawl_source,
+    CrawlSourceDefinition,
 };
 pub use entity::{related_entity_ids, resolve_entity_basic, resolve_entity_payload};
 pub use express::{express_auth_status, express_packages};
@@ -83,20 +79,16 @@ pub use model_routing::{
 pub use models::{
     AdvancedOpportunity, AdvisorSuggestion, AssistEntitySuggestion, AuditActor,
     AuditConfigIssueResult, AuditCounts, AuditEntityRow, AuditEvidenceResult, AuditFindings,
-    AuditNoEvidenceResult, AuditSource, AuditSourceObservation, AuditTimelineEntry,
-    BrowserActionPreview, BrowserActionRequest, BrowserActionResponse, BrowserEvaluateRequest,
-    BrowserFocusRequest, BrowserOpenRequest, BrowserProfileState, BrowserProfilesResponse,
-    BrowserScreenshotRequest, BrowserSnapshotRequest, BrowserStatusResponse, BrowserTab,
-    BrowserTabsResponse, BrowserTarget, BrowserWaitRequest, Candidate, ConfigMigrationSuggestion,
-    ConfigReport, ConfigReportCounts, ConfigReportFindings, ConfigReportSuggestions, ControlAction,
-    ControlConfig, ControlResolution, ControlTargetState, CrossDomainConflictFinding,
-    CustomSentenceSuggestion, DuplicateFriendlyNameFinding, EntityAliasSuggestion,
-    EntityBasicResolution, ExecuteControlRequest, ExecuteControlResponse, ExecutionError,
-    ExpressAuthStatusResponse, ExpressPackage, ExpressPackagesResponse, ExpressSourceSnapshot,
-    ExpressSourceStatus, FailureDetails, FailureEvent, FailureReason, FailureState, FailureSummary,
-    GroupConfig, GroupSuggestion, HaState, HaStateAttributes, Issue, MissingRoomSemanticFinding,
-    ReplacementCandidateReview, ReplacementCandidatesReport, ResolveEntityPayload,
-    ServiceExecution, TopFailedQuery,
+    AuditNoEvidenceResult, AuditSource, AuditSourceObservation, AuditTimelineEntry, Candidate,
+    ConfigMigrationSuggestion, ConfigReport, ConfigReportCounts, ConfigReportFindings,
+    ConfigReportSuggestions, ControlAction, ControlConfig, ControlResolution, ControlTargetState,
+    CrossDomainConflictFinding, CustomSentenceSuggestion, DuplicateFriendlyNameFinding,
+    EntityAliasSuggestion, EntityBasicResolution, ExecuteControlRequest, ExecuteControlResponse,
+    ExecutionError, ExpressAuthStatusResponse, ExpressPackage, ExpressPackagesResponse,
+    ExpressSourceSnapshot, ExpressSourceStatus, FailureDetails, FailureEvent, FailureReason,
+    FailureState, FailureSummary, GroupConfig, GroupSuggestion, HaState, HaStateAttributes, Issue,
+    MissingRoomSemanticFinding, ReplacementCandidateReview, ReplacementCandidatesReport,
+    ResolveEntityPayload, ServiceExecution, TopFailedQuery,
 };
 pub use runtime_paths::RuntimePaths;
 pub use server::{build_app, build_shortcut_bridge_app, AppState};

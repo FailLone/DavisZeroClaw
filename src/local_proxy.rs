@@ -20,51 +20,6 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
             }
             return Ok(());
         }
-        Some("print-browser-worker-env") => {
-            let config = check_local_config(&paths)?;
-            let browser_config = &config.browser_bridge;
-            println!(
-                "export DAVIS_BROWSER_BRIDGE_ENABLED='{}'",
-                if browser_config.enabled {
-                    "true"
-                } else {
-                    "false"
-                }
-            );
-            println!(
-                "export DAVIS_BROWSER_BRIDGE_PORT='{}'",
-                browser_config.worker_port
-            );
-            println!(
-                "export DAVIS_BROWSER_DEFAULT_PROFILE='{}'",
-                shell_single_quote(&browser_config.default_profile)
-            );
-            println!(
-                "export DAVIS_BROWSER_PROFILES_JSON='{}'",
-                shell_single_quote(&serde_json::to_string(&browser_config.profiles)?)
-            );
-            println!(
-                "export DAVIS_BROWSER_REMOTE_DEBUGGING_URL='{}'",
-                shell_single_quote(&browser_config.user_session.remote_debugging_url)
-            );
-            println!(
-                "export DAVIS_BROWSER_ALLOW_APPLESCRIPT_FALLBACK='{}'",
-                if browser_config.user_session.allow_applescript_fallback {
-                    "true"
-                } else {
-                    "false"
-                }
-            );
-            println!(
-                "export DAVIS_BROWSER_SCREENSHOTS_DIR='{}'",
-                shell_single_quote(&paths.browser_screenshots_dir().display().to_string())
-            );
-            println!(
-                "export DAVIS_BROWSER_PROFILES_DIR='{}'",
-                shell_single_quote(&paths.browser_profiles_root().display().to_string())
-            );
-            return Ok(());
-        }
         Some("check-ha") => {
             let config = check_local_config(&paths)?;
             let client = HaClient::from_credentials(
@@ -139,7 +94,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         mcp_client,
         paths,
         control_config,
-        Arc::new(local_config.browser_bridge.clone()),
+        Arc::new(local_config.crawl4ai.clone()),
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
         routing,

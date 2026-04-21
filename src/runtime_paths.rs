@@ -103,41 +103,25 @@ impl RuntimePaths {
         self.state_dir().join("ha_mcp_live_context.json")
     }
 
-    pub fn browser_profiles_root(&self) -> PathBuf {
-        self.runtime_dir.join("browser-profiles")
+    pub fn crawl4ai_home_dir(&self) -> PathBuf {
+        self.runtime_dir.join(".crawl4ai")
+    }
+
+    pub fn crawl4ai_profiles_root(&self) -> PathBuf {
+        self.crawl4ai_home_dir().join("profiles")
+    }
+
+    pub fn crawl4ai_legacy_profiles_root(&self) -> PathBuf {
+        self.runtime_dir.join("crawl4ai").join("profiles")
+    }
+
+    pub fn crawl4ai_adapter_dir(&self) -> PathBuf {
+        self.repo_root.join("crawl4ai_adapter")
     }
 
     pub fn express_cache_path(&self, source: &str) -> PathBuf {
         self.state_dir()
             .join(format!("express_{source}_cache.json"))
-    }
-
-    pub fn browser_bridge_status_path(&self) -> PathBuf {
-        self.state_dir().join("browser_bridge_status.json")
-    }
-
-    pub fn browser_actions_log_path(&self) -> PathBuf {
-        self.state_dir().join("browser_actions.jsonl")
-    }
-
-    pub fn browser_confirmations_log_path(&self) -> PathBuf {
-        self.state_dir().join("browser_confirmations.jsonl")
-    }
-
-    pub fn browser_screenshots_dir(&self) -> PathBuf {
-        self.runtime_dir.join("browser-screenshots")
-    }
-
-    pub fn browser_worker_script_path(&self) -> PathBuf {
-        self.repo_root.join("browser-worker").join("server.mjs")
-    }
-
-    pub fn browser_worker_log_path(&self) -> PathBuf {
-        self.runtime_dir.join("browser_worker.log")
-    }
-
-    pub fn browser_worker_pid_path(&self) -> PathBuf {
-        self.runtime_dir.join("browser_worker.pid")
     }
 
     pub fn local_proxy_log_path(&self) -> PathBuf {
@@ -162,6 +146,22 @@ impl RuntimePaths {
 
     pub fn mempalace_python_path(&self) -> PathBuf {
         self.mempalace_venv_dir().join("bin").join("python")
+    }
+
+    pub fn crawl4ai_venv_dir(&self) -> PathBuf {
+        self.runtime_dir.join("crawl4ai-venv")
+    }
+
+    pub fn crawl4ai_python_path(&self) -> PathBuf {
+        self.crawl4ai_venv_dir().join("bin").join("python")
+    }
+
+    pub fn crawl4ai_setup_path(&self) -> PathBuf {
+        self.crawl4ai_venv_dir().join("bin").join("crawl4ai-setup")
+    }
+
+    pub fn crawl4ai_doctor_path(&self) -> PathBuf {
+        self.crawl4ai_venv_dir().join("bin").join("crawl4ai-doctor")
     }
 
     pub fn mempalace_palace_dir(&self) -> PathBuf {
@@ -207,6 +207,14 @@ impl RuntimePaths {
 
     pub fn workspace_dir(&self) -> PathBuf {
         self.runtime_dir.join("workspace")
+    }
+
+    pub fn workspace_skills_dir(&self) -> PathBuf {
+        self.workspace_dir().join("skills")
+    }
+
+    pub fn workspace_sops_dir(&self) -> PathBuf {
+        self.workspace_dir().join("sops")
     }
 
     pub fn workspace_sessions_dir(&self) -> PathBuf {

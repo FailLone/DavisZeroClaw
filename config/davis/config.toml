@@ -38,6 +38,10 @@ max_response_size = 1000000
 [skills]
 allow_scripts = true
 
+[sop]
+sops_dir = "sops"
+default_execution_mode = "supervised"
+
 [scheduler]
 enabled = true
 

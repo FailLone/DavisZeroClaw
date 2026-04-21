@@ -1,17 +1,12 @@
 use crate::{
-    add_article_memory, article_memory_status, audit_entity, browser_action, browser_evaluate,
-    browser_focus, browser_open, browser_profiles, browser_screenshot, browser_snapshot,
-    browser_status, browser_tabs, browser_wait, build_failure_summary_payload, build_issue,
-    build_replacement_candidates_report, execute_control, express_auth_status, express_packages,
-    fetch_all_states_typed, generate_config_report, hybrid_search_article_memory,
-    ingest_article_from_browser, list_article_memory, normalize_all_article_memory,
-    normalize_article_memory, parse_window, refine_live_context_report_with_typed_states,
-    resolve_article_embedding_config, resolve_article_normalize_config,
-    resolve_article_value_config, resolve_control_target, resolve_entity_payload,
-    search_article_memory, upsert_article_memory_embedding, ArticleMemoryAddRequest,
-    ArticleMemoryConfig, ArticleMemoryIngestRequest, BrowserActionRequest, BrowserBridgeConfig,
-    BrowserEvaluateRequest, BrowserFocusRequest, BrowserOpenRequest, BrowserScreenshotRequest,
-    BrowserSnapshotRequest, BrowserWaitRequest, ControlAction, ControlConfig,
+    add_article_memory, article_memory_status, audit_entity, build_failure_summary_payload,
+    build_issue, build_replacement_candidates_report, execute_control, express_auth_status,
+    express_packages, fetch_all_states_typed, generate_config_report, hybrid_search_article_memory,
+    list_article_memory, normalize_all_article_memory, normalize_article_memory, parse_window,
+    refine_live_context_report_with_typed_states, resolve_article_embedding_config,
+    resolve_article_normalize_config, resolve_article_value_config, resolve_control_target,
+    resolve_entity_payload, search_article_memory, upsert_article_memory_embedding,
+    ArticleMemoryAddRequest, ArticleMemoryConfig, ControlAction, ControlConfig, Crawl4aiConfig,
     ExecuteControlRequest, FailureReason, HaClient, HaMcpClient, ModelProviderConfig,
     ModelRoutingManager, ProxyError, RuntimePaths,
 };
@@ -57,7 +52,7 @@ pub struct AppState {
     pub mcp_client: HaMcpClient,
     pub paths: RuntimePaths,
     pub control_config: Arc<ControlConfig>,
-    pub browser_config: Arc<BrowserBridgeConfig>,
+    pub crawl4ai_config: Arc<Crawl4aiConfig>,
     pub article_memory_config: Arc<ArticleMemoryConfig>,
     pub providers: Arc<Vec<ModelProviderConfig>>,
     pub routing: Arc<ModelRoutingManager>,
@@ -70,7 +65,7 @@ impl AppState {
         mcp_client: HaMcpClient,
         paths: RuntimePaths,
         control_config: Arc<ControlConfig>,
-        browser_config: Arc<BrowserBridgeConfig>,
+        crawl4ai_config: Arc<Crawl4aiConfig>,
         article_memory_config: Arc<ArticleMemoryConfig>,
         providers: Arc<Vec<ModelProviderConfig>>,
         routing: Arc<ModelRoutingManager>,
@@ -81,7 +76,7 @@ impl AppState {
             mcp_client,
             paths,
             control_config,
-            browser_config,
+            crawl4ai_config,
             article_memory_config,
             providers,
             routing,
@@ -118,24 +113,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/article-memory/articles", get(article_memory_list_handler))
         .route("/article-memory/articles", post(article_memory_add_handler))
         .route(
-            "/article-memory/ingest",
-            post(article_memory_ingest_handler),
-        )
-        .route(
             "/article-memory/normalize",
             post(article_memory_normalize_handler),
         )
         .route("/article-memory/search", get(article_memory_search_handler))
-        .route("/browser/status", get(browser_status_handler))
-        .route("/browser/profiles", get(browser_profiles_handler))
-        .route("/browser/tabs", get(browser_tabs_handler))
-        .route("/browser/open", post(browser_open_handler))
-        .route("/browser/focus", post(browser_focus_handler))
-        .route("/browser/snapshot", post(browser_snapshot_handler))
-        .route("/browser/evaluate", post(browser_evaluate_handler))
-        .route("/browser/action", post(browser_action_handler))
-        .route("/browser/screenshot", post(browser_screenshot_handler))
-        .route("/browser/wait", post(browser_wait_handler))
         .route("/ha-mcp/capabilities", get(ha_mcp_capabilities))
         .route("/ha-mcp/live-context", get(ha_mcp_live_context))
         .with_state(state)
@@ -211,12 +192,8 @@ async fn health() -> Json<Value> {
                 "express_packages",
                 "article_memory_status",
                 "article_memory_articles",
-                "article_memory_ingest",
                 "article_memory_normalize",
                 "article_memory_search",
-                "browser_status",
-                "browser_profiles",
-                "browser_tabs",
                 "ha_mcp_capabilities",
                 "ha_mcp_live_context",
                 "shortcut_bridge",
@@ -555,7 +532,7 @@ async fn zeroclaw_runtime_traces(
 async fn express_auth_status_handler(State(state): State<AppState>) -> Json<Value> {
     Json(
         serde_json::to_value(
-            express_auth_status(state.paths.clone(), (*state.browser_config).clone()).await,
+            express_auth_status(state.paths.clone(), (*state.crawl4ai_config).clone()).await,
         )
         .unwrap_or_else(|_| json!({"status":"upstream_error","sources":[] })),
     )
@@ -575,7 +552,7 @@ async fn express_packages_handler(
         serde_json::to_value(
             express_packages(
                 state.paths.clone(),
-                (*state.browser_config).clone(),
+                (*state.crawl4ai_config).clone(),
                 source,
                 query,
                 force_refresh,
@@ -599,7 +576,7 @@ async fn express_search_handler(
         serde_json::to_value(
             express_packages(
                 state.paths.clone(),
-                (*state.browser_config).clone(),
+                (*state.crawl4ai_config).clone(),
                 source,
                 query,
                 false,
@@ -837,142 +814,6 @@ async fn article_memory_normalize_handler(
             }),
         ),
     }
-}
-
-async fn article_memory_ingest_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<ArticleMemoryIngestRequest>,
-) -> (StatusCode, Json<Value>) {
-    match ingest_article_from_browser(
-        &state.paths,
-        &state.browser_config,
-        &state.article_memory_config,
-        &state.providers,
-        payload,
-    )
-    .await
-    {
-        Ok(response) => {
-            let status = if response.status == "ok" {
-                StatusCode::CREATED
-            } else {
-                StatusCode::OK
-            };
-            json_response(status, response)
-        }
-        Err(error) => json_response(
-            StatusCode::BAD_REQUEST,
-            json!({
-                "status": "failed",
-                "reason": "article_ingest_failed",
-                "message": error.to_string(),
-            }),
-        ),
-    }
-}
-
-async fn browser_status_handler(State(state): State<AppState>) -> Json<Value> {
-    Json(
-        serde_json::to_value(
-            browser_status(state.paths.clone(), (*state.browser_config).clone()).await,
-        )
-        .unwrap_or_else(|_| json!({"status":"upstream_error"})),
-    )
-}
-
-async fn browser_profiles_handler(State(state): State<AppState>) -> Json<Value> {
-    Json(
-        serde_json::to_value(browser_profiles((*state.browser_config).clone()).await)
-            .unwrap_or_else(|_| json!({"status":"upstream_error","profiles":[] })),
-    )
-}
-
-async fn browser_tabs_handler(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Json<Value> {
-    let profile = params.get("profile").cloned();
-    Json(
-        serde_json::to_value(browser_tabs((*state.browser_config).clone(), profile).await)
-            .unwrap_or_else(|_| json!({"status":"upstream_error","tabs":[] })),
-    )
-}
-
-async fn browser_open_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<BrowserOpenRequest>,
-) -> Json<Value> {
-    Json(
-        serde_json::to_value(browser_open((*state.browser_config).clone(), payload).await)
-            .unwrap_or_else(|_| json!({"status":"upstream_error"})),
-    )
-}
-
-async fn browser_focus_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<BrowserFocusRequest>,
-) -> Json<Value> {
-    Json(
-        serde_json::to_value(browser_focus((*state.browser_config).clone(), payload).await)
-            .unwrap_or_else(|_| json!({"status":"upstream_error"})),
-    )
-}
-
-async fn browser_snapshot_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<BrowserSnapshotRequest>,
-) -> Json<Value> {
-    Json(
-        serde_json::to_value(browser_snapshot((*state.browser_config).clone(), payload).await)
-            .unwrap_or_else(|_| json!({"status":"upstream_error"})),
-    )
-}
-
-async fn browser_evaluate_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<BrowserEvaluateRequest>,
-) -> Json<Value> {
-    Json(
-        serde_json::to_value(browser_evaluate((*state.browser_config).clone(), payload).await)
-            .unwrap_or_else(|_| json!({"status":"upstream_error"})),
-    )
-}
-
-async fn browser_action_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<BrowserActionRequest>,
-) -> Json<Value> {
-    Json(
-        serde_json::to_value(
-            browser_action(
-                state.paths.clone(),
-                (*state.browser_config).clone(),
-                payload,
-            )
-            .await,
-        )
-        .unwrap_or_else(|_| json!({"status":"upstream_error"})),
-    )
-}
-
-async fn browser_screenshot_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<BrowserScreenshotRequest>,
-) -> Json<Value> {
-    Json(
-        serde_json::to_value(browser_screenshot((*state.browser_config).clone(), payload).await)
-            .unwrap_or_else(|_| json!({"status":"upstream_error"})),
-    )
-}
-
-async fn browser_wait_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<BrowserWaitRequest>,
-) -> Json<Value> {
-    Json(
-        serde_json::to_value(browser_wait((*state.browser_config).clone(), payload).await)
-            .unwrap_or_else(|_| json!({"status":"upstream_error"})),
-    )
 }
 
 async fn ha_mcp_capabilities(State(state): State<AppState>) -> (StatusCode, Json<Value>) {

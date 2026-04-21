@@ -1,8 +1,7 @@
-use crate::browser::{browser_evaluate_internal, browser_issue, browser_tabs_internal};
 use crate::{
-    isoformat, normalize_text, now_utc, BrowserBridgeConfig, BrowserEvaluateRequest, BrowserTab,
-    ExpressAuthStatusResponse, ExpressPackage, ExpressPackagesResponse, ExpressSourceSnapshot,
-    ExpressSourceStatus, RuntimePaths,
+    build_issue, crawl4ai_crawl, isoformat, normalize_text, now_utc, Crawl4aiConfig,
+    Crawl4aiPageRequest, ExpressAuthStatusResponse, ExpressPackage, ExpressPackagesResponse,
+    ExpressSourceSnapshot, ExpressSourceStatus, RuntimePaths,
 };
 use serde_json::Value;
 use std::fs;
@@ -10,14 +9,15 @@ use std::path::Path;
 
 const EXPRESS_CACHE_TTL_SECS: i64 = 600;
 const EXPRESS_SOURCES: [&str; 2] = ["ali", "jd"];
+const EXPRESS_PAYLOAD_ATTR: &str = "data-davis-express-payload=\"";
 
 pub async fn express_auth_status(
-    _paths: RuntimePaths,
-    browser_config: BrowserBridgeConfig,
+    paths: RuntimePaths,
+    crawl4ai_config: Crawl4aiConfig,
 ) -> ExpressAuthStatusResponse {
     let mut sources = Vec::new();
     for source in EXPRESS_SOURCES {
-        sources.push(fetch_source_status(&browser_config, source).await);
+        sources.push(fetch_source_status(&paths, &crawl4ai_config, source).await);
     }
     ExpressAuthStatusResponse {
         status: aggregate_status_from_statuses(&sources),
@@ -28,7 +28,7 @@ pub async fn express_auth_status(
 
 pub async fn express_packages(
     paths: RuntimePaths,
-    browser_config: BrowserBridgeConfig,
+    crawl4ai_config: Crawl4aiConfig,
     source: Option<String>,
     query: Option<String>,
     force_refresh: bool,
@@ -36,7 +36,7 @@ pub async fn express_packages(
     let mut snapshots = Vec::new();
     for selected_source in select_sources(source.as_deref()) {
         snapshots.push(
-            load_or_fetch_source(&paths, &browser_config, selected_source, force_refresh).await,
+            load_or_fetch_source(&paths, &crawl4ai_config, selected_source, force_refresh).await,
         );
     }
 
@@ -91,7 +91,7 @@ fn select_sources(source: Option<&str>) -> Vec<&'static str> {
 
 async fn load_or_fetch_source(
     paths: &RuntimePaths,
-    browser_config: &BrowserBridgeConfig,
+    crawl4ai_config: &Crawl4aiConfig,
     source: &str,
     force_refresh: bool,
 ) -> ExpressSourceSnapshot {
@@ -104,135 +104,164 @@ async fn load_or_fetch_source(
             }
         }
     }
-    let snapshot = fetch_source_snapshot(browser_config, source).await;
+    let snapshot = fetch_source_snapshot(paths, crawl4ai_config, source).await;
     let _ = write_cache(paths.express_cache_path(source), &snapshot);
     snapshot
 }
 
 async fn fetch_source_status(
-    browser_config: &BrowserBridgeConfig,
+    paths: &RuntimePaths,
+    crawl4ai_config: &Crawl4aiConfig,
     source: &str,
 ) -> ExpressSourceStatus {
-    let tab = match find_source_tab(browser_config, source).await {
-        Ok(tab) => tab,
-        Err(status) => return status,
-    };
-
-    let response = browser_evaluate_internal(
-        browser_config,
-        BrowserEvaluateRequest {
-            profile: Some("user".to_string()),
-            tab_id: Some(tab.tab_id.clone()),
-            script: auth_script(source),
-            mode: Some("read".to_string()),
-        },
-    )
-    .await;
-    parse_source_status(source, &response.data, tab.current_url, tab.title)
+    match crawl_source_payload(paths, crawl4ai_config, source, auth_script(source)).await {
+        Ok(payload) => parse_source_status(source, &payload, None, None),
+        Err(message) => {
+            source_error_snapshot(source, "upstream_error", "crawl4ai_unavailable", message)
+                .source_status
+        }
+    }
 }
 
 async fn fetch_source_snapshot(
-    browser_config: &BrowserBridgeConfig,
+    paths: &RuntimePaths,
+    crawl4ai_config: &Crawl4aiConfig,
     source: &str,
 ) -> ExpressSourceSnapshot {
-    let tab = match find_source_tab(browser_config, source).await {
-        Ok(tab) => tab,
-        Err(status) => {
-            return ExpressSourceSnapshot {
-                source_status: status,
-                packages: Vec::new(),
-            }
+    match crawl_source_payload(paths, crawl4ai_config, source, packages_script(source)).await {
+        Ok(payload) => {
+            parse_snapshot_payload(source, &payload, None, None).unwrap_or_else(|message| {
+                source_error_snapshot(source, "upstream_error", "site_changed", message)
+            })
         }
-    };
-    let response = browser_evaluate_internal(
-        browser_config,
-        BrowserEvaluateRequest {
-            profile: Some("user".to_string()),
-            tab_id: Some(tab.tab_id.clone()),
-            script: packages_script(source),
-            mode: Some("read".to_string()),
-        },
-    )
-    .await;
-    parse_snapshot_payload(source, &response.data, tab.current_url, tab.title).unwrap_or_else(
-        |message| source_error_snapshot(source, "upstream_error", "site_changed", message),
-    )
-}
-
-async fn find_source_tab(
-    browser_config: &BrowserBridgeConfig,
-    source: &str,
-) -> Result<BrowserTab, ExpressSourceStatus> {
-    let tabs = browser_tabs_internal(browser_config, Some("user".to_string())).await;
-    if tabs.status == "upstream_error" {
-        return Err(ExpressSourceStatus {
-            source: source.to_string(),
-            status: "upstream_error".to_string(),
-            checked_at: isoformat(now_utc()),
-            logged_in: false,
-            package_count: 0,
-            cached: false,
-            current_url: None,
-            title: None,
-            message: tabs.message,
-            issue: Some(browser_issue(
-                "browser_bridge_unavailable",
-                &format!("express:{source}"),
-            )),
-        });
+        Err(message) => {
+            source_error_snapshot(source, "upstream_error", "crawl4ai_unavailable", message)
+        }
     }
-    let fragment = source_url_fragment(source);
-    tabs.tabs
-        .into_iter()
-        .find(|tab| {
-            tab.current_url
-                .as_deref()
-                .map(|url| url.contains(fragment))
-                .unwrap_or(false)
-        })
-        .ok_or_else(|| ExpressSourceStatus {
-            source: source.to_string(),
-            status: "needs_reauth".to_string(),
-            checked_at: isoformat(now_utc()),
-            logged_in: false,
-            package_count: 0,
-            cached: false,
-            current_url: None,
-            title: None,
-            message: Some(source_missing_tab_message(source)),
-            issue: Some(browser_issue("auth_required", &format!("express:{source}"))),
-        })
 }
 
-fn source_url_fragment(source: &str) -> &'static str {
+fn source_order_url(source: &str) -> &'static str {
     match source {
-        "ali" => "buyertrade.taobao.com/trade/itemlist/list_bought_items.htm",
-        "jd" => "order.jd.com/center/list.action",
+        "ali" => "https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm",
+        "jd" => "https://order.jd.com/center/list.action",
         _ => "",
     }
 }
 
-fn source_missing_tab_message(source: &str) -> String {
+fn source_login_message(source: &str) -> String {
     match source {
-        "ali" => "请先在 Chrome 打开并登录淘宝订单页".to_string(),
-        "jd" => "请先在 Chrome 打开并登录京东订单页".to_string(),
-        _ => "请先在 Chrome 打开对应站点页面".to_string(),
+        "ali" => "请先在 Crawl4AI 托管 profile 中登录淘宝订单页".to_string(),
+        "jd" => "请先在 Crawl4AI 托管 profile 中登录京东订单页".to_string(),
+        _ => "请先在 Crawl4AI 托管 profile 中登录对应站点页面".to_string(),
     }
 }
 
 fn auth_script(source: &str) -> String {
-    match source {
-        "ali" => "JSON.stringify((() => { const href = location.href; const title = document.title || ''; const body = document.body ? document.body.innerText : ''; const loggedIn = href.includes('buyertrade.taobao.com') && (body.includes('订单号') || body.includes('已买到的宝贝') || body.includes('查看物流') || body.includes('订单详情')); return { source: 'ali', status: loggedIn ? 'ok' : 'needs_reauth', checked_at: new Date().toISOString(), logged_in: loggedIn, package_count: 0, current_url: href, title, message: loggedIn ? '淘宝订单页登录状态正常' : '需要重新登录淘宝订单页', issue_type: loggedIn ? null : 'auth_required', packages: [] }; })())".to_string(),
-        "jd" => "JSON.stringify((() => { const href = location.href; const title = document.title || ''; const body = document.body ? document.body.innerText : ''; const loggedIn = href.includes('order.jd.com') && (body.includes('我的订单') || body.includes('订单号') || body.includes('查看物流') || body.includes('订单详情')); return { source: 'jd', status: loggedIn ? 'ok' : 'needs_reauth', checked_at: new Date().toISOString(), logged_in: loggedIn, package_count: 0, current_url: href, title, message: loggedIn ? '京东订单页登录状态正常' : '需要重新登录京东订单页', issue_type: loggedIn ? null : 'auth_required', packages: [] }; })())".to_string(),
-        _ => "JSON.stringify({ status: 'upstream_error', issue_type: 'site_changed' })".to_string(),
-    }
+    wrap_payload_script(match source {
+        "ali" => "(() => { const href = location.href; const title = document.title || ''; const body = document.body ? document.body.innerText : ''; const loggedIn = href.includes('buyertrade.taobao.com') && (body.includes('订单号') || body.includes('已买到的宝贝') || body.includes('查看物流') || body.includes('订单详情')); return { source: 'ali', status: loggedIn ? 'ok' : 'needs_reauth', checked_at: new Date().toISOString(), logged_in: loggedIn, package_count: 0, current_url: href, title, message: loggedIn ? '淘宝订单页登录状态正常' : '需要重新登录淘宝订单页', issue_type: loggedIn ? null : 'auth_required', packages: [] }; })()",
+        "jd" => "(() => { const href = location.href; const title = document.title || ''; const body = document.body ? document.body.innerText : ''; const loggedIn = href.includes('order.jd.com') && (body.includes('我的订单') || body.includes('订单号') || body.includes('查看物流') || body.includes('订单详情')); return { source: 'jd', status: loggedIn ? 'ok' : 'needs_reauth', checked_at: new Date().toISOString(), logged_in: loggedIn, package_count: 0, current_url: href, title, message: loggedIn ? '京东订单页登录状态正常' : '需要重新登录京东订单页', issue_type: loggedIn ? null : 'auth_required', packages: [] }; })()",
+        _ => "({ status: 'upstream_error', issue_type: 'site_changed' })",
+    })
 }
 
 fn packages_script(source: &str) -> String {
+    wrap_payload_script(match source {
+        "ali" => "(() => { const href = location.href; const title = document.title || ''; const body = document.body ? document.body.innerText : ''; const loggedIn = href.includes('buyertrade.taobao.com') && (body.includes('订单号') || body.includes('已买到的宝贝') || body.includes('查看物流') || body.includes('订单详情')); if (!loggedIn) { return { source: 'ali', status: 'needs_reauth', checked_at: new Date().toISOString(), logged_in: false, package_count: 0, current_url: href, title, message: '需要重新登录淘宝订单页', issue_type: 'auth_required', packages: [] }; } const cards = Array.from(document.querySelectorAll('.trade-container-shopOrderContainer, .trade-bought-list-order-container')); const splitLines = (text) => text.split(/\\n+/).map(line => line.trim()).filter(Boolean); const statusWords = ['待收货','待发货','已完成','已签收','退款中','交易成功','待取件','派送中','卖家已发货','买家已付款']; const carrierWords = ['顺丰','中通','圆通','韵达','申通','极兔','邮政','德邦','菜鸟','京东快递','EMS']; const firstMatch = (lines, words) => lines.find(line => words.some(word => line.includes(word))) || null; const longest = (values) => values.filter(Boolean).sort((a, b) => b.length - a.length)[0] || null; const packages = cards.map((card, index) => { const text = (card.innerText || '').trim(); const lines = splitLines(text); const links = Array.from(card.querySelectorAll('a[href]')).map(link => ({ text: (link.innerText || '').trim(), href: link.href })).filter(item => item.text && !item.text.includes('订单详情') && !item.text.includes('查看物流')); const detailLink = Array.from(card.querySelectorAll('a[href]')).find(link => { const hrefValue = link.href || ''; return hrefValue.includes('detail') || hrefValue.includes('trade') || hrefValue.includes('logistics'); }); return { id: card.id || ('ali-' + String(index + 1)), source: 'ali', merchant: text.includes('天猫') ? 'tmall' : 'taobao', title: longest(links.map(item => item.text)) || null, shop_name: lines.find(line => line.includes('旗舰店') || line.includes('专营店') || line.includes('企业店') || line.includes('运营中心') || line.includes('代购')) || null, status: firstMatch(lines, statusWords), latest_update: lines.find(line => /(物流|派件|签收|取件|驿站|运输|发货|退款中)/.test(line)) || null, latest_time: lines.find(line => /\\d{4}-\\d{2}-\\d{2}|\\d{2}:\\d{2}/.test(line)) || null, carrier: firstMatch(lines, carrierWords), tracking_no_masked: lines.find(line => /(订单号|运单|物流单号|快递单号|单号)/.test(line)) || null, pickup_code_masked: lines.find(line => /(取件码|提货码)/.test(line)) || null, eta_text: lines.find(line => /(预计|送达|到达|发货承诺)/.test(line)) || null, detail_url: detailLink ? detailLink.href : null, raw_source_meta: { text_excerpt: lines.slice(0, 12) } }; }).filter(item => item.title || item.status || item.latest_update); return { source: 'ali', status: packages.length ? 'ok' : 'empty', checked_at: new Date().toISOString(), logged_in: true, package_count: packages.length, current_url: href, title, message: packages.length ? '已读取淘宝订单列表' : '淘宝订单页已登录，但暂未提取到包裹卡片', packages }; })()",
+        "jd" => "(() => { const href = location.href; const title = document.title || ''; const body = document.body ? document.body.innerText : ''; const loggedIn = href.includes('order.jd.com') && (body.includes('我的订单') || body.includes('订单号') || body.includes('查看物流') || body.includes('订单详情')); if (!loggedIn) { return { source: 'jd', status: 'needs_reauth', checked_at: new Date().toISOString(), logged_in: false, package_count: 0, current_url: href, title, message: '需要重新登录京东订单页', issue_type: 'auth_required', packages: [] }; } const cards = Array.from(document.querySelectorAll('tbody[id^=\"tb-\"]')); const statusWords = ['待收货','已签收','待取件','配送中','已发货','已完成','待付款','订单回收站']; const carrierWords = ['京东快递','京东物流','顺丰','中通','圆通','韵达','申通','极兔','邮政','德邦','EMS']; const splitLines = (text) => text.split(/\\n+/).map(line => line.trim()).filter(Boolean); const firstMatch = (lines, words) => lines.find(line => words.some(word => line.includes(word))) || null; const longest = (values) => values.filter(Boolean).sort((a, b) => b.length - a.length)[0] || null; const packages = cards.map((card, index) => { const text = (card.innerText || '').trim(); const lines = splitLines(text); const links = Array.from(card.querySelectorAll('a[href]')).map(link => ({ text: (link.innerText || '').trim(), href: link.href })).filter(item => item.text && !item.text.includes('订单详情') && !item.text.includes('查看物流')); const detailLink = Array.from(card.querySelectorAll('a[href]')).find(link => { const hrefValue = link.href || ''; return hrefValue.includes('detail') || hrefValue.includes('track') || hrefValue.includes('order'); }); return { id: card.id || ('jd-' + String(index + 1)), source: 'jd', merchant: 'jd', title: longest(links.map(item => item.text)) || null, shop_name: lines.find(line => line.includes('旗舰店') || line.includes('专营店') || line.includes('京东自营') || line.includes('京东大药房')) || null, status: firstMatch(lines, statusWords), latest_update: lines.find(line => /(配送|签收|揽收|运输|取件|驿站)/.test(line)) || null, latest_time: lines.find(line => /\\d{4}-\\d{2}-\\d{2}|\\d{2}:\\d{2}/.test(line)) || null, carrier: firstMatch(lines, carrierWords), tracking_no_masked: lines.find(line => /(订单号|运单|物流单号|快递单号)/.test(line)) || null, pickup_code_masked: lines.find(line => /(取件码|提货码)/.test(line)) || null, eta_text: lines.find(line => /(预计|送达|到达)/.test(line)) || null, detail_url: detailLink ? detailLink.href : null, raw_source_meta: { text_excerpt: lines.slice(0, 12) } }; }).filter(item => item.title || item.status || item.latest_update); return { source: 'jd', status: packages.length ? 'ok' : 'empty', checked_at: new Date().toISOString(), logged_in: true, package_count: packages.length, current_url: href, title, message: packages.length ? '已读取京东订单列表' : '京东订单页已登录，但暂未提取到包裹卡片', packages }; })()",
+        _ => "({ status: 'upstream_error', issue_type: 'site_changed' })",
+    })
+}
+
+async fn crawl_source_payload(
+    paths: &RuntimePaths,
+    crawl4ai_config: &Crawl4aiConfig,
+    source: &str,
+    script: String,
+) -> Result<Value, String> {
+    let response = crawl4ai_crawl(
+        paths,
+        crawl4ai_config,
+        Crawl4aiPageRequest {
+            profile_name: express_profile_name(source),
+            url: source_order_url(source).to_string(),
+            wait_for: Some(source_wait_for(source).to_string()),
+            js_code: Some(script),
+        },
+    )
+    .await?;
+    if !response.success {
+        return Err(response.error_message.unwrap_or_else(|| {
+            format!(
+                "{}。请先运行 `daviszeroclaw crawl profile login express-{source}` 完成登录。",
+                source_login_message(source)
+            )
+        }));
+    }
+    extract_payload_value(&response).map_err(|message| {
+        format!(
+            "failed to parse crawl4ai payload for {source}: {message}. 请确认 `daviszeroclaw crawl profile login express-{source}` 已完成并且订单页结构未变化。"
+        )
+    })
+}
+
+fn express_profile_name(source: &str) -> String {
+    format!("express-{source}")
+}
+
+fn source_wait_for(source: &str) -> &'static str {
     match source {
-        "ali" => "JSON.stringify((() => { const href = location.href; const title = document.title || ''; const body = document.body ? document.body.innerText : ''; const loggedIn = href.includes('buyertrade.taobao.com') && (body.includes('订单号') || body.includes('已买到的宝贝') || body.includes('查看物流') || body.includes('订单详情')); if (!loggedIn) { return { source: 'ali', status: 'needs_reauth', checked_at: new Date().toISOString(), logged_in: false, package_count: 0, current_url: href, title, message: '需要重新登录淘宝订单页', issue_type: 'auth_required', packages: [] }; } const cards = Array.from(document.querySelectorAll('.trade-container-shopOrderContainer, .trade-bought-list-order-container')); const splitLines = (text) => text.split(/\\n+/).map(line => line.trim()).filter(Boolean); const statusWords = ['待收货','待发货','已完成','已签收','退款中','交易成功','待取件','派送中','卖家已发货','买家已付款']; const carrierWords = ['顺丰','中通','圆通','韵达','申通','极兔','邮政','德邦','菜鸟','京东快递','EMS']; const firstMatch = (lines, words) => lines.find(line => words.some(word => line.includes(word))) || null; const longest = (values) => values.filter(Boolean).sort((a, b) => b.length - a.length)[0] || null; const packages = cards.map((card, index) => { const text = (card.innerText || '').trim(); const lines = splitLines(text); const links = Array.from(card.querySelectorAll('a[href]')).map(link => ({ text: (link.innerText || '').trim(), href: link.href })).filter(item => item.text && !item.text.includes('订单详情') && !item.text.includes('查看物流')); const detailLink = Array.from(card.querySelectorAll('a[href]')).find(link => { const hrefValue = link.href || ''; return hrefValue.includes('detail') || hrefValue.includes('trade') || hrefValue.includes('logistics'); }); return { id: card.id || ('ali-' + String(index + 1)), source: 'ali', merchant: text.includes('天猫') ? 'tmall' : 'taobao', title: longest(links.map(item => item.text)) || null, shop_name: lines.find(line => line.includes('旗舰店') || line.includes('专营店') || line.includes('企业店') || line.includes('运营中心') || line.includes('代购')) || null, status: firstMatch(lines, statusWords), latest_update: lines.find(line => /(物流|派件|签收|取件|驿站|运输|发货|退款中)/.test(line)) || null, latest_time: lines.find(line => /\\d{4}-\\d{2}-\\d{2}|\\d{2}:\\d{2}/.test(line)) || null, carrier: firstMatch(lines, carrierWords), tracking_no_masked: lines.find(line => /(订单号|运单|物流单号|快递单号|单号)/.test(line)) || null, pickup_code_masked: lines.find(line => /(取件码|提货码)/.test(line)) || null, eta_text: lines.find(line => /(预计|送达|到达|发货承诺)/.test(line)) || null, detail_url: detailLink ? detailLink.href : null, raw_source_meta: { text_excerpt: lines.slice(0, 12) } }; }).filter(item => item.title || item.status || item.latest_update); return { source: 'ali', status: packages.length ? 'ok' : 'empty', checked_at: new Date().toISOString(), logged_in: true, package_count: packages.length, current_url: href, title, message: packages.length ? '已读取淘宝订单列表' : '淘宝订单页已登录，但暂未提取到包裹卡片', packages }; })())".to_string(),
-        "jd" => "JSON.stringify((() => { const href = location.href; const title = document.title || ''; const body = document.body ? document.body.innerText : ''; const loggedIn = href.includes('order.jd.com') && (body.includes('我的订单') || body.includes('订单号') || body.includes('查看物流') || body.includes('订单详情')); if (!loggedIn) { return { source: 'jd', status: 'needs_reauth', checked_at: new Date().toISOString(), logged_in: false, package_count: 0, current_url: href, title, message: '需要重新登录京东订单页', issue_type: 'auth_required', packages: [] }; } const cards = Array.from(document.querySelectorAll('tbody[id^=\"tb-\"]')); const statusWords = ['待收货','已签收','待取件','配送中','已发货','已完成','待付款','订单回收站']; const carrierWords = ['京东快递','京东物流','顺丰','中通','圆通','韵达','申通','极兔','邮政','德邦','EMS']; const splitLines = (text) => text.split(/\\n+/).map(line => line.trim()).filter(Boolean); const firstMatch = (lines, words) => lines.find(line => words.some(word => line.includes(word))) || null; const longest = (values) => values.filter(Boolean).sort((a, b) => b.length - a.length)[0] || null; const packages = cards.map((card, index) => { const text = (card.innerText || '').trim(); const lines = splitLines(text); const links = Array.from(card.querySelectorAll('a[href]')).map(link => ({ text: (link.innerText || '').trim(), href: link.href })).filter(item => item.text && !item.text.includes('订单详情') && !item.text.includes('查看物流')); const detailLink = Array.from(card.querySelectorAll('a[href]')).find(link => { const hrefValue = link.href || ''; return hrefValue.includes('detail') || hrefValue.includes('track') || hrefValue.includes('order'); }); return { id: card.id || ('jd-' + String(index + 1)), source: 'jd', merchant: 'jd', title: longest(links.map(item => item.text)) || null, shop_name: lines.find(line => line.includes('旗舰店') || line.includes('专营店') || line.includes('京东自营') || line.includes('京东大药房')) || null, status: firstMatch(lines, statusWords), latest_update: lines.find(line => /(配送|签收|揽收|运输|取件|驿站)/.test(line)) || null, latest_time: lines.find(line => /\\d{4}-\\d{2}-\\d{2}|\\d{2}:\\d{2}/.test(line)) || null, carrier: firstMatch(lines, carrierWords), tracking_no_masked: lines.find(line => /(订单号|运单|物流单号|快递单号)/.test(line)) || null, pickup_code_masked: lines.find(line => /(取件码|提货码)/.test(line)) || null, eta_text: lines.find(line => /(预计|送达|到达)/.test(line)) || null, detail_url: detailLink ? detailLink.href : null, raw_source_meta: { text_excerpt: lines.slice(0, 12) } }; }).filter(item => item.title || item.status || item.latest_update); return { source: 'jd', status: packages.length ? 'ok' : 'empty', checked_at: new Date().toISOString(), logged_in: true, package_count: packages.length, current_url: href, title, message: packages.length ? '已读取京东订单列表' : '京东订单页已登录，但暂未提取到包裹卡片', packages }; })())".to_string(),
-        _ => "JSON.stringify({ status: 'upstream_error', issue_type: 'site_changed' })".to_string(),
+        "ali" => "js:() => !!document.body && (document.querySelector('.trade-container-shopOrderContainer, .trade-bought-list-order-container') || document.body.innerText.includes('已买到的宝贝') || document.body.innerText.includes('登录'))",
+        "jd" => "js:() => !!document.body && (document.querySelector('tbody[id^=\"tb-\"]') || document.body.innerText.includes('我的订单') || document.body.innerText.includes('登录'))",
+        _ => "css:body",
+    }
+}
+
+fn wrap_payload_script(payload_expression: &str) -> String {
+    format!(
+        "(function() {{ const payload = {payload_expression}; const root = document.body || document.documentElement; if (!root) {{ return payload; }} let marker = root.querySelector('[data-davis-express-payload]'); if (!marker) {{ marker = document.createElement('div'); marker.hidden = true; root.appendChild(marker); }} marker.setAttribute('data-davis-express-payload', encodeURIComponent(JSON.stringify(payload))); marker.textContent = 'davis-express-payload'; return payload; }})();"
+    )
+}
+
+fn extract_payload_value(response: &crate::Crawl4aiPageResult) -> Result<Value, String> {
+    if let Some(value) = extract_js_execution_payload(&response.raw) {
+        return Ok(value);
+    }
+    for html in [response.html.as_deref(), response.cleaned_html.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        if let Ok(value) = extract_payload_from_html(html) {
+            return Ok(value);
+        }
+    }
+    Err("express payload marker not found in crawl4ai html".to_string())
+}
+
+fn extract_payload_from_html(html: &str) -> Result<Value, String> {
+    let start = html
+        .find(EXPRESS_PAYLOAD_ATTR)
+        .ok_or_else(|| "express payload marker not found in crawl4ai html".to_string())?
+        + EXPRESS_PAYLOAD_ATTR.len();
+    let rest = &html[start..];
+    let end = rest
+        .find('"')
+        .ok_or_else(|| "express payload marker was truncated".to_string())?;
+    let encoded = &rest[..end];
+    let decoded = urlencoding::decode(encoded)
+        .map_err(|err| format!("decode express payload from crawl4ai html: {err}"))?;
+    serde_json::from_str::<Value>(&decoded)
+        .map_err(|err| format!("parse express payload from crawl4ai html: {err}"))
+}
+
+fn extract_js_execution_payload(raw: &Value) -> Option<Value> {
+    let direct = raw.get("js_execution_result");
+    let nested = direct.and_then(|value| value.get("result"));
+    let value = nested.or(direct)?;
+    let normalized = normalize_script_value(value);
+    if normalized.get("status").is_some() || normalized.get("source").is_some() {
+        Some(normalized)
+    } else {
+        None
     }
 }
 
@@ -283,7 +312,7 @@ fn parse_source_status(
             .get("message")
             .and_then(Value::as_str)
             .map(str::to_string),
-        issue: issue_type.map(|kind| browser_issue(&kind, &format!("express:{source}"))),
+        issue: issue_type.map(|kind| build_issue(&kind, &format!("express:{source}"), Vec::new())),
     }
 }
 
@@ -343,7 +372,8 @@ fn parse_snapshot_payload(
                 .get("message")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            issue: issue_type.map(|kind| browser_issue(&kind, &format!("express:{source}"))),
+            issue: issue_type
+                .map(|kind| build_issue(&kind, &format!("express:{source}"), Vec::new())),
         },
         packages,
     })
@@ -395,7 +425,11 @@ fn source_error_snapshot(
             current_url: None,
             title: None,
             message: Some(message),
-            issue: Some(browser_issue(issue_type, &format!("express:{source}"))),
+            issue: Some(build_issue(
+                issue_type,
+                &format!("express:{source}"),
+                Vec::new(),
+            )),
         },
         packages: Vec::new(),
     }
@@ -456,15 +490,29 @@ fn aggregate_status_from_statuses(sources: &[ExpressSourceStatus]) -> String {
     if sources.is_empty() {
         return "upstream_error".to_string();
     }
-    let snapshots = sources
+    let ok_like_count = sources
         .iter()
-        .cloned()
-        .map(|source_status| ExpressSourceSnapshot {
-            source_status,
-            packages: Vec::new(),
-        })
-        .collect::<Vec<_>>();
-    aggregate_status(&snapshots, 0)
+        .filter(|source| matches!(source.status.as_str(), "ok" | "empty"))
+        .count();
+    let needs_reauth_count = sources
+        .iter()
+        .filter(|source| source.status == "needs_reauth")
+        .count();
+    let upstream_error_count = sources
+        .iter()
+        .filter(|source| source.status == "upstream_error")
+        .count();
+
+    if ok_like_count == sources.len() {
+        return "ok".to_string();
+    }
+    if needs_reauth_count == sources.len() {
+        return "needs_reauth".to_string();
+    }
+    if upstream_error_count == sources.len() {
+        return "upstream_error".to_string();
+    }
+    "partial".to_string()
 }
 
 fn build_speech(status: &str, packages: &[ExpressPackage], query: Option<&str>) -> Option<String> {

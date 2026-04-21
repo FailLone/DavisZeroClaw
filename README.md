@@ -141,19 +141,42 @@ daviszeroclaw shortcut build
 
 ## 快递查询
 
-第一次查询淘宝或京东包裹前，先在 Mac 上登录对应网页：
+第一次使用 Crawl4AI 前，先安装并检查运行时：
 
 ```bash
-daviszeroclaw express login ali
+daviszeroclaw crawl install
 ```
 
 ```bash
-daviszeroclaw express login jd
+daviszeroclaw crawl check
 ```
 
-登录后再问 Davis 查询快递即可。
+第一次查询淘宝或京东包裹前，再在 Mac 上登录对应网页：
 
-## Skills 和 MemPalace
+```bash
+daviszeroclaw crawl profile login express-ali
+```
+
+```bash
+daviszeroclaw crawl profile login express-jd
+```
+
+命令会打开一个 `Crawl4AI` 兼容的持久浏览器 profile。完成登录后，回到终端按一次回车保存并结束登录流程；后续查询会复用这份登录态，不依赖你日常正在使用的 Chrome 标签页。
+现在 `express` 的读取链路已经走 `Crawl4AI`，登录 helper 只负责初始化持久 profile。
+
+查看内建 crawl source：
+
+```bash
+daviszeroclaw crawl source list
+```
+
+直接运行包裹抓取：
+
+```bash
+daviszeroclaw crawl run express-packages --refresh
+```
+
+## Skills、Crawl4AI 和 MemPalace
 
 Davis 自己维护一部分 project skills，也支持安装第三方 vendor skills。
 
@@ -175,6 +198,18 @@ daviszeroclaw skills install
 daviszeroclaw skills check
 ```
 
+同步 runtime SOP：
+
+```bash
+daviszeroclaw sops sync
+```
+
+检查 SOP 是否已同步并通过 ZeroClaw 校验：
+
+```bash
+daviszeroclaw sops check
+```
+
 如果你想把 MemPalace 接进 Davis：
 
 ```bash
@@ -185,8 +220,11 @@ daviszeroclaw memory mempalace check
 
 其中：
 
+- `skills/crawl4ai` 负责告诉 agent 如何维护 Crawl4AI 本身，以及如何使用 Davis 的统一 `crawl` 命令面
 - `skills/mempalace` 负责告诉 agent 如何操作 MemPalace
 - `project-skills/mempalace-memory` 负责告诉 agent 什么时候应优先把 MemPalace 当作长期 memory
+- `project-skills/my-parcels` 负责告诉 agent 如何通过本地 Davis proxy 安全查询快递，不直接去外部购物网站抓取
+- `project-sops/my-parcels` 负责定义一个可被 ZeroClaw 手动触发的 parcel SOP；它是 runbook，不是自然语言路由器
 
 ## 常用命令
 
@@ -196,8 +234,14 @@ daviszeroclaw ha check
 daviszeroclaw imessage inspect
 daviszeroclaw shortcut build
 daviszeroclaw shortcut install
-daviszeroclaw express login ali
-daviszeroclaw express login jd
+daviszeroclaw crawl install
+daviszeroclaw crawl check
+daviszeroclaw crawl source list
+daviszeroclaw crawl run express-packages --refresh
+daviszeroclaw crawl profile login express-ali
+daviszeroclaw crawl profile login express-jd
+daviszeroclaw sops sync
+daviszeroclaw sops check
 ```
 
 ## 常见问题

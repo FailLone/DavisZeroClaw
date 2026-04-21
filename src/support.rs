@@ -91,19 +91,19 @@ pub fn build_issue(issue_type: &str, query_entity: &str, suggestions: Vec<String
             ],
             vec!["group_entities"],
         ),
-        "browser_automation_unavailable" => (
+        "browser_automation_unavailable" | "crawl4ai_unavailable" => (
             "configuration",
             vec![
-                "Start the local browser worker and verify Google Chrome is installed",
-                "Run the express login helper again after browser bridge is available",
+                "Verify the configured Python can import Crawl4AI and Playwright",
+                "Run the crawl profile login helper again after the Crawl4AI adapter is available",
             ],
-            vec!["browser_worker"],
+            vec!["crawl4ai"],
         ),
         "auth_required" => (
             "authorization",
             vec![
-                "Run the express login helper for the affected platform",
-                "Complete the login flow in the headed browser window",
+                "Run the crawl profile login helper for the affected platform",
+                "Complete the login flow in the Crawl4AI-compatible browser window",
             ],
             vec!["site_session"],
         ),
@@ -114,14 +114,6 @@ pub fn build_issue(issue_type: &str, query_entity: &str, suggestions: Vec<String
                 "Update the extractor script selectors before retrying",
             ],
             vec!["site_dom"],
-        ),
-        "browser_bridge_unavailable" => (
-            "connectivity",
-            vec![
-                "Start the local browser worker and retry",
-                "Inspect browser_worker.log for startup or dependency errors",
-            ],
-            vec!["browser_worker"],
         ),
         "remote_debugging_required" => (
             "configuration",
@@ -135,23 +127,23 @@ pub fn build_issue(issue_type: &str, query_entity: &str, suggestions: Vec<String
             "authorization",
             vec![
                 "Ask the user to confirm the pending browser write action",
-                "Add the site origin to browser_bridge.write_policy.allowed_origins if direct writes are intended",
+                "Restrict write automation to explicitly trusted surfaces",
             ],
             vec!["user_confirmation"],
         ),
         "write_blocked" => (
             "authorization",
             vec![
-                "Restrict the request to a whitelisted origin or switch to a managed browser profile",
-                "Update browser_bridge.write_policy.allowed_origins only for trusted sites",
+                "Restrict the request to a trusted automation surface",
+                "Review the automation policy before enabling direct writes",
             ],
             vec!["allowed_origin"],
         ),
         "unsupported_surface" => (
             "integration",
             vec![
-                "Retry the action with the managed browser profile",
-                "Install Playwright support if the current browser worker only has read-only fallback available",
+                "Retry the action on a Crawl4AI-backed surface",
+                "Verify the required browser automation runtime is installed",
             ],
             vec!["playwright"],
         ),

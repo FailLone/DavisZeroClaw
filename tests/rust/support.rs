@@ -111,7 +111,7 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
         mcp_client,
         paths,
         Arc::new(control_config),
-        Arc::new(local_config.browser_bridge.clone()),
+        Arc::new(local_config.crawl4ai.clone()),
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
         routing,

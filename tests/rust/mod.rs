@@ -1,4 +1,3 @@
-mod browser;
 mod control;
 mod express;
 mod fixtures;

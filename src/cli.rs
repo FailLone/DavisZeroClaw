@@ -1,14 +1,13 @@
 use crate::{
     add_article_memory, build_article_strategy_review_input, check_article_cleaning,
-    check_article_memory, check_local_config, hybrid_search_article_memory,
-    ingest_article_from_browser, init_article_memory, judge_all_article_value_memory,
-    judge_article_value_memory, list_article_clean_reports, list_article_memory,
-    list_article_value_reports, normalize_all_article_memory, normalize_article_memory,
-    rebuild_article_memory_embeddings, replay_article_cleaning, resolve_article_embedding_config,
-    resolve_article_normalize_config, resolve_article_value_config, search_article_memory,
+    check_article_memory, check_local_config, hybrid_search_article_memory, init_article_memory,
+    judge_all_article_value_memory, judge_article_value_memory, list_article_clean_reports,
+    list_article_memory, list_article_value_reports, normalize_all_article_memory,
+    normalize_article_memory, rebuild_article_memory_embeddings, replay_article_cleaning,
+    resolve_article_embedding_config, resolve_article_normalize_config,
+    resolve_article_value_config, run_builtin_crawl_source, search_article_memory,
     upsert_article_memory_embedding, zeroclaw_env_vars, ArticleMemoryAddRequest,
-    ArticleMemoryIngestRequest, ArticleMemoryRecordStatus, BrowserBridgeConfig, HaClient,
-    HaMcpClient, HaState, ModelRoutingManager, RuntimePaths,
+    ArticleMemoryRecordStatus, HaClient, HaMcpClient, HaState, ModelRoutingManager, RuntimePaths,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -16,6 +15,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
+use std::io::Write;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -48,6 +48,11 @@ enum Commands {
         #[command(subcommand)]
         command: SkillsCommand,
     },
+    /// Manage runtime standard operating procedures (SOPs).
+    Sops {
+        #[command(subcommand)]
+        command: SopsCommand,
+    },
     /// Build and customize the iOS Shortcut.
     Shortcut {
         #[command(subcommand)]
@@ -58,10 +63,10 @@ enum Commands {
         #[command(subcommand)]
         command: ImessageCommand,
     },
-    /// Open express provider login pages.
-    Express {
+    /// Manage Crawl4AI-backed crawl profiles and tasks.
+    Crawl {
         #[command(subcommand)]
-        command: ExpressCommand,
+        command: CrawlCommand,
     },
     /// Inspect Davis configuration.
     Config {
@@ -92,6 +97,14 @@ enum SkillsCommand {
     /// Install or refresh supported vendor skills.
     Install,
     /// Check project, vendor, runtime, and MemPalace skill status.
+    Check,
+}
+
+#[derive(Debug, Subcommand)]
+enum SopsCommand {
+    /// Synchronize project SOPs into the runtime workspace.
+    Sync,
+    /// Check runtime SOP presence and validate loaded definitions.
     Check,
 }
 
@@ -138,18 +151,54 @@ enum ImessageCommand {
 }
 
 #[derive(Debug, Subcommand)]
-enum ExpressCommand {
-    /// Open a provider login page in Google Chrome.
+enum CrawlCommand {
+    /// Install Crawl4AI into the Davis runtime Python environment.
+    Install,
+    /// Check Crawl4AI runtime, adapter, and Python health.
+    Check,
+    /// List built-in crawl sources.
+    Source {
+        #[command(subcommand)]
+        command: CrawlSourceCommand,
+    },
+    /// Run a built-in crawl source and print the result as JSON.
+    Run {
+        source: String,
+        #[arg(long)]
+        refresh: bool,
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long)]
+        compact: bool,
+    },
+    /// Manage persistent Crawl4AI browser profiles.
+    Profile {
+        #[command(subcommand)]
+        command: CrawlProfileCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CrawlSourceCommand {
+    /// List built-in crawl sources.
+    List,
+}
+
+#[derive(Debug, Subcommand)]
+enum CrawlProfileCommand {
+    /// Open a login page inside a managed Crawl4AI profile.
     Login {
         #[arg(value_enum)]
-        source: ExpressLoginSource,
+        profile: CrawlProfile,
     },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum ExpressLoginSource {
-    Ali,
-    Jd,
+enum CrawlProfile {
+    #[value(name = "express-ali", alias = "ali")]
+    ExpressAli,
+    #[value(name = "express-jd", alias = "jd")]
+    ExpressJd,
 }
 
 #[derive(Debug, Subcommand)]
@@ -252,29 +301,6 @@ enum ArticlesCommand {
         all: bool,
         #[arg(long)]
         no_llm: bool,
-    },
-    /// Ingest an article from a browser page or URL.
-    Ingest {
-        #[arg(long)]
-        url: Option<String>,
-        #[arg(long)]
-        profile: Option<String>,
-        #[arg(long)]
-        tab_id: Option<String>,
-        #[arg(long)]
-        new_tab: bool,
-        #[arg(long)]
-        source: Option<String>,
-        #[arg(long)]
-        language: Option<String>,
-        #[arg(long = "tag")]
-        tags: Vec<String>,
-        #[arg(long)]
-        score: Option<f32>,
-        #[arg(long, value_enum, default_value_t = ArticleStatusArg::Candidate)]
-        status: ArticleStatusArg,
-        #[arg(long)]
-        notes: Option<String>,
     },
 }
 
@@ -385,6 +411,10 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             SkillsCommand::Install => install_skills(&paths),
             SkillsCommand::Check => check_skills(&paths),
         },
+        Commands::Sops { command } => match command {
+            SopsCommand::Sync => sync_runtime_sops(&paths),
+            SopsCommand::Check => check_sops(&paths),
+        },
         Commands::Shortcut { command } => match command {
             ShortcutCommand::Build {
                 url,
@@ -401,8 +431,23 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             ImessageCommand::CheckPermissions => check_imessage_permissions(),
             ImessageCommand::Inspect => inspect_imessage(&paths),
         },
-        Commands::Express { command } => match command {
-            ExpressCommand::Login { source } => express_login(source),
+        Commands::Crawl { command } => match command {
+            CrawlCommand::Install => install_crawl4ai(&paths),
+            CrawlCommand::Check => check_crawl4ai(&paths),
+            CrawlCommand::Source { command } => match command {
+                CrawlSourceCommand::List => list_crawl_sources(),
+            },
+            CrawlCommand::Run {
+                source,
+                refresh,
+                query,
+                compact,
+            } => run_crawl_source(&paths, &source, query, refresh, compact).await,
+            CrawlCommand::Profile { command } => match command {
+                CrawlProfileCommand::Login { profile } => {
+                    crawl_profile_login(&paths, profile).await
+                }
+            },
         },
         Commands::Config { command } => match command {
             ConfigCommand::Check => {
@@ -482,35 +527,6 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             },
             ArticlesCommand::Normalize { id, all, no_llm } => {
                 normalize_articles(&paths, id, all, no_llm).await
-            }
-            ArticlesCommand::Ingest {
-                url,
-                profile,
-                tab_id,
-                new_tab,
-                source,
-                language,
-                tags,
-                score,
-                status,
-                notes,
-            } => {
-                ingest_article(
-                    &paths,
-                    ArticleMemoryIngestRequest {
-                        url,
-                        profile,
-                        tab_id,
-                        new_tab,
-                        source,
-                        language,
-                        tags,
-                        status: status.into(),
-                        value_score: score,
-                        notes,
-                    },
-                )
-                .await
             }
         },
     }
@@ -950,48 +966,6 @@ async fn index_articles(paths: &RuntimePaths) -> Result<()> {
     Ok(())
 }
 
-async fn ingest_article(paths: &RuntimePaths, request: ArticleMemoryIngestRequest) -> Result<()> {
-    let config = check_local_config(paths)?;
-    let response = ingest_article_from_browser(
-        paths,
-        &config.browser_bridge,
-        &config.article_memory,
-        &config.providers,
-        request,
-    )
-    .await?;
-
-    match response.status.as_str() {
-        "ok" => {
-            let article = response
-                .article
-                .ok_or_else(|| anyhow!("ingest response did not include article"))?;
-            println!("Article ingested.");
-            println!("- id: {}", article.id);
-            println!("- title: {}", article.title);
-            if let Some(url) = article.url {
-                println!("- url: {url}");
-            }
-            println!("- status: {}", article.status);
-            println!("- content_length: {}", response.extraction.content_length);
-            println!("- embedding: {}", response.embedding_status);
-        }
-        "duplicate" => {
-            println!("Article already exists.");
-            println!("- title: {}", response.extraction.title);
-            println!("- url: {}", response.extraction.url);
-            println!("- duplicate_count: {}", response.duplicate_count);
-        }
-        other => bail!(
-            "{}",
-            response
-                .message
-                .unwrap_or_else(|| format!("article ingest failed: {other}"))
-        ),
-    }
-    Ok(())
-}
-
 fn read_optional_text_file(path: Option<&Path>) -> Result<Option<String>> {
     path.map(|path| {
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))
@@ -1060,10 +1034,11 @@ async fn start(paths: &RuntimePaths) -> Result<()> {
     println!("Config OK: {}", paths.local_config_path().display());
     println!("Provider environment prepared for ZeroClaw.");
 
-    print_start_step(4, "Prepare runtime skills");
+    print_start_step(4, "Prepare runtime skills and SOPs");
     report_agent_browser_status();
     report_skill_inventory(paths);
     sync_runtime_skills(paths)?;
+    sync_runtime_sops(paths)?;
 
     let proxy_bin = release_bin_path(paths, "davis-local-proxy");
     let local_proxy_log = paths.local_proxy_log_path();
@@ -1088,10 +1063,7 @@ async fn start(paths: &RuntimePaths) -> Result<()> {
     )
     .await?;
 
-    print_start_step(6, "Start browser worker");
-    start_browser_worker(paths, &config.browser_bridge).await?;
-
-    print_start_step(7, "Wait for model routing");
+    print_start_step(6, "Wait for model routing");
     if !wait_for_model_routing_ready(60, Duration::from_secs(2)).await {
         println!("Model routing did not become ready. Recent proxy log:");
         print_tail(&local_proxy_log, 120);
@@ -1104,7 +1076,7 @@ async fn start(paths: &RuntimePaths) -> Result<()> {
         let _ = http_get_text("http://127.0.0.1:3010/advisor/config-report").await;
     }
 
-    print_start_step(8, "Start ZeroClaw daemon");
+    print_start_step(7, "Start ZeroClaw daemon");
     start_runtime_daemon(paths, &zeroclaw, &provider_env).await?;
 
     println!();
@@ -1113,7 +1085,6 @@ async fn start(paths: &RuntimePaths) -> Result<()> {
     println!("- Davis local proxy: http://127.0.0.1:3010/health");
     println!("- Model routing: http://127.0.0.1:3010/model-routing/status");
     println!("- Runtime traces: http://127.0.0.1:3010/zeroclaw/runtime-traces");
-    println!("- Browser bridge: http://127.0.0.1:3010/browser/status");
     println!("- HA advisor report: http://127.0.0.1:3010/advisor/config-report");
     println!();
     println!("Network endpoints:");
@@ -1129,7 +1100,7 @@ async fn start(paths: &RuntimePaths) -> Result<()> {
 
 fn print_start_step(index: usize, title: &str) {
     println!();
-    println!("[{index}/8] {title}");
+    println!("[{index}/7] {title}");
 }
 
 fn stop(paths: &RuntimePaths) -> Result<()> {
@@ -1142,7 +1113,6 @@ fn stop(paths: &RuntimePaths) -> Result<()> {
         "Legacy Davis Local Proxy",
         &paths.legacy_local_proxy_pid_path(),
     )?;
-    stop_process("Browser Worker", &paths.browser_worker_pid_path())?;
     stop_process("ZeroClaw Daemon", &paths.daemon_pid_path())?;
     stop_process("Channel Server", &paths.runtime_dir.join("channel.pid"))?;
     stop_process("Gateway", &paths.runtime_dir.join("gateway.pid"))?;
@@ -1506,109 +1476,6 @@ fn xml_escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
-}
-
-async fn start_browser_worker(paths: &RuntimePaths, config: &BrowserBridgeConfig) -> Result<()> {
-    if !config.enabled {
-        println!("Browser bridge is disabled; skipping browser worker.");
-        return Ok(());
-    }
-
-    let worker_entry = paths.browser_worker_script_path();
-    if !worker_entry.is_file() {
-        bail!(
-            "browser worker entry was not found: {}",
-            worker_entry.display()
-        );
-    }
-
-    ensure_browser_worker_deps(paths)?;
-
-    let runner = command_path("bun")
-        .or_else(|| command_path("node"))
-        .ok_or_else(|| anyhow!("browser worker requires bun or node"))?;
-    let runner_name = runner
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or("runner")
-        .to_string();
-
-    println!("Starting browser worker with {runner_name}.");
-    let mut cmd = Command::new(runner);
-    cmd.arg(&worker_entry)
-        .env("DAVIS_BROWSER_BRIDGE_ENABLED", "true")
-        .env("DAVIS_BROWSER_BRIDGE_PORT", config.worker_port.to_string())
-        .env("DAVIS_BROWSER_DEFAULT_PROFILE", &config.default_profile)
-        .env(
-            "DAVIS_BROWSER_PROFILES_JSON",
-            serde_json::to_string(&config.profiles)?,
-        )
-        .env(
-            "DAVIS_BROWSER_REMOTE_DEBUGGING_URL",
-            &config.user_session.remote_debugging_url,
-        )
-        .env(
-            "DAVIS_BROWSER_ALLOW_APPLESCRIPT_FALLBACK",
-            if config.user_session.allow_applescript_fallback {
-                "true"
-            } else {
-                "false"
-            },
-        )
-        .env(
-            "DAVIS_BROWSER_SCREENSHOTS_DIR",
-            paths.browser_screenshots_dir(),
-        )
-        .env("DAVIS_BROWSER_PROFILES_DIR", paths.browser_profiles_root())
-        .env("PATH", tool_path_env())
-        .current_dir(paths.repo_root.join("browser-worker"));
-
-    start_process(
-        "Browser Worker",
-        &paths.browser_worker_pid_path(),
-        &paths.browser_worker_log_path(),
-        Probe::Http(format!("http://127.0.0.1:{}/status", config.worker_port)),
-        cmd,
-    )
-    .await
-}
-
-fn ensure_browser_worker_deps(paths: &RuntimePaths) -> Result<()> {
-    let worker_dir = paths.repo_root.join("browser-worker");
-    if !worker_dir.join("package.json").is_file() {
-        println!("No browser-worker package.json found; skipping dependency install.");
-        return Ok(());
-    }
-    if worker_dir.join("node_modules").join("playwright").is_dir() {
-        println!("Browser worker dependencies already installed.");
-        return Ok(());
-    }
-
-    if let Some(bun) = command_path("bun") {
-        println!("Installing browser worker dependencies with Bun.");
-        run_status(
-            Command::new(bun)
-                .arg("install")
-                .env("PATH", tool_path_env())
-                .current_dir(&worker_dir),
-            "bun install",
-        )?;
-        return Ok(());
-    }
-
-    if let Some(npm) = command_path("npm") {
-        println!("Installing browser worker dependencies with npm.");
-        run_status(
-            Command::new(npm)
-                .arg("install")
-                .env("PATH", tool_path_env())
-                .current_dir(&worker_dir),
-            "npm install",
-        )?;
-        return Ok(());
-    }
-
-    bail!("browser worker requires bun or npm to install dependencies");
 }
 
 fn install_mempalace(paths: &RuntimePaths) -> Result<()> {
@@ -2033,13 +1900,20 @@ pub fn sync_runtime_skills(paths: &RuntimePaths) -> Result<()> {
     sync_runtime_skills_with_sources(paths, &project_skills_dir, &vendor_skills_dir)
 }
 
+pub fn sync_runtime_sops(paths: &RuntimePaths) -> Result<()> {
+    let project_sops_dir = std::env::var_os("DAVIS_PROJECT_SOPS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| paths.repo_root.join("project-sops"));
+    sync_runtime_sops_with_sources(paths, &project_sops_dir)
+}
+
 fn sync_runtime_skills_with_sources(
     paths: &RuntimePaths,
     project_skills_dir: &Path,
     vendor_skills_dir: &Path,
 ) -> Result<()> {
     let workspace_dir = paths.workspace_dir();
-    let runtime_skills_dir = workspace_dir.join("skills");
+    let runtime_skills_dir = paths.workspace_skills_dir();
     let staging_dir = workspace_dir.join("skills.staging");
 
     fs::create_dir_all(&workspace_dir)?;
@@ -2057,6 +1931,28 @@ fn sync_runtime_skills_with_sources(
     fs::rename(&staging_dir, &runtime_skills_dir)?;
 
     println!("Runtime skills synced: {}", runtime_skills_dir.display());
+    Ok(())
+}
+
+fn sync_runtime_sops_with_sources(paths: &RuntimePaths, project_sops_dir: &Path) -> Result<()> {
+    let workspace_dir = paths.workspace_dir();
+    let runtime_sops_dir = paths.workspace_sops_dir();
+    let staging_dir = workspace_dir.join("sops.staging");
+
+    fs::create_dir_all(&workspace_dir)?;
+    if staging_dir.exists() {
+        fs::remove_dir_all(&staging_dir)?;
+    }
+    fs::create_dir_all(&staging_dir)?;
+
+    copy_sop_tree(project_sops_dir, "project-sops", &staging_dir)?;
+
+    if runtime_sops_dir.exists() {
+        fs::remove_dir_all(&runtime_sops_dir)?;
+    }
+    fs::rename(&staging_dir, &runtime_sops_dir)?;
+
+    println!("Runtime SOPs synced: {}", runtime_sops_dir.display());
     Ok(())
 }
 
@@ -2093,6 +1989,47 @@ fn copy_skill_tree(source_root: &Path, source_label: &str, staging_dir: &Path) -
         sanitize_markdown_links_in_dir(&dest_path)?;
         fs::write(
             dest_path.join(".davis-skill-source"),
+            format!("{source_label}\n"),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn copy_sop_tree(source_root: &Path, source_label: &str, staging_dir: &Path) -> Result<()> {
+    if !source_root.is_dir() {
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(source_root)?.collect::<std::result::Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let sop_path = entry.path();
+        if !sop_path.is_dir() {
+            continue;
+        }
+        if !sop_path.join("SOP.toml").is_file() {
+            continue;
+        }
+
+        let sop_name = sop_path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| anyhow!("invalid SOP path: {}", sop_path.display()))?;
+        let dest_path = staging_dir.join(sop_name);
+        if dest_path.exists() {
+            bail!(
+                "duplicate SOP name detected: {sop_name}\n   source directory: {}\n   existing destination: {}",
+                source_root.display(),
+                dest_path.display()
+            );
+        }
+
+        copy_dir_recursive(&sop_path, &dest_path)?;
+        sanitize_markdown_links_in_dir(&dest_path)?;
+        fs::write(
+            dest_path.join(".davis-sop-source"),
             format!("{source_label}\n"),
         )?;
     }
@@ -2265,7 +2202,7 @@ When MemPalace MCP tools are available, prefer them over shell commands for day-
 fn check_skills(paths: &RuntimePaths) -> Result<()> {
     let project_skills_dir = paths.repo_root.join("project-skills");
     let vendor_skills_dir = paths.repo_root.join("skills");
-    let runtime_skills_dir = paths.workspace_dir().join("skills");
+    let runtime_skills_dir = paths.workspace_skills_dir();
 
     let project_names = skill_name_set(&project_skills_dir);
     let vendor_names = skill_name_set(&vendor_skills_dir);
@@ -2303,11 +2240,51 @@ fn check_skills(paths: &RuntimePaths) -> Result<()> {
     Ok(())
 }
 
+fn check_sops(paths: &RuntimePaths) -> Result<()> {
+    let project_sops_dir = paths.repo_root.join("project-sops");
+    let runtime_sops_dir = paths.workspace_sops_dir();
+    let project_names = sop_name_set(&project_sops_dir);
+    let runtime_names = sop_name_set(&runtime_sops_dir);
+
+    println!(
+        "Project SOPs: {} ({})",
+        format_sop_count(project_names.len()),
+        project_sops_dir.display()
+    );
+    println!(
+        "Runtime SOPs: {}",
+        runtime_sop_status(&project_names, &runtime_names)
+    );
+
+    let zeroclaw = require_command("zeroclaw")
+        .context("zeroclaw was not found. Install it first: brew install zeroclaw")?;
+    run_status(
+        Command::new(zeroclaw)
+            .arg("sop")
+            .arg("validate")
+            .arg("--config-dir")
+            .arg(&paths.runtime_dir)
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+        "zeroclaw sop validate",
+    )?;
+
+    Ok(())
+}
+
 fn format_skill_count(count: usize) -> String {
     if count == 1 {
         "ok (1 skill)".to_string()
     } else {
         format!("ok ({count} skills)")
+    }
+}
+
+fn format_sop_count(count: usize) -> String {
+    if count == 1 {
+        "ok (1 SOP)".to_string()
+    } else {
+        format!("ok ({count} SOPs)")
     }
 }
 
@@ -2333,6 +2310,39 @@ fn runtime_skill_status(
         .collect::<Vec<_>>();
     if missing.is_empty() && extra.is_empty() {
         return format!("synced ({} skills)", runtime_names.len());
+    }
+
+    let mut parts = Vec::new();
+    if !missing.is_empty() {
+        parts.push(format!("missing: {}", missing.join(", ")));
+    }
+    if !extra.is_empty() {
+        parts.push(format!("extra: {}", extra.join(", ")));
+    }
+    format!("WARN stale ({})", parts.join("; "))
+}
+
+fn runtime_sop_status(
+    project_names: &BTreeSet<String>,
+    runtime_names: &BTreeSet<String>,
+) -> String {
+    if project_names.is_empty() && runtime_names.is_empty() {
+        return "ok (empty)".to_string();
+    }
+    let missing = project_names
+        .difference(runtime_names)
+        .cloned()
+        .collect::<Vec<_>>();
+    let extra = runtime_names
+        .difference(project_names)
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() && extra.is_empty() {
+        return if runtime_names.len() == 1 {
+            "synced (1 SOP)".to_string()
+        } else {
+            format!("synced ({} SOPs)", runtime_names.len())
+        };
     }
 
     let mut parts = Vec::new();
@@ -3104,21 +3114,378 @@ fn sqlite_rows(sqlite3: &Path, db: &Path, query: &str) -> Result<Vec<Vec<String>
         .collect())
 }
 
-fn express_login(source: ExpressLoginSource) -> Result<()> {
-    ensure_macos("express login page")?;
-    let open = require_command("open").context("macOS open command is required")?;
-    let url = match source {
-        ExpressLoginSource::Ali => ALI_ORDER_URL,
-        ExpressLoginSource::Jd => JD_ORDER_URL,
-    };
+fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
+    let python3 = require_command("python3").context("python3 is required to install Crawl4AI")?;
+    let venv_dir = paths.crawl4ai_venv_dir();
+    let python = paths.crawl4ai_python_path();
+    let crawl4ai_base_dir = paths.runtime_dir.display().to_string();
+
+    fs::create_dir_all(&paths.runtime_dir)?;
+    fs::create_dir_all(paths.crawl4ai_home_dir())?;
+    if !python.is_file() {
+        println!("Creating Crawl4AI venv: {}", venv_dir.display());
+        run_status(
+            Command::new(&python3)
+                .arg("-m")
+                .arg("venv")
+                .arg(&venv_dir)
+                .env("PATH", tool_path_env())
+                .current_dir(&paths.repo_root),
+            "python3 -m venv .runtime/davis/crawl4ai-venv",
+        )?;
+    } else {
+        println!("Crawl4AI venv already exists: {}", venv_dir.display());
+    }
+
+    println!("Upgrading pip.");
     run_status(
-        Command::new(open)
-            .arg("-a")
-            .arg("Google Chrome")
-            .arg(url)
-            .env("PATH", tool_path_env()),
-        "open -a Google Chrome",
+        Command::new(&python)
+            .arg("-m")
+            .arg("pip")
+            .arg("install")
+            .arg("--upgrade")
+            .arg("pip")
+            .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+        "crawl4ai pip upgrade",
+    )?;
+
+    println!("Installing Crawl4AI.");
+    run_status(
+        Command::new(&python)
+            .arg("-m")
+            .arg("pip")
+            .arg("install")
+            .arg("--upgrade")
+            .arg("crawl4ai")
+            .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+        "pip install crawl4ai",
+    )?;
+
+    println!("Installing Playwright Chromium.");
+    run_status(
+        Command::new(&python)
+            .arg("-m")
+            .arg("playwright")
+            .arg("install")
+            .arg("chromium")
+            .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+        "python -m playwright install chromium",
+    )?;
+
+    println!("Installing Patchright Chromium.");
+    run_status(
+        Command::new(&python)
+            .arg("-m")
+            .arg("patchright")
+            .arg("install")
+            .arg("chromium")
+            .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+        "python -m patchright install chromium",
+    )?;
+
+    println!("Crawl4AI installed.");
+    println!("Python: {}", python.display());
+    println!("Adapter: {}", paths.crawl4ai_adapter_dir().display());
+    println!("Next: daviszeroclaw crawl check");
+    Ok(())
+}
+
+fn check_crawl4ai(paths: &RuntimePaths) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let python = resolve_crawl4ai_python(paths, &config.crawl4ai)?;
+    let adapter_dir = paths.crawl4ai_adapter_dir();
+    let crawl4ai_base_dir = paths.runtime_dir.display().to_string();
+
+    println!("Crawl4AI config:");
+    println!("- enabled: {}", config.crawl4ai.enabled);
+    println!("- transport: {:?}", config.crawl4ai.transport);
+    println!("- python: {}", python.display());
+    println!("- adapter_dir: {}", adapter_dir.display());
+    println!(
+        "- profiles_dir: {}",
+        paths.crawl4ai_profiles_root().display()
+    );
+    println!("- timeout_secs: {}", config.crawl4ai.timeout_secs);
+
+    if !config.crawl4ai.enabled {
+        bail!("Crawl4AI is not enabled. Set [crawl4ai].enabled = true in config/davis/local.toml");
+    }
+    if !adapter_dir.join("__main__.py").is_file() {
+        bail!("crawl4ai_adapter was not found: {}", adapter_dir.display());
+    }
+    if !python.is_file() {
+        bail!(
+            "Crawl4AI Python was not found: {}\nRun: daviszeroclaw crawl install",
+            python.display()
+        );
+    }
+
+    let import_check = command_output(
+        Command::new(&python)
+            .arg("-c")
+            .arg("import crawl4ai, playwright; print('crawl4ai import ok'); print('playwright import ok')")
+            .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+    )?;
+    print_command_streams(&import_check.stdout, &import_check.stderr);
+    if !import_check.status_success {
+        bail!("Crawl4AI or Playwright import failed");
+    }
+
+    let adapter_check = command_output(
+        Command::new(&python)
+            .arg("-m")
+            .arg("crawl4ai_adapter")
+            .arg("crawl")
+            .arg("--help")
+            .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
+            .env("PYTHONPATH", paths.repo_root.display().to_string())
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+    )?;
+    if !adapter_check.status_success {
+        print_command_streams(&adapter_check.stdout, &adapter_check.stderr);
+        bail!("crawl4ai_adapter did not respond to --help");
+    }
+
+    fs::create_dir_all(paths.crawl4ai_profiles_root())?;
+    println!("Running adapter health crawl.");
+    let health_result = run_crawl4ai_health_check(paths, &python)?;
+    if !health_result {
+        bail!("crawl4ai adapter health crawl failed");
+    }
+
+    println!("Crawl4AI runtime is ready.");
+    println!("Next: daviszeroclaw crawl profile login express-ali");
+    Ok(())
+}
+
+fn list_crawl_sources() -> Result<()> {
+    println!("Built-in crawl sources:");
+    for source in crate::builtin_crawl_sources() {
+        println!("- {}", source.id);
+        println!("  category: {}", source.category);
+        println!("  description: {}", source.description);
+        println!("  profiles: {}", source.login_profiles.join(", "));
+        println!("  urls: {}", source.urls.join(", "));
+    }
+    Ok(())
+}
+
+async fn run_crawl_source(
+    paths: &RuntimePaths,
+    source: &str,
+    query: Option<String>,
+    refresh: bool,
+    compact: bool,
+) -> Result<()> {
+    let local_config = check_local_config(paths)?;
+    let source_definition = crate::find_builtin_crawl_source(source).ok_or_else(|| {
+        anyhow!(
+            "unknown crawl source: {source}\nRun `daviszeroclaw crawl source list` to inspect available sources."
+        )
+    })?;
+    let result = run_builtin_crawl_source(
+        paths.clone(),
+        local_config.crawl4ai.clone(),
+        source_definition.id,
+        query,
+        refresh,
     )
+    .await
+    .map_err(|err| anyhow!(err))?;
+    if compact {
+        println!("{}", serde_json::to_string(&result)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
+    Ok(())
+}
+
+fn run_crawl4ai_health_check(paths: &RuntimePaths, python: &Path) -> Result<bool> {
+    let health_profile = paths.crawl4ai_profiles_root().join("_healthcheck");
+    fs::create_dir_all(&health_profile)?;
+
+    let payload = json!({
+        "profile_path": health_profile.display().to_string(),
+        "url": "https://example.com",
+        "timeout_secs": 45,
+        "headless": true,
+        "magic": false,
+        "simulate_user": false,
+        "override_navigator": false,
+        "remove_overlay_elements": true,
+        "enable_stealth": true,
+    });
+
+    let mut child = Command::new(python)
+        .arg("-m")
+        .arg("crawl4ai_adapter")
+        .arg("crawl")
+        .arg("--runtime-dir")
+        .arg(paths.runtime_dir.display().to_string())
+        .env(
+            "CRAWL4_AI_BASE_DIRECTORY",
+            paths.runtime_dir.display().to_string(),
+        )
+        .env("PYTHONPATH", paths.repo_root.display().to_string())
+        .env("PATH", tool_path_env())
+        .current_dir(&paths.repo_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawn crawl4ai health check")?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let raw = serde_json::to_vec(&payload)?;
+        stdin.write_all(&raw)?;
+    }
+
+    let output = child.wait_with_output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        println!("{stderr}");
+    }
+    if !output.status.success() {
+        if !stdout.is_empty() {
+            println!("{stdout}");
+        }
+        return Ok(false);
+    }
+
+    let body = parse_crawl4ai_adapter_json(&output.stdout)
+        .context("parse crawl4ai health check response json")?;
+    let success = body
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let current_url = body
+        .get("url")
+        .or_else(|| body.get("redirected_url"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let status_code = body
+        .get("status_code")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("Health crawl url: {current_url}");
+    println!("Health crawl status: {status_code}");
+    if !success {
+        if let Some(error_message) = body
+            .get("error")
+            .or_else(|| body.get("error_message"))
+            .and_then(Value::as_str)
+        {
+            println!("Health crawl error: {error_message}");
+        }
+    }
+    Ok(success)
+}
+
+fn parse_crawl4ai_adapter_json(stdout: &[u8]) -> Result<Value> {
+    let text = String::from_utf8_lossy(stdout);
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+            return Ok(value);
+        }
+    }
+    bail!("no json payload found in adapter stdout: {text}")
+}
+
+async fn crawl_profile_login(paths: &RuntimePaths, profile: CrawlProfile) -> Result<()> {
+    let local_config = check_local_config(paths)?;
+    let adapter_dir = paths.crawl4ai_adapter_dir();
+    if !adapter_dir.join("__main__.py").is_file() {
+        bail!("crawl4ai adapter was not found: {}", adapter_dir.display());
+    }
+    let (profile_name, url) = match profile {
+        CrawlProfile::ExpressAli => ("express-ali", ALI_ORDER_URL),
+        CrawlProfile::ExpressJd => ("express-jd", JD_ORDER_URL),
+    };
+    migrate_legacy_crawl4ai_profiles(paths)?;
+    let profile_dir = paths.crawl4ai_profiles_root().join(profile_name);
+    std::fs::create_dir_all(&profile_dir).with_context(|| {
+        format!(
+            "failed to create crawl4ai profile directory: {}",
+            profile_dir.display()
+        )
+    })?;
+    let python = resolve_crawl4ai_python(paths, &local_config.crawl4ai)?;
+    println!("Opening Crawl4AI-compatible browser profile.");
+    println!("- profile id: {profile_name}");
+    println!("- profile dir: {}", profile_dir.display());
+    println!("- page: {url}");
+    println!("- finish by returning to this terminal and pressing Enter after login completes");
+    run_status(
+        Command::new(python)
+            .arg("-m")
+            .arg("crawl4ai_adapter")
+            .arg("login")
+            .arg("--runtime-dir")
+            .arg(&paths.runtime_dir)
+            .arg("--profile-name")
+            .arg(profile_name)
+            .arg("--profile-path")
+            .arg(&profile_dir)
+            .arg("--url")
+            .arg(url)
+            .env("PYTHONPATH", paths.repo_root.display().to_string())
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+        "open Crawl4AI-compatible browser login flow",
+    )
+}
+
+fn resolve_crawl4ai_python(
+    paths: &RuntimePaths,
+    config: &crate::Crawl4aiConfig,
+) -> Result<PathBuf> {
+    if !config.python.is_empty() {
+        let configured = PathBuf::from(&config.python);
+        if configured.components().count() > 1 || configured.is_absolute() {
+            return Ok(configured);
+        }
+        return require_command(&config.python).with_context(|| {
+            format!(
+                "configured crawl4ai.python was not found: {}",
+                config.python
+            )
+        });
+    }
+    let runtime_python = paths.crawl4ai_python_path();
+    if runtime_python.is_file() {
+        return Ok(runtime_python);
+    }
+    require_command("python3").context("python3 is required to run crawl4ai_adapter")
+}
+
+fn migrate_legacy_crawl4ai_profiles(paths: &RuntimePaths) -> Result<()> {
+    let legacy = paths.crawl4ai_legacy_profiles_root();
+    let current = paths.crawl4ai_profiles_root();
+    if current.exists() || !legacy.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = current.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(legacy, current)?;
+    Ok(())
 }
 
 async fn check_ha(paths: &RuntimePaths) -> Result<()> {
@@ -3449,6 +3816,27 @@ fn skill_name_set(root: &Path) -> BTreeSet<String> {
     skill_names(root).into_iter().collect()
 }
 
+fn sop_names(root: &Path) -> Vec<String> {
+    if !root.is_dir() {
+        return Vec::new();
+    }
+    let mut names = fs::read_dir(root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .filter(|entry| entry.path().join("SOP.toml").is_file())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+fn sop_name_set(root: &Path) -> BTreeSet<String> {
+    sop_names(root).into_iter().collect()
+}
+
 fn release_bin_path(paths: &RuntimePaths, name: &str) -> PathBuf {
     let mut bin = paths.repo_root.join("target").join("release").join(name);
     if cfg!(windows) {
@@ -3638,7 +4026,7 @@ mod tests {
 
     #[test]
     fn replace_toml_section_replaces_existing_section() {
-        let raw = "[webhook]\nsecret = \"x\"\n\n[memory_integrations.mempalace]\nenabled = false\npython = \"old\"\n\n[browser_bridge]\nenabled = true\n";
+        let raw = "[webhook]\nsecret = \"x\"\n\n[memory_integrations.mempalace]\nenabled = false\npython = \"old\"\n\n[crawl4ai]\nenabled = true\n";
         let updated = replace_toml_section(
             raw,
             "[memory_integrations.mempalace]",
@@ -3647,7 +4035,7 @@ mod tests {
 
         assert!(updated.contains("[memory_integrations.mempalace]\nenabled = true\n"));
         assert!(!updated.contains("python = \"old\""));
-        assert!(updated.contains("[browser_bridge]\nenabled = true"));
+        assert!(updated.contains("[crawl4ai]\nenabled = true"));
     }
 
     #[test]
@@ -3758,6 +4146,39 @@ allowed_contacts = [" +8618672954807 ", "user@example.com"]
     }
 
     #[test]
+    fn sync_runtime_sops_copies_and_marks_sources() {
+        let root = unique_test_dir("sync_runtime_sops_copies");
+        let paths = RuntimePaths {
+            repo_root: root.join("repo"),
+            runtime_dir: root.join("runtime"),
+        };
+        let project = root.join("project-sops");
+        fs::create_dir_all(project.join("my-parcels")).unwrap();
+        fs::write(
+            project.join("my-parcels").join("SOP.toml"),
+            "[sop]\nname = \"my-parcels\"\ndescription = \"test\"\n\n[[triggers]]\ntype = \"manual\"\n",
+        )
+        .unwrap();
+        fs::write(
+            project.join("my-parcels").join("SOP.md"),
+            "## Steps\n\n1. **Fetch** — Use [doc](references/api.md).\n",
+        )
+        .unwrap();
+
+        sync_runtime_sops_with_sources(&paths, &project).unwrap();
+
+        let runtime_sops = paths.workspace_sops_dir();
+        assert!(runtime_sops.join("my-parcels").join("SOP.toml").is_file());
+        assert!(runtime_sops.join("my-parcels").join("SOP.md").is_file());
+        assert_eq!(
+            fs::read_to_string(runtime_sops.join("my-parcels").join(".davis-sop-source")).unwrap(),
+            "project-sops\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn install_mempalace_vendor_skill_writes_thin_adapter_skill() {
         let root = unique_test_dir("install_mempalace_vendor_skill");
         let paths = RuntimePaths {
@@ -3792,6 +4213,20 @@ allowed_contacts = [" +8618672954807 ", "user@example.com"]
             runtime_skill_status(&project, &vendor, &stale),
             "WARN stale (missing: mempalace; extra: old)"
         );
+    }
+
+    #[test]
+    fn runtime_sop_status_reports_synced_and_stale_states() {
+        let synced = BTreeSet::from(["my-parcels".to_string()]);
+        let stale = BTreeSet::from(["old".to_string()]);
+        let empty = BTreeSet::new();
+
+        assert_eq!(runtime_sop_status(&synced, &synced), "synced (1 SOP)");
+        assert_eq!(
+            runtime_sop_status(&synced, &stale),
+            "WARN stale (missing: my-parcels; extra: old)"
+        );
+        assert_eq!(runtime_sop_status(&empty, &empty), "ok (empty)");
     }
 
     #[test]

@@ -624,8 +624,8 @@ fn build_route_plan(config: &LocalConfig, scorecard: &[ModelScoreEntry]) -> Resu
                 .then_with(|| right.metrics.latency.cmp(&left.metrics.latency))
                 .then_with(|| left.model.cmp(&right.model))
         });
-        let primary = candidates
-            .first()
+        let primary = select_primary_candidate(profile, &candidates)
+            .or_else(|| candidates.first().copied())
             .ok_or_else(|| anyhow!("no viable model found for profile {}", profile.as_str()))?;
         let primary_model_plan = PlannedModel {
             provider: primary.provider.clone(),
@@ -660,6 +660,22 @@ fn build_route_plan(config: &LocalConfig, scorecard: &[ModelScoreEntry]) -> Resu
         default_profile: RoutingProfile::GeneralQa,
         routes,
     })
+}
+
+fn select_primary_candidate<'a>(
+    profile: RoutingProfile,
+    candidates: &'a [&'a ModelScoreEntry],
+) -> Option<&'a ModelScoreEntry> {
+    if profile == RoutingProfile::StructuredLookup {
+        let index = candidates
+            .iter()
+            .position(|entry| entry.model.to_ascii_lowercase().contains("claude-opus"));
+        if let Some(index) = index {
+            return Some(candidates[index]);
+        }
+    }
+
+    None
 }
 
 impl RuntimeObservations {
@@ -1107,6 +1123,13 @@ fn heuristic_task_success(provider: &str, model: &str, profile: RoutingProfile) 
     score += match profile {
         RoutingProfile::HomeControl => 2,
         RoutingProfile::Research if name.contains("reasoner") || name.contains("opus") => 4,
+        // Structured lookup benefits more from strict instruction-following and
+        // careful tool use than from shaving a bit of latency.
+        RoutingProfile::StructuredLookup
+            if name.contains("claude-sonnet") || name.contains("gpt-5") =>
+        {
+            5
+        }
         RoutingProfile::StructuredLookup if name.contains("claude") => 3,
         RoutingProfile::StructuredLookup => 1,
         _ => 0,
@@ -1389,6 +1412,8 @@ fn runtime_config_needs_render(paths: &RuntimePaths) -> bool {
         return true;
     };
     !raw.contains("schema_version = 2")
+        || !raw.contains("[sop]")
+        || !raw.contains("sops_dir = \"sops\"")
         || raw.contains("[channels_config.")
         || raw.contains("[model_providers.")
         || raw.contains("[[model_routes]]")
@@ -2016,6 +2041,112 @@ max_fallbacks = 2
     }
 
     #[test]
+    fn build_declared_scorecard_prefers_claude_for_structured_lookup() {
+        let config = sample_config();
+        let scorecard = build_declared_scorecard(&config);
+        let claude = scorecard
+            .iter()
+            .find(|entry| {
+                entry.profile == RoutingProfile::StructuredLookup
+                    && entry.provider == "openrouter"
+                    && entry.model == "anthropic/claude-sonnet-4.6"
+            })
+            .unwrap();
+        let gpt = scorecard
+            .iter()
+            .find(|entry| {
+                entry.profile == RoutingProfile::StructuredLookup
+                    && entry.provider == "openrouter"
+                    && entry.model == "openai/gpt-4o"
+            })
+            .unwrap();
+
+        assert!(claude.total_score > gpt.total_score);
+    }
+
+    #[test]
+    fn build_route_plan_prefers_opus_for_structured_lookup_when_available() {
+        let config = sample_config();
+        let scorecard = vec![
+            mock_score_entry(
+                RoutingProfile::HomeControl,
+                "openrouter",
+                "davis_1_openrouter",
+                "openai/gpt-4o",
+                true,
+                90.0,
+                90,
+                92,
+                80,
+                95,
+                60,
+            ),
+            mock_score_entry(
+                RoutingProfile::GeneralQa,
+                "openrouter",
+                "davis_1_openrouter",
+                "openai/gpt-4o",
+                true,
+                90.0,
+                90,
+                92,
+                80,
+                95,
+                60,
+            ),
+            mock_score_entry(
+                RoutingProfile::Research,
+                "openrouter",
+                "davis_1_openrouter",
+                "anthropic/claude-sonnet-4.6",
+                true,
+                92.0,
+                95,
+                92,
+                70,
+                95,
+                40,
+            ),
+            mock_score_entry(
+                RoutingProfile::StructuredLookup,
+                "openrouter",
+                "davis_1_openrouter",
+                "anthropic/claude-sonnet-4.6",
+                true,
+                89.2,
+                96,
+                92,
+                70,
+                95,
+                85,
+            ),
+            mock_score_entry(
+                RoutingProfile::StructuredLookup,
+                "openrouter",
+                "davis_1_openrouter",
+                "anthropic/claude-opus-4.6",
+                true,
+                84.6,
+                99,
+                92,
+                62,
+                95,
+                25,
+            ),
+        ];
+
+        let plan = build_route_plan(&config, &scorecard).unwrap();
+        let route = plan
+            .routes
+            .iter()
+            .find(|route| route.profile == RoutingProfile::StructuredLookup)
+            .unwrap();
+
+        assert_eq!(route.primary.model, "anthropic/claude-opus-4.6");
+        assert_eq!(route.fallbacks[0].model, "anthropic/claude-sonnet-4.6");
+    }
+
+    #[test]
     fn build_scorecard_uses_runtime_observations_to_switch_general_qa() {
         let mut config = sample_config();
         config.providers[1]
@@ -2307,5 +2438,18 @@ headers = { Authorization = "Bearer __DAVIS_HA_TOKEN__" }
         assert!(rendered.contains("[providers]\nfallback = \"openrouter\""));
         assert!(rendered.contains("[channels.imessage]"));
         assert!(rendered.contains("secret = \"shortcut-shared-secret\""));
+    }
+
+    #[test]
+    fn runtime_config_needs_render_when_sop_section_missing() {
+        let paths = test_runtime_paths("runtime-config-needs-sop");
+        fs::create_dir_all(paths.runtime_dir.clone()).unwrap();
+        fs::write(
+            paths.runtime_config_path(),
+            "schema_version = 2\n[skills]\nallow_scripts = true\n",
+        )
+        .unwrap();
+
+        assert!(runtime_config_needs_render(&paths));
     }
 }
