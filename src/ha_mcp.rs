@@ -262,7 +262,7 @@ impl HaMcpClient {
                     "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {},
                     "clientInfo": {
-                        "name": "davis-ha-proxy",
+                        "name": "davis-local-proxy",
                         "version": env!("CARGO_PKG_VERSION"),
                     }
                 }),

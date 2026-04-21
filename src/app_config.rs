@@ -13,6 +13,10 @@ pub struct LocalConfig {
     pub routing: RoutingConfig,
     #[serde(default)]
     pub browser_bridge: BrowserBridgeConfig,
+    #[serde(default)]
+    pub memory_integrations: MemoryIntegrationsConfig,
+    #[serde(default)]
+    pub article_memory: ArticleMemoryConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +109,76 @@ pub struct BrowserUserSessionConfig {
     pub remote_debugging_url: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryIntegrationsConfig {
+    #[serde(default)]
+    pub mempalace: MempalaceConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ArticleMemoryConfig {
+    #[serde(default)]
+    pub embedding: ArticleMemoryEmbeddingConfig,
+    #[serde(default)]
+    pub normalize: ArticleMemoryNormalizeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArticleMemoryEmbeddingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default = "default_article_embedding_model")]
+    pub model: String,
+    #[serde(default = "default_article_embedding_dimensions")]
+    pub dimensions: usize,
+    #[serde(default = "default_article_embedding_max_input_chars")]
+    pub max_input_chars: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArticleMemoryNormalizeConfig {
+    #[serde(default)]
+    pub llm_polish: bool,
+    #[serde(default)]
+    pub llm_summary: bool,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default = "default_article_normalize_min_polish_input_chars")]
+    pub min_polish_input_chars: usize,
+    #[serde(default = "default_article_normalize_max_polish_input_chars")]
+    pub max_polish_input_chars: usize,
+    #[serde(default = "default_article_normalize_summary_input_chars")]
+    pub summary_input_chars: usize,
+    #[serde(default = "default_article_normalize_fallback_min_ratio")]
+    pub fallback_min_ratio: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MempalaceConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub python: String,
+    #[serde(default)]
+    pub palace_dir: String,
+    #[serde(default = "default_mempalace_package")]
+    pub package: String,
+    #[serde(default = "default_mempalace_tool_timeout_secs")]
+    pub tool_timeout_secs: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricWeights {
     pub task_success: f64,
@@ -138,6 +212,42 @@ fn default_non_whitelist_behavior() -> String {
 
 fn default_remote_debugging_url() -> String {
     "http://127.0.0.1:9222".to_string()
+}
+
+fn default_mempalace_package() -> String {
+    "mempalace".to_string()
+}
+
+fn default_mempalace_tool_timeout_secs() -> u64 {
+    30
+}
+
+fn default_article_embedding_model() -> String {
+    "Qwen/Qwen3-Embedding-8B".to_string()
+}
+
+fn default_article_embedding_dimensions() -> usize {
+    1024
+}
+
+fn default_article_embedding_max_input_chars() -> usize {
+    12_000
+}
+
+fn default_article_normalize_min_polish_input_chars() -> usize {
+    1_200
+}
+
+fn default_article_normalize_max_polish_input_chars() -> usize {
+    24_000
+}
+
+fn default_article_normalize_summary_input_chars() -> usize {
+    24_000
+}
+
+fn default_article_normalize_fallback_min_ratio() -> f32 {
+    0.70
 }
 
 fn default_browser_profiles() -> Vec<BrowserProfileConfig> {
@@ -189,6 +299,49 @@ impl Default for BrowserUserSessionConfig {
             require_remote_debugging: default_true(),
             allow_applescript_fallback: default_true(),
             remote_debugging_url: default_remote_debugging_url(),
+        }
+    }
+}
+
+impl Default for MempalaceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            python: String::new(),
+            palace_dir: String::new(),
+            package: default_mempalace_package(),
+            tool_timeout_secs: default_mempalace_tool_timeout_secs(),
+        }
+    }
+}
+
+impl Default for ArticleMemoryEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: String::new(),
+            api_key: String::new(),
+            base_url: String::new(),
+            model: default_article_embedding_model(),
+            dimensions: default_article_embedding_dimensions(),
+            max_input_chars: default_article_embedding_max_input_chars(),
+        }
+    }
+}
+
+impl Default for ArticleMemoryNormalizeConfig {
+    fn default() -> Self {
+        Self {
+            llm_polish: false,
+            llm_summary: false,
+            provider: String::new(),
+            api_key: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+            min_polish_input_chars: default_article_normalize_min_polish_input_chars(),
+            max_polish_input_chars: default_article_normalize_max_polish_input_chars(),
+            summary_input_chars: default_article_normalize_summary_input_chars(),
+            fallback_min_ratio: default_article_normalize_fallback_min_ratio(),
         }
     }
 }
@@ -351,7 +504,112 @@ fn validate_local_config(mut config: LocalConfig) -> Result<LocalConfig> {
         config.browser_bridge.user_session.remote_debugging_url = default_remote_debugging_url();
     }
 
+    config.memory_integrations.mempalace.python = config
+        .memory_integrations
+        .mempalace
+        .python
+        .trim()
+        .to_string();
+    config.memory_integrations.mempalace.palace_dir = config
+        .memory_integrations
+        .mempalace
+        .palace_dir
+        .trim()
+        .to_string();
+    config.memory_integrations.mempalace.package = config
+        .memory_integrations
+        .mempalace
+        .package
+        .trim()
+        .to_string();
+    if config.memory_integrations.mempalace.package.is_empty() {
+        config.memory_integrations.mempalace.package = default_mempalace_package();
+    }
+    if config.memory_integrations.mempalace.tool_timeout_secs == 0 {
+        config.memory_integrations.mempalace.tool_timeout_secs =
+            default_mempalace_tool_timeout_secs();
+    }
+
+    validate_article_memory_config(&mut config)?;
+
     Ok(config)
+}
+
+fn validate_article_memory_config(config: &mut LocalConfig) -> Result<()> {
+    let embedding = &mut config.article_memory.embedding;
+    embedding.provider = embedding.provider.trim().to_string();
+    embedding.api_key = embedding.api_key.trim().to_string();
+    embedding.base_url = embedding.base_url.trim().trim_end_matches('/').to_string();
+    embedding.model = embedding.model.trim().to_string();
+    if embedding.model.is_empty() {
+        embedding.model = default_article_embedding_model();
+    }
+    if embedding.dimensions == 0 {
+        embedding.dimensions = default_article_embedding_dimensions();
+    }
+    if embedding.max_input_chars == 0 {
+        embedding.max_input_chars = default_article_embedding_max_input_chars();
+    }
+    if !embedding.enabled {
+    } else {
+        if embedding.provider.is_empty()
+            && (embedding.api_key.is_empty() || embedding.base_url.is_empty())
+        {
+            return Err(anyhow!(
+                "article_memory.embedding.provider is required when api_key/base_url are not set"
+            ));
+        }
+        if !embedding.provider.is_empty()
+            && !config
+                .providers
+                .iter()
+                .any(|provider| provider.name == embedding.provider)
+        {
+            return Err(anyhow!(
+                "article_memory.embedding.provider does not match a configured provider: {}",
+                embedding.provider
+            ));
+        }
+    }
+
+    let normalize = &mut config.article_memory.normalize;
+    normalize.provider = normalize.provider.trim().to_string();
+    normalize.api_key = normalize.api_key.trim().to_string();
+    normalize.base_url = normalize.base_url.trim().trim_end_matches('/').to_string();
+    normalize.model = normalize.model.trim().to_string();
+    if normalize.min_polish_input_chars == 0 {
+        normalize.min_polish_input_chars = default_article_normalize_min_polish_input_chars();
+    }
+    if normalize.max_polish_input_chars == 0 {
+        normalize.max_polish_input_chars = default_article_normalize_max_polish_input_chars();
+    }
+    if normalize.summary_input_chars == 0 {
+        normalize.summary_input_chars = default_article_normalize_summary_input_chars();
+    }
+    if normalize.fallback_min_ratio <= 0.0 || normalize.fallback_min_ratio > 1.0 {
+        normalize.fallback_min_ratio = default_article_normalize_fallback_min_ratio();
+    }
+    if normalize.llm_polish || normalize.llm_summary {
+        if normalize.provider.is_empty()
+            && (normalize.api_key.is_empty() || normalize.base_url.is_empty())
+        {
+            return Err(anyhow!(
+                "article_memory.normalize.provider is required when api_key/base_url are not set"
+            ));
+        }
+        if !normalize.provider.is_empty()
+            && !config
+                .providers
+                .iter()
+                .any(|provider| provider.name == normalize.provider)
+        {
+            return Err(anyhow!(
+                "article_memory.normalize.provider does not match a configured provider: {}",
+                normalize.provider
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_profile(name: &str, profile: &RoutingProfileConfig) -> Result<()> {

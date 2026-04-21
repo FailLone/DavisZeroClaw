@@ -1,24 +1,34 @@
 use crate::{
-    audit_entity, browser_action, browser_evaluate, browser_focus, browser_open, browser_profiles,
-    browser_screenshot, browser_snapshot, browser_status, browser_tabs, browser_wait,
-    build_failure_summary_payload, build_issue, build_replacement_candidates_report,
-    execute_control, express_auth_status, express_packages, fetch_all_states_typed,
-    generate_config_report, parse_window, refine_live_context_report_with_typed_states,
-    resolve_control_target, resolve_entity_payload, BrowserActionRequest, BrowserBridgeConfig,
+    add_article_memory, article_memory_status, audit_entity, browser_action, browser_evaluate,
+    browser_focus, browser_open, browser_profiles, browser_screenshot, browser_snapshot,
+    browser_status, browser_tabs, browser_wait, build_failure_summary_payload, build_issue,
+    build_replacement_candidates_report, execute_control, express_auth_status, express_packages,
+    fetch_all_states_typed, generate_config_report, hybrid_search_article_memory,
+    ingest_article_from_browser, list_article_memory, normalize_all_article_memory,
+    normalize_article_memory, parse_window, refine_live_context_report_with_typed_states,
+    resolve_article_embedding_config, resolve_article_normalize_config,
+    resolve_article_value_config, resolve_control_target, resolve_entity_payload,
+    search_article_memory, upsert_article_memory_embedding, ArticleMemoryAddRequest,
+    ArticleMemoryConfig, ArticleMemoryIngestRequest, BrowserActionRequest, BrowserBridgeConfig,
     BrowserEvaluateRequest, BrowserFocusRequest, BrowserOpenRequest, BrowserScreenshotRequest,
     BrowserSnapshotRequest, BrowserWaitRequest, ControlAction, ControlConfig,
-    ExecuteControlRequest, FailureReason, HaClient, HaMcpClient, ModelRoutingManager, ProxyError,
-    RuntimePaths,
+    ExecuteControlRequest, FailureReason, HaClient, HaMcpClient, ModelProviderConfig,
+    ModelRoutingManager, ProxyError, RuntimePaths,
 };
 use axum::body::Bytes;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use hmac::{Hmac, Mac};
 use serde::Serialize;
 use serde_json::{json, Value};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Serialize)]
 struct IssueResponse {
@@ -48,7 +58,10 @@ pub struct AppState {
     pub paths: RuntimePaths,
     pub control_config: Arc<ControlConfig>,
     pub browser_config: Arc<BrowserBridgeConfig>,
+    pub article_memory_config: Arc<ArticleMemoryConfig>,
+    pub providers: Arc<Vec<ModelProviderConfig>>,
     pub routing: Arc<ModelRoutingManager>,
+    pub shortcut_secret: String,
 }
 
 impl AppState {
@@ -58,7 +71,10 @@ impl AppState {
         paths: RuntimePaths,
         control_config: Arc<ControlConfig>,
         browser_config: Arc<BrowserBridgeConfig>,
+        article_memory_config: Arc<ArticleMemoryConfig>,
+        providers: Arc<Vec<ModelProviderConfig>>,
         routing: Arc<ModelRoutingManager>,
+        shortcut_secret: String,
     ) -> Self {
         Self {
             client,
@@ -66,7 +82,10 @@ impl AppState {
             paths,
             control_config,
             browser_config,
+            article_memory_config,
+            providers,
             routing,
+            shortcut_secret,
         }
     }
 }
@@ -95,6 +114,18 @@ pub fn build_app(state: AppState) -> Router {
         .route("/express/auth-status", get(express_auth_status_handler))
         .route("/express/packages", get(express_packages_handler))
         .route("/express/search", get(express_search_handler))
+        .route("/article-memory/status", get(article_memory_status_handler))
+        .route("/article-memory/articles", get(article_memory_list_handler))
+        .route("/article-memory/articles", post(article_memory_add_handler))
+        .route(
+            "/article-memory/ingest",
+            post(article_memory_ingest_handler),
+        )
+        .route(
+            "/article-memory/normalize",
+            post(article_memory_normalize_handler),
+        )
+        .route("/article-memory/search", get(article_memory_search_handler))
         .route("/browser/status", get(browser_status_handler))
         .route("/browser/profiles", get(browser_profiles_handler))
         .route("/browser/tabs", get(browser_tabs_handler))
@@ -107,6 +138,13 @@ pub fn build_app(state: AppState) -> Router {
         .route("/browser/wait", post(browser_wait_handler))
         .route("/ha-mcp/capabilities", get(ha_mcp_capabilities))
         .route("/ha-mcp/live-context", get(ha_mcp_live_context))
+        .with_state(state)
+}
+
+pub fn build_shortcut_bridge_app(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(shortcut_bridge_health))
+        .route("/shortcut", post(shortcut_bridge))
         .with_state(state)
 }
 
@@ -157,7 +195,7 @@ async fn health() -> Json<Value> {
     Json(
         serde_json::to_value(HealthResponse {
             status: "ok",
-            service: "ha_proxy",
+            service: "davis_local_proxy",
             features: vec![
                 "audit",
                 "control_resolution",
@@ -171,15 +209,123 @@ async fn health() -> Json<Value> {
                 "zeroclaw_runtime_traces",
                 "express_auth_status",
                 "express_packages",
+                "article_memory_status",
+                "article_memory_articles",
+                "article_memory_ingest",
+                "article_memory_normalize",
+                "article_memory_search",
                 "browser_status",
                 "browser_profiles",
                 "browser_tabs",
                 "ha_mcp_capabilities",
                 "ha_mcp_live_context",
+                "shortcut_bridge",
             ],
         })
         .unwrap_or_else(|_| json!({"status":"ok"})),
     )
+}
+
+async fn shortcut_bridge_health() -> Json<Value> {
+    Json(json!({
+        "status": "ok",
+        "service": "shortcut_bridge",
+    }))
+}
+
+async fn shortcut_bridge(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> (StatusCode, Json<Value>) {
+    if state.shortcut_secret.trim().is_empty() {
+        return json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({
+                "status": "failed",
+                "reason": "missing_webhook_secret",
+            }),
+        );
+    }
+
+    let provided_secret = headers
+        .get("x-webhook-secret")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if provided_secret != state.shortcut_secret {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            json!({
+                "status": "failed",
+                "reason": "invalid_webhook_secret",
+            }),
+        );
+    }
+
+    if serde_json::from_slice::<Value>(&body).is_err() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "status": "failed",
+                "reason": "invalid_json",
+            }),
+        );
+    }
+
+    let signature = hmac_sha256_hex(&state.shortcut_secret, &body);
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({
+                    "status": "failed",
+                    "reason": "client_build_failed",
+                    "message": err.to_string(),
+                }),
+            )
+        }
+    };
+
+    match client
+        .post("http://127.0.0.1:3001/shortcut")
+        .header("content-type", "application/json")
+        .header("x-webhook-signature", signature)
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            json_response(StatusCode::ACCEPTED, json!({"status": "accepted"}))
+        }
+        Ok(response) => json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({
+                "status": "failed",
+                "reason": "zeroclaw_webhook_rejected",
+                "upstream_status": response.status().as_u16(),
+            }),
+        ),
+        Err(err) => json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({
+                "status": "failed",
+                "reason": "zeroclaw_webhook_unreachable",
+                "message": err.to_string(),
+            }),
+        ),
+    }
+}
+
+fn hmac_sha256_hex(secret: &str, body: &[u8]) -> String {
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts keys of any length");
+    mac.update(body);
+    let bytes = mac.finalize().into_bytes();
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 async fn resolve_entity(
@@ -464,6 +610,267 @@ async fn express_search_handler(
     )
 }
 
+async fn article_memory_status_handler(State(state): State<AppState>) -> Json<Value> {
+    Json(
+        serde_json::to_value(article_memory_status(&state.paths))
+            .unwrap_or_else(|_| json!({"status":"upstream_error"})),
+    )
+}
+
+async fn article_memory_list_handler(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(20);
+    Json(
+        serde_json::to_value(list_article_memory(&state.paths, limit))
+            .unwrap_or_else(|_| json!({"status":"upstream_error","articles":[] })),
+    )
+}
+
+async fn article_memory_search_handler(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    let query = params
+        .get("q")
+        .cloned()
+        .or_else(|| params.get("query").cloned())
+        .unwrap_or_default();
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(10);
+    let semantic = params
+        .get("semantic")
+        .map(|value| !matches!(value.as_str(), "0" | "false" | "no"))
+        .unwrap_or(true);
+    if semantic {
+        let embedding_config = resolve_article_embedding_config(
+            &state.article_memory_config.embedding,
+            &state.providers,
+        )
+        .ok()
+        .flatten();
+        return Json(
+            serde_json::to_value(
+                hybrid_search_article_memory(
+                    &state.paths,
+                    embedding_config.as_ref(),
+                    &query,
+                    limit,
+                )
+                .await,
+            )
+            .unwrap_or_else(|_| json!({"status":"upstream_error","hits":[] })),
+        );
+    }
+    Json(
+        serde_json::to_value(search_article_memory(&state.paths, &query, limit))
+            .unwrap_or_else(|_| json!({"status":"upstream_error","hits":[] })),
+    )
+}
+
+async fn article_memory_add_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<ArticleMemoryAddRequest>,
+) -> (StatusCode, Json<Value>) {
+    match add_article_memory(&state.paths, payload) {
+        Ok(record) => {
+            let normalize_config = resolve_article_normalize_config(
+                &state.article_memory_config.normalize,
+                &state.providers,
+            )
+            .ok()
+            .flatten();
+            let value_config = resolve_article_value_config(&state.paths, &state.providers)
+                .ok()
+                .flatten();
+            let normalize_response = normalize_article_memory(
+                &state.paths,
+                normalize_config.as_ref(),
+                value_config.as_ref(),
+                &record.id,
+            )
+            .await;
+            let (normalize_status, value_decision, embedding_status) = match normalize_response {
+                Ok(response) => {
+                    let embedding_status = if response.value_decision.as_deref() == Some("reject") {
+                        "skipped_value_rejected".to_string()
+                    } else {
+                        match resolve_article_embedding_config(
+                            &state.article_memory_config.embedding,
+                            &state.providers,
+                        ) {
+                            Ok(Some(config)) => match upsert_article_memory_embedding(
+                                &state.paths,
+                                &config,
+                                &record,
+                            )
+                            .await
+                            {
+                                Ok(()) => "ok".to_string(),
+                                Err(error) => format!("error: {error}"),
+                            },
+                            Ok(None) => "disabled".to_string(),
+                            Err(error) => format!("config_error: {error}"),
+                        }
+                    };
+                    (
+                        response.clean_status,
+                        response.value_decision,
+                        embedding_status,
+                    )
+                }
+                Err(error) => (format!("error: {error}"), None, "skipped".to_string()),
+            };
+            json_response(
+                StatusCode::CREATED,
+                json!({
+                    "status": "ok",
+                    "article": record,
+                    "normalize_status": normalize_status,
+                    "value_decision": value_decision,
+                    "embedding_status": embedding_status,
+                }),
+            )
+        }
+        Err(error) => json_response(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "status": "failed",
+                "reason": "invalid_article_memory_record",
+                "message": error.to_string(),
+            }),
+        ),
+    }
+}
+
+async fn article_memory_normalize_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    let no_llm = payload
+        .get("no_llm")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let normalize_config = if no_llm {
+        None
+    } else {
+        match resolve_article_normalize_config(
+            &state.article_memory_config.normalize,
+            &state.providers,
+        ) {
+            Ok(config) => config,
+            Err(error) => {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({
+                        "status": "failed",
+                        "reason": "normalize_config_error",
+                        "message": error.to_string(),
+                    }),
+                )
+            }
+        }
+    };
+    let value_config = if no_llm {
+        None
+    } else {
+        match resolve_article_value_config(&state.paths, &state.providers) {
+            Ok(config) => config,
+            Err(error) => {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({
+                        "status": "failed",
+                        "reason": "value_config_error",
+                        "message": error.to_string(),
+                    }),
+                )
+            }
+        }
+    };
+    let result = if payload.get("all").and_then(Value::as_bool).unwrap_or(false) {
+        normalize_all_article_memory(
+            &state.paths,
+            normalize_config.as_ref(),
+            value_config.as_ref(),
+        )
+        .await
+    } else if let Some(id) = payload.get("id").and_then(Value::as_str) {
+        normalize_article_memory(
+            &state.paths,
+            normalize_config.as_ref(),
+            value_config.as_ref(),
+            id,
+        )
+        .await
+        .map(|response| vec![response])
+    } else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "status": "failed",
+                "reason": "missing_article_id",
+                "message": "provide id or all=true",
+            }),
+        );
+    };
+    match result {
+        Ok(responses) => json_response(
+            StatusCode::OK,
+            json!({
+                "status": "ok",
+                "articles": responses,
+            }),
+        ),
+        Err(error) => json_response(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "status": "failed",
+                "reason": "article_normalize_failed",
+                "message": error.to_string(),
+            }),
+        ),
+    }
+}
+
+async fn article_memory_ingest_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<ArticleMemoryIngestRequest>,
+) -> (StatusCode, Json<Value>) {
+    match ingest_article_from_browser(
+        &state.paths,
+        &state.browser_config,
+        &state.article_memory_config,
+        &state.providers,
+        payload,
+    )
+    .await
+    {
+        Ok(response) => {
+            let status = if response.status == "ok" {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            json_response(status, response)
+        }
+        Err(error) => json_response(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "status": "failed",
+                "reason": "article_ingest_failed",
+                "message": error.to_string(),
+            }),
+        ),
+    }
+}
+
 async fn browser_status_handler(State(state): State<AppState>) -> Json<Value> {
     Json(
         serde_json::to_value(
@@ -615,5 +1022,18 @@ async fn ha_mcp_live_context(State(state): State<AppState>) -> (StatusCode, Json
                 "details": message,
             }),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hmac_sha256_hex_matches_known_vector() {
+        assert_eq!(
+            hmac_sha256_hex("key", b"The quick brown fox jumps over the lazy dog"),
+            "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+        );
     }
 }

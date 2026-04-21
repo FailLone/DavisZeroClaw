@@ -1,6 +1,6 @@
 ---
 name: ha-control
-description: Control Home Assistant entities in the present tense through the local Davis HA proxy. Use when the user wants to turn devices on or off, toggle them, adjust brightness, or control a room-level light group such as “书房的灯”. Prefer this skill over direct `homeassistant__HassTurnOn` / `homeassistant__HassTurnOff` calls so Davis can resolve fuzzy Chinese names into explicit entity IDs and attach configuration advice after repeated failures or ambiguous matches.
+description: Control Home Assistant entities in the present tense through the Home Assistant endpoints on the Davis local proxy. Use when the user wants to turn devices on or off, toggle them, adjust brightness, or control a room-level light group such as “书房的灯”. Prefer this skill over direct `homeassistant__HassTurnOn` / `homeassistant__HassTurnOff` calls so Davis can resolve fuzzy Chinese names into explicit entity IDs and attach configuration advice after repeated failures or ambiguous matches.
 ---
 
 # HA Control
@@ -10,8 +10,8 @@ description: Control Home Assistant entities in the present tense through the lo
 - Use this skill only for present-tense control requests.
 - Use `query_state` only when the user is explicitly asking about the current live state of a specific Home Assistant entity or room.
 - Do not call `homeassistant__HassTurnOn` or `homeassistant__HassTurnOff` directly.
-- Use only `http_request` against the local Davis HA proxy. Do not invent a custom control interface name.
-- Prefer the local Davis HA proxy over raw Home Assistant write tools.
+- Use only `http_request` against the Davis local proxy HA endpoints. Do not invent a custom control interface name.
+- Prefer the Davis local proxy over raw Home Assistant write tools.
 - If the user is asking about the past, use `ha-audit` instead.
 - If the user is only asking for architecture advice, use `ha-config-advisor` or `ha-advanced-advisor` instead.
 - Do not turn general conversation, troubleshooting questions, or historical investigation into device control.

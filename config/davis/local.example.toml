@@ -11,8 +11,8 @@ secret = "replace-with-your-webhook-secret"
 [[providers]]
 name = "openrouter"
 api_key = "your_openrouter_api_key"
-base_url = ""
-allowed_models = ["openai/gpt-4o", "anthropic/claude-sonnet-4.6"]
+base_url = "https://openrouter.ai/api/v1"
+allowed_models = ["openai/gpt-4.1", "openai/gpt-5.2", "google/gemini-2.5-flash"]
 
 [[providers]]
 name = "deepseek"
@@ -70,3 +70,36 @@ default_non_whitelist_behavior = "requires_confirmation"
 require_remote_debugging = true
 allow_applescript_fallback = true
 remote_debugging_url = "http://127.0.0.1:9222"
+
+[memory_integrations.mempalace]
+enabled = false
+# Optional overrides. Empty values use .runtime/davis/mempalace-venv/bin/python
+# and .runtime/davis/mempalace.
+python = ""
+palace_dir = ""
+package = "mempalace"
+tool_timeout_secs = 30
+
+[article_memory.embedding]
+enabled = false
+# Reuse a configured OpenAI-compatible provider, such as "siliconflow".
+provider = ""
+# Optional direct credentials. Leave empty to reuse the provider's api_key/base_url.
+api_key = ""
+base_url = ""
+model = "Qwen/Qwen3-Embedding-8B"
+dimensions = 1024
+max_input_chars = 12000
+
+[article_memory.normalize]
+llm_polish = false
+llm_summary = false
+# Reuse a configured OpenAI-compatible chat provider when enabled.
+provider = ""
+api_key = ""
+base_url = ""
+model = ""
+min_polish_input_chars = 1200
+max_polish_input_chars = 24000
+summary_input_chars = 24000
+fallback_min_ratio = 0.7

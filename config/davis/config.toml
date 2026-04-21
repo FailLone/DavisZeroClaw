@@ -1,11 +1,7 @@
-# DavisZeroClaw 运行时模板
-# 由 scripts/start_davis.sh 渲染到 .runtime/davis/config.toml
+# DavisZeroClaw runtime template.
+# Rendered to .runtime/davis/config.toml by the Davis local proxy.
 
-default_provider = "__DAVIS_DEFAULT_PROVIDER__"
-default_model = "__DAVIS_DEFAULT_MODEL__"
-default_temperature = __DAVIS_DEFAULT_TEMPERATURE__
-
-__DAVIS_MODEL_PROVIDERS__
+schema_version = 2
 
 [gateway]
 host = "0.0.0.0"
@@ -13,7 +9,8 @@ port = 3000
 require_pairing = false
 allow_public_bind = true
 
-[channels_config.webhook]
+[channels.webhook]
+enabled = true
 port = 3001
 listen_path = "/shortcut"
 __DAVIS_WEBHOOK_SECRET_CONFIG__
@@ -42,17 +39,38 @@ max_response_size = 1000000
 allow_scripts = true
 
 [scheduler]
-enabled = false
+enabled = true
 
 [autonomy]
 # 局域网开发默认值：Webhook 请求可直接进入工具调用链。
 level = "full"
+allowed_roots = ["__DAVIS_REPO_ROOT__"]
+allowed_commands = [
+  "git",
+  "npm",
+  "cargo",
+  "ls",
+  "cat",
+  "grep",
+  "find",
+  "echo",
+  "pwd",
+  "wc",
+  "head",
+  "tail",
+  "date",
+  "python",
+  "python3",
+  "pip",
+  "node",
+  "daviszeroclaw",
+]
+shell_timeout_secs = 300
 
+__DAVIS_PROVIDERS_CONFIG__
 __DAVIS_QUERY_CLASSIFICATION_CONFIG__
-__DAVIS_MODEL_ROUTES_CONFIG__
 
 [reliability]
-fallback_providers = __DAVIS_FALLBACK_PROVIDERS__
 __DAVIS_MODEL_FALLBACKS__
 
 [mcp]
@@ -67,3 +85,4 @@ deferred_loading = false
 # name = "life_services"
 # command = "npx"
 # args = ["-y", "@greater-china/local-life-services-mcp"]
+__DAVIS_MCP_SERVERS_CONFIG__

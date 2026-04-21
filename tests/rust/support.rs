@@ -111,8 +111,11 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
         mcp_client,
         paths,
         Arc::new(control_config),
-        Arc::new(local_config.browser_bridge),
+        Arc::new(local_config.browser_bridge.clone()),
+        Arc::new(local_config.article_memory.clone()),
+        Arc::new(local_config.providers.clone()),
         routing,
+        local_config.webhook.secret,
     ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -293,7 +293,7 @@ impl ModelRoutingManager {
                     .as_ref()
                     .map(|current| !same_route_plan(current, &plan))
                     .unwrap_or(true);
-                let should_render = plan_changed || !self.paths.runtime_config_path().exists();
+                let should_render = plan_changed || runtime_config_needs_render(&self.paths);
                 if should_render {
                     self.render_runtime_config(&plan)?;
                 }
@@ -417,19 +417,8 @@ impl ModelRoutingManager {
     fn render_runtime_config(&self, plan: &ModelRoutePlan) -> Result<()> {
         let template = std::fs::read_to_string(self.paths.config_template_path())
             .context("failed to read ZeroClaw config template")?;
-        let default_route = plan
-            .routes
-            .iter()
-            .find(|route| route.profile == RoutingProfile::GeneralQa)
-            .ok_or_else(|| anyhow!("general_qa route missing from plan"))?;
 
         let rendered = template
-            .replace(
-                "__DAVIS_DEFAULT_PROVIDER__",
-                &default_route.primary.provider_alias,
-            )
-            .replace("__DAVIS_DEFAULT_MODEL__", &default_route.primary.model)
-            .replace("__DAVIS_DEFAULT_TEMPERATURE__", "0.3")
             .replace(
                 "__DAVIS_IMESSAGE_CONFIG__",
                 &render_imessage_config(&self.local_config),
@@ -439,22 +428,22 @@ impl ModelRoutingManager {
                 &render_webhook_secret_config(&self.local_config),
             )
             .replace(
-                "__DAVIS_MODEL_PROVIDERS__",
-                &render_model_providers_config(&self.local_config),
+                "__DAVIS_PROVIDERS_CONFIG__",
+                &render_providers_config(plan, &self.local_config),
             )
             .replace(
                 "__DAVIS_QUERY_CLASSIFICATION_CONFIG__",
                 &render_query_classification(),
             )
             .replace(
-                "__DAVIS_MODEL_ROUTES_CONFIG__",
-                &render_model_routes(plan, &self.local_config),
+                "__DAVIS_MCP_SERVERS_CONFIG__",
+                &render_mcp_servers_config(&self.paths, &self.local_config),
+            )
+            .replace(
+                "__DAVIS_REPO_ROOT__",
+                &toml_escape(&self.paths.repo_root.display().to_string()),
             )
             .replace("__DAVIS_MODEL_FALLBACKS__", &render_model_fallbacks(plan))
-            .replace(
-                "__DAVIS_FALLBACK_PROVIDERS__",
-                &render_fallback_providers(plan),
-            )
             .replace(
                 "__DAVIS_HA_URL__",
                 &toml_escape(
@@ -1118,6 +1107,7 @@ fn heuristic_task_success(provider: &str, model: &str, profile: RoutingProfile) 
     score += match profile {
         RoutingProfile::HomeControl => 2,
         RoutingProfile::Research if name.contains("reasoner") || name.contains("opus") => 4,
+        RoutingProfile::StructuredLookup if name.contains("claude") => 3,
         RoutingProfile::StructuredLookup => 1,
         _ => 0,
     };
@@ -1196,7 +1186,25 @@ fn infer_profile_from_message(message: &str) -> RoutingProfile {
     let normalized = message.to_lowercase();
     if contains_any(
         &normalized,
-        &["快递", "物流", "运单", "单号", "顺丰", "京东快递", "圆通"],
+        &[
+            "快递",
+            "物流",
+            "运单",
+            "单号",
+            "顺丰",
+            "京东快递",
+            "圆通",
+            "订单",
+            "淘宝",
+            "天猫",
+            "京东",
+            "购买",
+            "买的",
+            "买过",
+            "在哪里买",
+            "哪买",
+            "商品",
+        ],
     ) {
         RoutingProfile::StructuredLookup
     } else if contains_any(
@@ -1318,6 +1326,14 @@ fn provider_config_for_alias<'a>(
         })
 }
 
+fn zeroclaw_provider_id(provider: &ModelProviderConfig) -> String {
+    if provider.base_url.trim().is_empty() {
+        provider.name.clone()
+    } else {
+        format!("custom:{}", provider.base_url.trim())
+    }
+}
+
 fn render_imessage_config(config: &LocalConfig) -> String {
     let contacts = config
         .imessage
@@ -1326,7 +1342,7 @@ fn render_imessage_config(config: &LocalConfig) -> String {
         .map(|item| format!("\"{}\"", toml_escape(item)))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("[channels_config.imessage]\nallowed_contacts = [{contacts}]\n")
+    format!("[channels.imessage]\nenabled = true\nallowed_contacts = [{contacts}]\n")
 }
 
 fn render_webhook_secret_config(config: &LocalConfig) -> String {
@@ -1337,30 +1353,73 @@ fn render_webhook_secret_config(config: &LocalConfig) -> String {
     }
 }
 
-fn render_model_providers_config(config: &LocalConfig) -> String {
-    let mut blocks = Vec::new();
-    for (index, provider) in config.providers.iter().enumerate() {
-        let alias = provider_alias(index, &provider.name);
-        let mut block = format!(
-            "[model_providers.{alias}]\nname = \"{}\"\n",
-            toml_escape(&provider.name)
-        );
-        if !provider.base_url.trim().is_empty() {
-            block.push_str(&format!(
-                "base_url = \"{}\"\n",
-                toml_escape(provider.base_url.trim())
-            ));
-        }
-        blocks.push(block);
+fn render_mcp_servers_config(paths: &RuntimePaths, config: &LocalConfig) -> String {
+    let mempalace = &config.memory_integrations.mempalace;
+    if !mempalace.enabled {
+        return String::new();
     }
-    blocks.join("\n")
+
+    let python = if mempalace.python.trim().is_empty() {
+        paths.mempalace_python_path()
+    } else {
+        std::path::PathBuf::from(mempalace.python.trim())
+    };
+    let palace_dir = if mempalace.palace_dir.trim().is_empty() {
+        paths.mempalace_palace_dir()
+    } else {
+        std::path::PathBuf::from(mempalace.palace_dir.trim())
+    };
+
+    format!(
+        r#"
+[[mcp.servers]]
+name = "mempalace"
+command = "{}"
+args = ["-m", "mempalace.mcp_server", "--palace", "{}"]
+tool_timeout_secs = {}
+"#,
+        toml_escape(&python.display().to_string()),
+        toml_escape(&palace_dir.display().to_string()),
+        mempalace.tool_timeout_secs
+    )
+}
+
+fn runtime_config_needs_render(paths: &RuntimePaths) -> bool {
+    let Ok(raw) = std::fs::read_to_string(paths.runtime_config_path()) else {
+        return true;
+    };
+    !raw.contains("schema_version = 2")
+        || raw.contains("[channels_config.")
+        || raw.contains("[model_providers.")
+        || raw.contains("[[model_routes]]")
+        || raw.contains("[providers.models.davis_")
+        || raw.contains("fallback = \"davis_")
+        || raw.contains("__DAVIS_")
 }
 
 fn render_query_classification() -> String {
     let rules = [
         (
             "structured_lookup",
-            vec!["快递", "物流", "运单", "单号", "顺丰", "京东快递", "圆通"],
+            vec![
+                "快递",
+                "物流",
+                "运单",
+                "单号",
+                "顺丰",
+                "京东快递",
+                "圆通",
+                "订单",
+                "淘宝",
+                "天猫",
+                "京东",
+                "购买",
+                "买的",
+                "买过",
+                "在哪里买",
+                "哪买",
+                "商品",
+            ],
             40,
         ),
         (
@@ -1404,14 +1463,97 @@ fn render_query_classification() -> String {
     output
 }
 
+fn render_providers_config(plan: &ModelRoutePlan, config: &LocalConfig) -> String {
+    let fallback = plan
+        .routes
+        .iter()
+        .find(|route| route.profile == plan.default_profile)
+        .and_then(|route| provider_config_for_alias(config, &route.primary.provider_alias))
+        .map(zeroclaw_provider_id)
+        .or_else(|| {
+            plan.routes
+                .first()
+                .and_then(|route| provider_config_for_alias(config, &route.primary.provider_alias))
+                .map(zeroclaw_provider_id)
+        });
+
+    let mut output = String::from("[providers]\n");
+    if let Some(fallback) = &fallback {
+        output.push_str(&format!("fallback = \"{}\"\n", toml_escape(fallback)));
+    }
+
+    for (index, provider) in config.providers.iter().enumerate() {
+        let alias = provider_alias(index, &provider.name);
+        let provider_id = zeroclaw_provider_id(provider);
+        output.push_str(&format!(
+            "\n[providers.models.{}]\n",
+            toml_key_segment(&provider_id)
+        ));
+        if provider.base_url.trim().is_empty() {
+            output.push_str(&format!("name = \"{}\"\n", toml_escape(&provider.name)));
+        }
+        if !provider.api_key.trim().is_empty() {
+            output.push_str(&format!(
+                "api_key = \"{}\"\n",
+                toml_escape(&provider.api_key)
+            ));
+        }
+        if !provider.base_url.trim().is_empty() {
+            output.push_str(&format!(
+                "base_url = \"{}\"\n",
+                toml_escape(provider.base_url.trim())
+            ));
+        }
+        if let Some(model) = default_model_for_provider_alias(plan, &alias)
+            .or_else(|| provider.allowed_models.first().map(String::as_str))
+        {
+            output.push_str(&format!("model = \"{}\"\n", toml_escape(model)));
+        }
+        output.push_str("temperature = 0.3\n");
+        output.push_str("merge_system_into_user = false\n");
+        output.push_str("requires_openai_auth = false\n");
+    }
+
+    let routes = render_model_routes(plan, config);
+    if !routes.is_empty() {
+        output.push('\n');
+        output.push_str(&routes);
+    }
+
+    output
+}
+
+fn default_model_for_provider_alias<'a>(plan: &'a ModelRoutePlan, alias: &str) -> Option<&'a str> {
+    plan.routes
+        .iter()
+        .find(|route| {
+            route.profile == plan.default_profile && route.primary.provider_alias == alias
+        })
+        .map(|route| route.primary.model.as_str())
+        .or_else(|| {
+            plan.routes
+                .iter()
+                .find(|route| route.primary.provider_alias == alias)
+                .map(|route| route.primary.model.as_str())
+        })
+        .or_else(|| {
+            plan.routes
+                .iter()
+                .flat_map(|route| route.fallbacks.iter())
+                .find(|candidate| candidate.provider_alias == alias)
+                .map(|candidate| candidate.model.as_str())
+        })
+}
+
 fn render_model_routes(plan: &ModelRoutePlan, config: &LocalConfig) -> String {
     let mut blocks = Vec::new();
     for route in &plan.routes {
         if let Some(provider) = provider_config_for_alias(config, &route.primary.provider_alias) {
+            let provider_id = zeroclaw_provider_id(provider);
             blocks.push(format!(
-                "[[model_routes]]\nhint = \"{}\"\nprovider = \"{}\"\nmodel = \"{}\"\napi_key = \"{}\"\n",
+                "[[providers.model_routes]]\nhint = \"{}\"\nprovider = \"{}\"\nmodel = \"{}\"\napi_key = \"{}\"\n",
                 route.profile.as_str(),
-                route.primary.provider,
+                toml_escape(&provider_id),
                 toml_escape(&route.primary.model),
                 toml_escape(&provider.api_key)
             ));
@@ -1442,32 +1584,20 @@ fn render_model_fallbacks(plan: &ModelRoutePlan) -> String {
     output
 }
 
-fn render_fallback_providers(plan: &ModelRoutePlan) -> String {
-    let Some(default_route) = plan
-        .routes
-        .iter()
-        .find(|route| route.profile == plan.default_profile)
-    else {
-        return "[]".to_string();
-    };
-
-    let mut seen = BTreeSet::new();
-    let providers = default_route
-        .fallbacks
-        .iter()
-        .filter(|candidate| candidate.provider != default_route.primary.provider)
-        .filter_map(|candidate| {
-            seen.insert(candidate.provider.clone())
-                .then(|| format!("\"{}\"", toml_escape(&candidate.provider)))
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    format!("[{providers}]")
-}
-
 fn toml_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn toml_key_segment(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        value.to_string()
+    } else {
+        format!("\"{}\"", toml_escape(value))
+    }
 }
 
 fn provider_api_key_env_names(provider_name: &str) -> Vec<String> {
@@ -1761,49 +1891,7 @@ max_fallbacks = 2
     }
 
     #[test]
-    fn render_fallback_providers_uses_default_profile_cross_provider_order() {
-        let plan = ModelRoutePlan {
-            generated_at: crate::isoformat(Utc::now()),
-            default_profile: RoutingProfile::GeneralQa,
-            routes: vec![PlannedProfileRoute {
-                profile: RoutingProfile::GeneralQa,
-                primary: PlannedModel {
-                    provider: "openrouter".into(),
-                    provider_alias: "davis_1_openrouter".into(),
-                    model: "openai/gpt-4o".into(),
-                    total_score: 90.0,
-                },
-                fallbacks: vec![
-                    PlannedModel {
-                        provider: "openrouter".into(),
-                        provider_alias: "davis_1_openrouter".into(),
-                        model: "anthropic/claude-sonnet-4.6".into(),
-                        total_score: 88.0,
-                    },
-                    PlannedModel {
-                        provider: "deepseek".into(),
-                        provider_alias: "davis_2_deepseek".into(),
-                        model: "deepseek-chat".into(),
-                        total_score: 82.0,
-                    },
-                    PlannedModel {
-                        provider: "siliconflow".into(),
-                        provider_alias: "davis_3_siliconflow".into(),
-                        model: "deepseek-ai/DeepSeek-V3".into(),
-                        total_score: 81.0,
-                    },
-                ],
-            }],
-        };
-
-        assert_eq!(
-            render_fallback_providers(&plan),
-            "[\"deepseek\", \"siliconflow\"]"
-        );
-    }
-
-    #[test]
-    fn render_model_routes_uses_provider_name_not_alias() {
+    fn render_providers_config_uses_alias_fallback_and_provider_names_in_routes() {
         let config = sample_config();
         let plan = ModelRoutePlan {
             generated_at: crate::isoformat(Utc::now()),
@@ -1832,10 +1920,81 @@ max_fallbacks = 2
             ],
         };
 
-        let rendered = render_model_routes(&plan, &config);
+        let rendered = render_providers_config(&plan, &config);
+        assert!(rendered.contains("[providers]\nfallback = \"deepseek\""));
+        assert!(rendered.contains("[providers.models.openrouter]"));
+        assert!(rendered.contains("[providers.models.deepseek]"));
+        assert!(rendered.contains("model = \"deepseek-chat\""));
+        assert!(rendered.contains("[[providers.model_routes]]"));
         assert!(rendered.contains("hint = \"home_control\"\nprovider = \"openrouter\""));
         assert!(rendered.contains("hint = \"general_qa\"\nprovider = \"deepseek\""));
         assert!(!rendered.contains("provider = \"davis_1_openrouter\""));
+    }
+
+    #[test]
+    fn render_providers_config_uses_custom_provider_id_for_base_url_profiles() {
+        let mut config = sample_config();
+        config.providers[0].base_url = "https://openrouter.ai/api/v1".to_string();
+        let plan = ModelRoutePlan {
+            generated_at: crate::isoformat(Utc::now()),
+            default_profile: RoutingProfile::GeneralQa,
+            routes: vec![PlannedProfileRoute {
+                profile: RoutingProfile::GeneralQa,
+                primary: PlannedModel {
+                    provider: "openrouter".into(),
+                    provider_alias: "davis_1_openrouter".into(),
+                    model: "openai/gpt-4o".into(),
+                    total_score: 94.0,
+                },
+                fallbacks: vec![],
+            }],
+        };
+
+        let rendered = render_providers_config(&plan, &config);
+        assert!(
+            rendered.contains("[providers]\nfallback = \"custom:https://openrouter.ai/api/v1\"")
+        );
+        assert!(rendered.contains("[providers.models.\"custom:https://openrouter.ai/api/v1\"]"));
+        assert!(rendered.contains("provider = \"custom:https://openrouter.ai/api/v1\""));
+        assert!(!rendered.contains("name = \"openrouter\""));
+    }
+
+    #[test]
+    fn infer_profile_routes_order_lookup_to_structured_lookup() {
+        assert_eq!(
+            infer_profile_from_message("我是在哪里买的隐形眼镜？不记得了，淘宝吗"),
+            RoutingProfile::StructuredLookup
+        );
+        assert_eq!(
+            infer_profile_from_message("帮我找一下最近买过的咖啡订单"),
+            RoutingProfile::StructuredLookup
+        );
+    }
+
+    #[test]
+    fn query_classification_includes_order_lookup_keywords() {
+        let rendered = render_query_classification();
+        assert!(rendered.contains("hint = \"structured_lookup\""));
+        assert!(rendered.contains("\"在哪里买\""));
+        assert!(rendered.contains("\"订单\""));
+        assert!(rendered.contains("\"淘宝\""));
+        assert!(rendered.contains("\"京东\""));
+    }
+
+    #[test]
+    fn render_mcp_servers_config_includes_mempalace_when_enabled() {
+        let mut config = sample_config();
+        config.memory_integrations.mempalace.enabled = true;
+        config.memory_integrations.mempalace.tool_timeout_secs = 45;
+        let paths = test_runtime_paths("mempalace-mcp-render");
+
+        let rendered = render_mcp_servers_config(&paths, &config);
+
+        assert!(rendered.contains("name = \"mempalace\""));
+        assert!(rendered.contains("mempalace.mcp_server"));
+        assert!(rendered.contains("tool_timeout_secs = 45"));
+        assert!(rendered.contains(".runtime/davis/mempalace-venv/bin/python"));
+        assert!(rendered.contains(".runtime/davis/mempalace"));
     }
 
     #[test]
@@ -2122,15 +2281,13 @@ max_fallbacks = 2
         fs::write(
             paths.config_template_path(),
             r#"
-default_provider = "__DAVIS_DEFAULT_PROVIDER__"
-default_model = "__DAVIS_DEFAULT_MODEL__"
-__DAVIS_MODEL_PROVIDERS__
+schema_version = 2
+__DAVIS_PROVIDERS_CONFIG__
 __DAVIS_IMESSAGE_CONFIG__
-__DAVIS_WEBHOOK_SECRET_CONFIG__
-__DAVIS_QUERY_CLASSIFICATION_CONFIG__
-__DAVIS_MODEL_ROUTES_CONFIG__
-[reliability]
-fallback_providers = __DAVIS_FALLBACK_PROVIDERS__
+	__DAVIS_WEBHOOK_SECRET_CONFIG__
+	__DAVIS_QUERY_CLASSIFICATION_CONFIG__
+    __DAVIS_MCP_SERVERS_CONFIG__
+	[reliability]
 __DAVIS_MODEL_FALLBACKS__
 [[mcp.servers]]
 name = "homeassistant"
@@ -2146,8 +2303,9 @@ headers = { Authorization = "Bearer __DAVIS_HA_TOKEN__" }
         let rendered = fs::read_to_string(paths.runtime_config_path()).unwrap();
         assert!(rendered.contains("/api/mcp"));
         assert!(!rendered.contains("__DAVIS_HA_URL__"));
-        assert!(rendered.contains("default_provider = \"davis_1_openrouter\""));
-        assert!(rendered.contains("default_model = \"openai/gpt-4o\""));
+        assert!(rendered.contains("schema_version = 2"));
+        assert!(rendered.contains("[providers]\nfallback = \"openrouter\""));
+        assert!(rendered.contains("[channels.imessage]"));
         assert!(rendered.contains("secret = \"shortcut-shared-secret\""));
     }
 }

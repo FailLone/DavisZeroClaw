@@ -39,14 +39,14 @@ post_shortcut() {
   payload="$(printf '{"sender":"ios-shortcuts","content":"%s","thread_id":"%s"}' "${content}" "${thread_id}")"
   webhook_secret="$(read_webhook_secret)"
   if [ -n "${webhook_secret}" ]; then
-    curl -fsS -X POST "http://127.0.0.1:3001/shortcut" \
+    curl -fsS -X POST "http://127.0.0.1:3012/shortcut" \
       -H "Content-Type: application/json" \
       -H "X-Webhook-Secret: ${webhook_secret}" \
       -d "${payload}" >/dev/null
     return 0
   fi
 
-  curl -fsS -X POST "http://127.0.0.1:3001/shortcut" \
+  curl -fsS -X POST "http://127.0.0.1:3012/shortcut" \
     -H "Content-Type: application/json" \
     -d "${payload}" >/dev/null
 }
@@ -115,7 +115,7 @@ print_recent_debug() {
 }
 
 info "检查 Davis 与 ZeroClaw 健康状态..."
-require_http_ok "http://127.0.0.1:3010/health" "Davis HA Proxy"
+require_http_ok "http://127.0.0.1:3010/health" "Davis Local Proxy"
 require_http_ok "http://127.0.0.1:3000/health" "ZeroClaw Gateway"
 pass "基础健康状态正常"
 

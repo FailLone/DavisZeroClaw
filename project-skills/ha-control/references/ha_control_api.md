@@ -1,6 +1,6 @@
 # HA Control Proxy API
 
-Use the local Davis HA proxy for control requests.
+Use the Home Assistant endpoints on the Davis local proxy for control requests.
 
 ## Resolve a Target
 

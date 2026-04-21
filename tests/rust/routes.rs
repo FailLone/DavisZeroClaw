@@ -13,6 +13,33 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn health_route_reports_local_proxy_service() {
+    let upstream = spawn_upstream_client(Router::new()).await;
+    let base_url = spawn_proxy_base_url(
+        upstream,
+        sample_mcp_client(),
+        sample_paths(),
+        sample_config(),
+    )
+    .await;
+    let response = Client::new()
+        .get(format!("{base_url}/health"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(
+        body.get("service").and_then(Value::as_str),
+        Some("davis_local_proxy")
+    );
+    assert!(body
+        .get("features")
+        .and_then(Value::as_array)
+        .is_some_and(|features| features.iter().any(|feature| feature == "browser_status")));
+}
+
+#[tokio::test]
 async fn execute_control_route_accepts_json_body_without_content_type() {
     let (upstream, _service_calls) = spawn_test_client(sample_states()).await;
     let base_url = spawn_proxy_base_url(
@@ -375,5 +402,50 @@ async fn zeroclaw_runtime_traces_route_returns_recent_entries() {
             .and_then(|value| value.get("event"))
             .and_then(Value::as_str),
         Some("tool_call_result")
+    );
+}
+
+#[tokio::test]
+async fn article_memory_routes_store_and_search_records() {
+    let paths = sample_paths();
+    init_article_memory(&paths).unwrap();
+    let (upstream, _service_calls) = spawn_test_client(sample_states()).await;
+    let base_url =
+        spawn_proxy_base_url(upstream, sample_mcp_client(), paths, sample_config()).await;
+
+    let add_response = Client::new()
+        .post(format!("{base_url}/article-memory/articles"))
+        .json(&json!({
+            "title": "Agent memory field notes",
+            "url": "https://example.com/agent-memory",
+            "source": "manual",
+            "language": "en",
+            "tags": ["agent", "memory"],
+            "content": "Durable memory helps agents keep useful research context.",
+            "summary": "A practical note about durable memory.",
+            "status": "saved",
+            "value_score": 0.8
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(add_response.status(), reqwest::StatusCode::CREATED);
+
+    let search_response = Client::new()
+        .get(format!("{base_url}/article-memory/search?q=durable"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(search_response.status(), reqwest::StatusCode::OK);
+    let body: Value = search_response.json().await.unwrap();
+    assert_eq!(body.get("status").and_then(Value::as_str), Some("ok"));
+    assert_eq!(body.get("total_hits").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+        body.get("hits")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|hit| hit.get("title"))
+            .and_then(Value::as_str),
+        Some("Agent memory field notes")
     );
 }

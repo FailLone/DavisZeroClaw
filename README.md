@@ -74,6 +74,33 @@ daviszeroclaw start
 daviszeroclaw stop
 ```
 
+如果你希望把 ZeroClaw 以 Davis 配置常驻到 macOS 后台服务里，使用：
+
+```bash
+daviszeroclaw service install
+```
+
+查看最终状态：
+
+```bash
+daviszeroclaw service status
+```
+
+更新配置后重启服务：
+
+```bash
+daviszeroclaw service restart
+```
+
+卸载后台服务：
+
+```bash
+daviszeroclaw service uninstall
+```
+
+这里的 `service` 只管理 ZeroClaw daemon。最终结果以 `daviszeroclaw service status` 为准。
+如果你没有把 `target/release` 加进 `PATH`，也可以直接运行 `target/release/daviszeroclaw ...`。
+
 ## 安装 iPhone 快捷指令
 
 运行：
@@ -126,6 +153,53 @@ daviszeroclaw express login jd
 
 登录后再问 Davis 查询快递即可。
 
+## Skills 和 MemPalace
+
+Davis 自己维护一部分 project skills，也支持安装第三方 vendor skills。
+
+同步 runtime skills：
+
+```bash
+daviszeroclaw skills sync
+```
+
+安装或刷新当前支持的 vendor skills：
+
+```bash
+daviszeroclaw skills install
+```
+
+检查 project skills、vendor skills、runtime sync 状态，以及 MemPalace MCP 可用性：
+
+```bash
+daviszeroclaw skills check
+```
+
+如果你想把 MemPalace 接进 Davis：
+
+```bash
+daviszeroclaw memory mempalace install
+daviszeroclaw memory mempalace enable
+daviszeroclaw memory mempalace check
+```
+
+其中：
+
+- `skills/mempalace` 负责告诉 agent 如何操作 MemPalace
+- `project-skills/mempalace-memory` 负责告诉 agent 什么时候应优先把 MemPalace 当作长期 memory
+
+## 常用命令
+
+```bash
+daviszeroclaw config check
+daviszeroclaw ha check
+daviszeroclaw imessage inspect
+daviszeroclaw shortcut build
+daviszeroclaw shortcut install
+daviszeroclaw express login ali
+daviszeroclaw express login jd
+```
+
 ## 常见问题
 
 如果控制失败，先检查：
@@ -142,6 +216,7 @@ daviszeroclaw express login jd
 daviszeroclaw config check
 daviszeroclaw ha check
 daviszeroclaw imessage inspect
+daviszeroclaw service status
 ```
 
 ## 隐私说明

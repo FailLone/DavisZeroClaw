@@ -37,9 +37,9 @@
     {
       "ActionIndex": 1,
       "Category": "Parameter",
-      "DefaultValue": "http://192.168.1.2:3001/shortcut",
+      "DefaultValue": "http://192.168.1.2:3012/shortcut",
       "ParameterKey": "WFURL",
-      "Text": "请输入 DavisZeroClaw 的 Shortcut Webhook 地址"
+      "Text": "请输入 DavisZeroClaw 的 Shortcut Bridge 地址"
     }
   ],
   "WFWorkflowActions": [
@@ -54,7 +54,7 @@
       "WFWorkflowActionIdentifier": "is.workflow.actions.downloadurl",
       "WFWorkflowActionParameters": {
         "UUID": "A6F2D8F5-974F-48E3-B398-4D2E362B547F",
-        "WFURL": "http://192.168.1.2:3001/shortcut",
+        "WFURL": "http://192.168.1.2:3012/shortcut",
         "WFHTTPMethod": "POST",
         "WFHTTPBodyType": "JSON",
         "WFJSONValues": {

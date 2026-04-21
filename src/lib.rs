@@ -1,5 +1,7 @@
 mod advisor;
 mod app_config;
+mod article_ingest;
+mod article_memory;
 mod audit;
 mod browser;
 pub mod cli;
@@ -9,6 +11,7 @@ mod entity;
 mod express;
 mod ha_client;
 mod ha_mcp;
+mod local_proxy;
 mod model_routing;
 mod models;
 mod runtime_paths;
@@ -19,9 +22,33 @@ pub use advisor::{
     build_replacement_candidates_report, generate_config_report, generate_config_report_with_states,
 };
 pub use app_config::{
+    ArticleMemoryConfig, ArticleMemoryEmbeddingConfig, ArticleMemoryNormalizeConfig,
     BrowserBridgeConfig, BrowserProfileConfig, BrowserUserSessionConfig, BrowserWritePolicyConfig,
-    HomeAssistantConfig, ImessageConfig, LocalConfig, MetricWeights, ModelProviderConfig,
-    ProfileMinimums, RoutingConfig, RoutingProfileConfig, RoutingProfilesConfig, WebhookConfig,
+    HomeAssistantConfig, ImessageConfig, LocalConfig, MemoryIntegrationsConfig, MempalaceConfig,
+    MetricWeights, ModelProviderConfig, ProfileMinimums, RoutingConfig, RoutingProfileConfig,
+    RoutingProfilesConfig, WebhookConfig,
+};
+pub use article_ingest::{
+    ingest_article_from_browser, ArticleExtraction, ArticleMemoryIngestRequest,
+    ArticleMemoryIngestResponse,
+};
+pub use article_memory::{
+    add_article_memory, article_cleaning_preferred_selectors, article_memory_status,
+    build_article_strategy_review_input, check_article_cleaning, check_article_memory,
+    hybrid_search_article_memory, init_article_memory, judge_all_article_value_memory,
+    judge_article_value_memory, list_article_clean_reports, list_article_memory,
+    list_article_value_reports, normalize_all_article_memory, normalize_article_memory,
+    rebuild_article_memory_embeddings, replay_article_cleaning, resolve_article_embedding_config,
+    resolve_article_normalize_config, resolve_article_value_config, search_article_memory,
+    upsert_article_memory_embedding, ArticleCleanAuditResponse, ArticleCleanReport,
+    ArticleCleaningCheckResponse, ArticleCleaningConfig, ArticleCleaningDefaults,
+    ArticleCleaningReplayResponse, ArticleCleaningSiteStrategy, ArticleMemoryAddRequest,
+    ArticleMemoryEmbeddingIndex, ArticleMemoryEmbeddingRebuildResponse,
+    ArticleMemoryEmbeddingRecord, ArticleMemoryListResponse, ArticleMemoryNormalizeResponse,
+    ArticleMemoryRecord, ArticleMemoryRecordStatus, ArticleMemorySearchHit,
+    ArticleMemorySearchResponse, ArticleMemoryStatusResponse, ArticleStrategyReviewInputResponse,
+    ArticleValueAuditResponse, ArticleValueConfig, ArticleValueReport,
+    ResolvedArticleEmbeddingConfig, ResolvedArticleNormalizeConfig, ResolvedArticleValueConfig,
 };
 pub use audit::{audit_entity, parse_window};
 pub use browser::{
@@ -46,6 +73,7 @@ pub use ha_mcp::{
     derive_ha_mcp_endpoint, refine_live_context_report_with_typed_states, HaMcpCapabilities,
     HaMcpClient, HaMcpLiveContextReport, HaMcpPrompt, HaMcpTool,
 };
+pub use local_proxy::run_local_proxy;
 pub use model_routing::{
     check_local_config, zeroclaw_env_vars, ModelCostObservation, ModelRoutePlan,
     ModelRoutingManager, ModelScoreEntry, PlannedModel, PlannedProfileRoute,
@@ -71,7 +99,7 @@ pub use models::{
     ServiceExecution, TopFailedQuery,
 };
 pub use runtime_paths::RuntimePaths;
-pub use server::{build_app, AppState};
+pub use server::{build_app, build_shortcut_bridge_app, AppState};
 pub use support::{build_issue, isoformat, normalize_text};
 
 pub(crate) use constants::{CONTROL_DOMAINS, ROOM_LIGHT_KEYWORDS};

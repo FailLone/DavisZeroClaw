@@ -4,6 +4,7 @@ use super::fixtures::{
 use super::support::{
     sample_mcp_client, spawn_json_router, spawn_proxy_base_url_with_local_config, spawn_test_client,
 };
+use crate::init_article_memory;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use reqwest::Client;
@@ -174,4 +175,81 @@ async fn browser_action_route_requires_confirmation_for_non_whitelisted_origin()
         Some("requires_confirmation")
     );
     assert!(paths.browser_confirmations_log_path().exists());
+}
+
+#[tokio::test]
+async fn article_ingest_route_extracts_browser_page_into_candidate() {
+    let browser_router = Router::new()
+        .route(
+            "/evaluate",
+            post(|| async {
+                Json(json!({
+                    "status":"ok",
+                    "checked_at":"2026-04-17T12:00:00Z",
+                    "profile":"user",
+                    "tab_id":"w1:t1",
+                    "current_url":"https://example.com/agent-memory",
+                    "title":"Agent Memory Notes",
+                    "data": serde_json::to_string(&json!({
+                        "title": "Agent Memory Notes",
+                        "url": "https://example.com/agent-memory",
+                        "language": "en",
+                        "author": "Example Author",
+                        "site_name": "Example",
+                        "description": "Useful notes about agent memory.",
+                        "extraction_selector": "article",
+                        "content": "Agent memory systems need durable storage, semantic retrieval, and careful write boundaries."
+                    })).unwrap()
+                }))
+            }),
+        );
+    let browser_base_url = spawn_json_router(browser_router).await;
+    let browser_port = browser_base_url
+        .rsplit(':')
+        .next()
+        .unwrap()
+        .parse::<u16>()
+        .unwrap();
+    let local_config = sample_local_config_with_browser_port(browser_port);
+    let paths = sample_paths();
+    init_article_memory(&paths).unwrap();
+    let (upstream, _service_calls) = spawn_test_client(sample_states()).await;
+    let base_url = spawn_proxy_base_url_with_local_config(
+        upstream,
+        sample_mcp_client(),
+        paths,
+        sample_config(),
+        local_config,
+    )
+    .await;
+
+    let response = Client::new()
+        .post(format!("{base_url}/article-memory/ingest"))
+        .json(&json!({
+            "profile": "user",
+            "tab_id": "w1:t1",
+            "tags": ["agent", "memory"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body.get("status").and_then(Value::as_str), Some("ok"));
+    assert_eq!(
+        body.get("article")
+            .and_then(|article| article.get("status"))
+            .and_then(Value::as_str),
+        Some("candidate")
+    );
+    assert_eq!(
+        body.get("article")
+            .and_then(|article| article.get("title"))
+            .and_then(Value::as_str),
+        Some("Agent Memory Notes")
+    );
+    assert_eq!(
+        body.get("embedding_status").and_then(Value::as_str),
+        Some("skipped_value_rejected")
+    );
 }

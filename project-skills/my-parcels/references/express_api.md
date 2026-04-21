@@ -23,6 +23,10 @@ Query parameters:
 
 Alias of `express/packages`, using `q` or `query`.
 
+Use this endpoint for purchase-platform questions such as "where did I buy contact lenses?" with:
+
+`GET http://127.0.0.1:3010/express/search?q=隐形眼镜`
+
 ## Important Response Fields
 
 - `status`: `ok`, `empty`, `partial`, `needs_reauth`, or `upstream_error`

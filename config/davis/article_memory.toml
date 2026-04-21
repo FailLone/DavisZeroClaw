@@ -1,0 +1,126 @@
+# Article memory strategy.
+#
+# Davis agents may edit this file to improve article cleaning and value judging.
+# They must not edit Rust source code. If strategy fields are insufficient,
+# they should write an implementation request report instead.
+
+[defaults]
+min_kept_ratio = 0.20
+max_kept_ratio = 0.98
+min_normalized_chars = 800
+
+exact_noise_lines = [
+  "登录",
+  "注册",
+  "添加评论",
+  "分享",
+  "收藏",
+  "喜欢",
+  "关注问题",
+  "写回答",
+  "查看全部",
+  "阅读全文",
+  "收起",
+  "举报",
+  "广告",
+]
+
+contains_noise_lines = [
+  "cookie",
+  "privacy policy",
+]
+
+[[sites]]
+name = "zhihu"
+version = 1
+status = "stable"
+url_patterns = [
+  "zhihu.com/question/*/answer/*",
+  "zhihu.com/question/*",
+]
+source_patterns = [
+  "知乎",
+  "zhihu",
+]
+
+preferred_selectors = [
+  ".QuestionAnswer-content .RichContent-inner",
+  ".QuestionAnswer-content .RichText",
+  ".AnswerItem .RichContent-inner",
+  ".AnswerItem .RichText",
+  ".RichContent-inner",
+  ".RichText",
+]
+
+start_markers = [
+  "人赞同了该回答",
+  "目录 收起",
+]
+
+end_markers = [
+  "所属专栏",
+  "更多回答",
+  "广告 关于作者",
+  "关于作者",
+  "相关问题",
+  "大家都在搜",
+  "帮助中心",
+  "京ICP",
+]
+
+exact_noise_lines = [
+  "知乎",
+  "知乎用户",
+  "赞同",
+  "还没有评论",
+  "无障碍",
+  "切换模式",
+  "写下你的评论",
+]
+
+contains_noise_lines = [
+  "发布于",
+  "编辑于",
+  "ip 属地",
+  "相关推荐",
+  "推荐阅读",
+  "打开知乎",
+  "继续浏览内容",
+  "知乎个人信息保护指引",
+  "下载知乎",
+  "知乎招聘",
+  "知乎指南",
+  "知乎协议",
+]
+
+line_suffix_noise = [
+  "条评论",
+  "个回答",
+  "人赞同了该回答",
+]
+
+[value]
+enabled = true
+llm_judge = true
+provider = "openrouter"
+api_key = ""
+base_url = ""
+model = "openai/gpt-4.1"
+max_input_chars = 12000
+min_normalized_chars = 800
+save_threshold = 0.75
+candidate_threshold = 0.45
+
+target_topics = [
+  "AI agent",
+  "agent",
+  "MCP",
+  "memory",
+  "Claude Code",
+  "OpenAI",
+  "reasoning",
+  "browser automation",
+  "tool use",
+  "multi-agent",
+  "LLM",
+]

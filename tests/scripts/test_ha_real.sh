@@ -67,7 +67,7 @@ assert_not_contains_any() {
 }
 
 info "检查 Davis 和 ZeroClaw 是否已启动..."
-require_running_service "http://127.0.0.1:3010/health" "Davis HA Proxy"
+require_running_service "http://127.0.0.1:3010/health" "Davis Local Proxy"
 require_running_service "http://127.0.0.1:3000/health" "ZeroClaw Gateway"
 
 route_status="$(curl -fsS "http://127.0.0.1:3010/model-routing/status")"

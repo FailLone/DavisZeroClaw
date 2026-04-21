@@ -1,6 +1,14 @@
 use crate::{
-    check_local_config, zeroclaw_env_vars, BrowserBridgeConfig, HaClient, HaMcpClient, HaState,
-    RuntimePaths,
+    add_article_memory, build_article_strategy_review_input, check_article_cleaning,
+    check_article_memory, check_local_config, hybrid_search_article_memory,
+    ingest_article_from_browser, init_article_memory, judge_all_article_value_memory,
+    judge_article_value_memory, list_article_clean_reports, list_article_memory,
+    list_article_value_reports, normalize_all_article_memory, normalize_article_memory,
+    rebuild_article_memory_embeddings, replay_article_cleaning, resolve_article_embedding_config,
+    resolve_article_normalize_config, resolve_article_value_config, search_article_memory,
+    upsert_article_memory_embedding, zeroclaw_env_vars, ArticleMemoryAddRequest,
+    ArticleMemoryIngestRequest, ArticleMemoryRecordStatus, BrowserBridgeConfig, HaClient,
+    HaMcpClient, HaState, ModelRoutingManager, RuntimePaths,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -30,6 +38,11 @@ enum Commands {
     Start,
     /// Stop Davis local services and known ZeroClaw child services.
     Stop,
+    /// Manage the ZeroClaw launchd service for the Davis profile.
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
     /// Manage runtime skills.
     Skills {
         #[command(subcommand)]
@@ -60,14 +73,38 @@ enum Commands {
         #[command(subcommand)]
         command: HaCommand,
     },
+    /// Manage Davis memory integrations.
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommand,
+    },
+    /// Manage Davis article memory.
+    Articles {
+        #[command(subcommand)]
+        command: ArticlesCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 enum SkillsCommand {
     /// Synchronize project and vendor skills into the runtime workspace.
     Sync,
-    /// Install the default vendor skills, then synchronize runtime skills.
-    InstallVendor,
+    /// Install or refresh supported vendor skills.
+    Install,
+    /// Check project, vendor, runtime, and MemPalace skill status.
+    Check,
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// Install and start ZeroClaw with the Davis runtime config.
+    Install,
+    /// Show launchd and ZeroClaw runtime health.
+    Status,
+    /// Restart ZeroClaw with the Davis runtime config.
+    Restart,
+    /// Stop and remove the Davis ZeroClaw launchd service.
+    Uninstall,
 }
 
 #[derive(Debug, Subcommand)]
@@ -127,6 +164,184 @@ enum HaCommand {
     Check,
 }
 
+#[derive(Debug, Subcommand)]
+enum MemoryCommand {
+    /// Manage MemPalace integration.
+    Mempalace {
+        #[command(subcommand)]
+        command: MempalaceCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MempalaceCommand {
+    /// Install MemPalace into Davis runtime venv.
+    Install,
+    /// Enable MemPalace MCP server in config/davis/local.toml.
+    Enable,
+    /// Check MemPalace package, palace directory, and local config.
+    Check,
+}
+
+#[derive(Debug, Subcommand)]
+enum ArticlesCommand {
+    /// Initialize the local article memory store.
+    Init,
+    /// Check the local article memory store.
+    Check,
+    /// Add a local article from text files.
+    Add {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long, default_value = "manual")]
+        source: String,
+        #[arg(long)]
+        language: Option<String>,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        #[arg(long)]
+        content_file: PathBuf,
+        #[arg(long)]
+        summary_file: Option<PathBuf>,
+        #[arg(long)]
+        translation_file: Option<PathBuf>,
+        #[arg(long)]
+        score: Option<f32>,
+        #[arg(long, value_enum, default_value_t = ArticleStatusArg::Saved)]
+        status: ArticleStatusArg,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// List recent article memory records.
+    List {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Search the local article memory store.
+    Search {
+        query: String,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        #[arg(long)]
+        keyword_only: bool,
+    },
+    /// Rebuild semantic embedding index for saved articles.
+    Index,
+    /// Inspect article cleaning strategy and recent clean reports.
+    Cleaning {
+        #[command(subcommand)]
+        command: ArticleCleaningCommand,
+    },
+    /// Judge article value before expensive polish/summary/indexing.
+    Judging {
+        #[command(subcommand)]
+        command: ArticleJudgingCommand,
+    },
+    /// Prepare report context for article memory strategy review.
+    Strategy {
+        #[command(subcommand)]
+        command: ArticleStrategyCommand,
+    },
+    /// Normalize article Markdown and optional LLM summary/polish.
+    Normalize {
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        no_llm: bool,
+    },
+    /// Ingest an article from a browser page or URL.
+    Ingest {
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        tab_id: Option<String>,
+        #[arg(long)]
+        new_tab: bool,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        language: Option<String>,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        #[arg(long)]
+        score: Option<f32>,
+        #[arg(long, value_enum, default_value_t = ArticleStatusArg::Candidate)]
+        status: ArticleStatusArg,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ArticleCleaningCommand {
+    /// Check article cleaning strategy config.
+    Check,
+    /// Show recent clean reports.
+    Audit {
+        #[arg(long, default_value_t = 20)]
+        recent: usize,
+    },
+    /// Replay deterministic cleaning without LLM polish/summary.
+    Replay {
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ArticleJudgingCommand {
+    /// Run value judging through the normalize gate.
+    Run {
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        no_llm: bool,
+    },
+    /// Show recent value reports.
+    Audit {
+        #[arg(long, default_value_t = 20)]
+        recent: usize,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ArticleStrategyCommand {
+    /// Generate a bounded review input for strategy-only agent edits.
+    ReviewInput {
+        #[arg(long, default_value_t = 20)]
+        recent: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ArticleStatusArg {
+    Candidate,
+    Saved,
+    Rejected,
+    Archived,
+}
+
+impl From<ArticleStatusArg> for ArticleMemoryRecordStatus {
+    fn from(value: ArticleStatusArg) -> Self {
+        match value {
+            ArticleStatusArg::Candidate => Self::Candidate,
+            ArticleStatusArg::Saved => Self::Saved,
+            ArticleStatusArg::Rejected => Self::Rejected,
+            ArticleStatusArg::Archived => Self::Archived,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Probe {
     Http(String),
@@ -159,9 +374,16 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Start => start(&paths).await,
         Commands::Stop => stop(&paths),
+        Commands::Service { command } => match command {
+            ServiceCommand::Install => install_davis_service(&paths).await,
+            ServiceCommand::Status => status_davis_service(&paths).await,
+            ServiceCommand::Restart => restart_davis_service(&paths).await,
+            ServiceCommand::Uninstall => uninstall_davis_service(&paths),
+        },
         Commands::Skills { command } => match command {
             SkillsCommand::Sync => sync_runtime_skills(&paths),
-            SkillsCommand::InstallVendor => install_vendor_skills(&paths),
+            SkillsCommand::Install => install_skills(&paths),
+            SkillsCommand::Check => check_skills(&paths),
         },
         Commands::Shortcut { command } => match command {
             ShortcutCommand::Build {
@@ -177,7 +399,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         },
         Commands::Imessage { command } => match command {
             ImessageCommand::CheckPermissions => check_imessage_permissions(),
-            ImessageCommand::Inspect => inspect_imessage(),
+            ImessageCommand::Inspect => inspect_imessage(&paths),
         },
         Commands::Express { command } => match command {
             ExpressCommand::Login { source } => express_login(source),
@@ -192,24 +414,620 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Ha { command } => match command {
             HaCommand::Check => check_ha(&paths).await,
         },
+        Commands::Memory { command } => match command {
+            MemoryCommand::Mempalace { command } => match command {
+                MempalaceCommand::Install => install_mempalace(&paths),
+                MempalaceCommand::Enable => enable_mempalace(&paths),
+                MempalaceCommand::Check => check_mempalace(&paths),
+            },
+        },
+        Commands::Articles { command } => match command {
+            ArticlesCommand::Init => init_articles(&paths),
+            ArticlesCommand::Check => check_articles(&paths),
+            ArticlesCommand::Add {
+                title,
+                url,
+                source,
+                language,
+                tags,
+                content_file,
+                summary_file,
+                translation_file,
+                score,
+                status,
+                notes,
+            } => {
+                add_article(
+                    &paths,
+                    ArticleCliAdd {
+                        title,
+                        url,
+                        source,
+                        language,
+                        tags,
+                        content_file,
+                        summary_file,
+                        translation_file,
+                        score,
+                        status,
+                        notes,
+                    },
+                )
+                .await
+            }
+            ArticlesCommand::List { limit } => list_articles(&paths, limit),
+            ArticlesCommand::Search {
+                query,
+                limit,
+                keyword_only,
+            } => search_articles(&paths, &query, limit, keyword_only).await,
+            ArticlesCommand::Index => index_articles(&paths).await,
+            ArticlesCommand::Cleaning { command } => match command {
+                ArticleCleaningCommand::Check => check_article_cleaning_cli(&paths),
+                ArticleCleaningCommand::Audit { recent } => clean_audit_articles(&paths, recent),
+                ArticleCleaningCommand::Replay { id, all } => {
+                    replay_cleaning_articles(&paths, id, all).await
+                }
+            },
+            ArticlesCommand::Judging { command } => match command {
+                ArticleJudgingCommand::Run { id, all, no_llm } => {
+                    judge_articles(&paths, id, all, no_llm).await
+                }
+                ArticleJudgingCommand::Audit { recent } => value_audit_articles(&paths, recent),
+            },
+            ArticlesCommand::Strategy { command } => match command {
+                ArticleStrategyCommand::ReviewInput { recent } => {
+                    review_article_strategy_input(&paths, recent)
+                }
+            },
+            ArticlesCommand::Normalize { id, all, no_llm } => {
+                normalize_articles(&paths, id, all, no_llm).await
+            }
+            ArticlesCommand::Ingest {
+                url,
+                profile,
+                tab_id,
+                new_tab,
+                source,
+                language,
+                tags,
+                score,
+                status,
+                notes,
+            } => {
+                ingest_article(
+                    &paths,
+                    ArticleMemoryIngestRequest {
+                        url,
+                        profile,
+                        tab_id,
+                        new_tab,
+                        source,
+                        language,
+                        tags,
+                        status: status.into(),
+                        value_score: score,
+                        notes,
+                    },
+                )
+                .await
+            }
+        },
     }
 }
 
-async fn start(paths: &RuntimePaths) -> Result<()> {
-    println!("======================================");
-    println!("    启动 DavisZeroClaw 智能管家");
-    println!("======================================");
+#[derive(Debug)]
+struct ArticleCliAdd {
+    title: String,
+    url: Option<String>,
+    source: String,
+    language: Option<String>,
+    tags: Vec<String>,
+    content_file: PathBuf,
+    summary_file: Option<PathBuf>,
+    translation_file: Option<PathBuf>,
+    score: Option<f32>,
+    status: ArticleStatusArg,
+    notes: Option<String>,
+}
 
+fn init_articles(paths: &RuntimePaths) -> Result<()> {
+    let status = init_article_memory(paths)?;
+    println!("Article memory initialized.");
+    print_article_status(&status);
+    println!("Next: daviszeroclaw articles add --title <title> --content-file <file>");
+    Ok(())
+}
+
+fn check_articles(paths: &RuntimePaths) -> Result<()> {
+    let status = check_article_memory(paths)?;
+    println!("Article memory ok.");
+    print_article_status(&status);
+    Ok(())
+}
+
+async fn add_article(paths: &RuntimePaths, input: ArticleCliAdd) -> Result<()> {
+    let content = fs::read_to_string(&input.content_file)
+        .with_context(|| format!("failed to read {}", input.content_file.display()))?;
+    let summary = read_optional_text_file(input.summary_file.as_deref())?;
+    let translation = read_optional_text_file(input.translation_file.as_deref())?;
+    let record = add_article_memory(
+        paths,
+        ArticleMemoryAddRequest {
+            title: input.title,
+            url: input.url,
+            source: input.source,
+            language: input.language,
+            tags: input.tags,
+            content,
+            summary,
+            translation,
+            status: input.status.into(),
+            value_score: input.score,
+            notes: input.notes,
+        },
+    )?;
+    println!("Article stored.");
+    println!("- id: {}", record.id);
+    println!("- title: {}", record.title);
+    println!("- status: {}", record.status);
+    println!(
+        "- content: {}",
+        paths
+            .article_memory_dir()
+            .join(&record.content_path)
+            .display()
+    );
+    let config = check_local_config(paths)?;
+    let normalize_config =
+        resolve_article_normalize_config(&config.article_memory.normalize, &config.providers)?;
+    let value_config = resolve_article_value_config(paths, &config.providers)?;
+    let normalize_response = normalize_article_memory(
+        paths,
+        normalize_config.as_ref(),
+        value_config.as_ref(),
+        &record.id,
+    )
+    .await?;
+    println!(
+        "- normalize: {} ({})",
+        normalize_response.clean_status, normalize_response.clean_profile
+    );
+    match (
+        normalize_response.value_decision.as_deref(),
+        resolve_article_embedding_config(&config.article_memory.embedding, &config.providers)?,
+    ) {
+        (Some("reject"), _) => println!("- embedding: skipped (value rejected)"),
+        (_, Some(embedding_config)) => {
+            upsert_article_memory_embedding(paths, &embedding_config, &record).await?;
+            println!("- embedding: indexed");
+        }
+        (_, None) => println!("- embedding: disabled"),
+    }
+    Ok(())
+}
+
+fn list_articles(paths: &RuntimePaths, limit: usize) -> Result<()> {
+    let response = list_article_memory(paths, limit);
+    if response.status != "ok" {
+        bail!(
+            "{}",
+            response
+                .message
+                .unwrap_or_else(|| format!("article memory {}", response.status))
+        );
+    }
+    println!(
+        "Article memory records: {} of {}",
+        response.returned, response.total_articles
+    );
+    for article in response.articles {
+        println!(
+            "- {} | {} | {} | {}",
+            article.id, article.status, article.captured_at, article.title
+        );
+    }
+    Ok(())
+}
+
+async fn search_articles(
+    paths: &RuntimePaths,
+    query: &str,
+    limit: usize,
+    keyword_only: bool,
+) -> Result<()> {
+    let config = if keyword_only {
+        None
+    } else {
+        let config = check_local_config(paths)?;
+        resolve_article_embedding_config(&config.article_memory.embedding, &config.providers)?
+    };
+    let response = if keyword_only {
+        search_article_memory(paths, query, limit)
+    } else {
+        hybrid_search_article_memory(paths, config.as_ref(), query, limit).await
+    };
+    match response.status.as_str() {
+        "ok" | "empty" => {}
+        _ => bail!(
+            "{}",
+            response
+                .message
+                .unwrap_or_else(|| format!("article memory {}", response.status))
+        ),
+    }
+    println!(
+        "Article memory search: {} hit(s), showing {} ({})",
+        response.total_hits, response.returned, response.search_mode
+    );
+    if let Some(semantic_status) = response.semantic_status {
+        println!("Semantic index: {semantic_status}");
+    }
+    for hit in response.hits {
+        println!(
+            "- {} | keyword={} | semantic={} | {} | {}",
+            hit.id,
+            hit.score,
+            hit.semantic_score
+                .map(|score| format!("{score:.3}"))
+                .unwrap_or_else(|| "n/a".to_string()),
+            hit.status,
+            hit.title
+        );
+        if let Some(url) = hit.url {
+            println!("  url: {url}");
+        }
+        if let Some(snippet) = hit.snippet {
+            println!("  snippet: {snippet}");
+        }
+    }
+    Ok(())
+}
+
+async fn normalize_articles(
+    paths: &RuntimePaths,
+    id: Option<String>,
+    all: bool,
+    no_llm: bool,
+) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let normalize_config = if no_llm {
+        None
+    } else {
+        resolve_article_normalize_config(&config.article_memory.normalize, &config.providers)?
+    };
+    let value_config = if no_llm {
+        None
+    } else {
+        resolve_article_value_config(paths, &config.providers)?
+    };
+    let responses = if all {
+        normalize_all_article_memory(paths, normalize_config.as_ref(), value_config.as_ref())
+            .await?
+    } else {
+        let id = id.ok_or_else(|| anyhow!("provide --id <article-id> or --all"))?;
+        vec![
+            normalize_article_memory(paths, normalize_config.as_ref(), value_config.as_ref(), &id)
+                .await?,
+        ]
+    };
+    println!("Article normalization complete.");
+    for response in responses {
+        println!(
+            "- {} | {} | profile={} | raw={} normalized={} final={} polished={} summary={}",
+            response.article_id,
+            response.clean_status,
+            response.clean_profile,
+            response.raw_chars,
+            response.normalized_chars,
+            response.final_chars,
+            response.polished,
+            response.summary_generated
+        );
+        if let Some(message) = response.message {
+            println!("  note: {message}");
+        }
+        println!("  clean_report: {}", response.clean_report_path);
+        if let Some(decision) = response.value_decision {
+            println!(
+                "  value: {} ({})",
+                decision,
+                response
+                    .value_score
+                    .map(|score| format!("{score:.2}"))
+                    .unwrap_or_else(|| "n/a".to_string())
+            );
+        }
+        if let Some(path) = response.value_report_path {
+            println!("  value_report: {path}");
+        }
+    }
+    Ok(())
+}
+
+fn check_article_cleaning_cli(paths: &RuntimePaths) -> Result<()> {
+    let response = check_article_cleaning(paths)?;
+    println!("Article cleaning strategy {}.", response.status);
+    println!("- config: {}", response.config_path);
+    println!("- sites: {}", response.sites.join(", "));
+    for warning in response.warnings {
+        println!("WARN: {warning}");
+    }
+    Ok(())
+}
+
+fn clean_audit_articles(paths: &RuntimePaths, recent: usize) -> Result<()> {
+    let response = list_article_clean_reports(paths, recent)?;
+    println!(
+        "Article clean reports: {} report(s), status={}",
+        response.returned, response.status
+    );
+    for report in response.reports {
+        println!(
+            "- {} | strategy={}@{} | clean={} | raw={} normalized={} final={} kept={:.2} | risks={}",
+            report.article_id,
+            report.strategy_name,
+            report.strategy_version,
+            report.clean_status,
+            report.raw_chars,
+            report.normalized_chars,
+            report.final_chars,
+            report.kept_ratio,
+            if report.risk_flags.is_empty() {
+                "none".to_string()
+            } else {
+                report.risk_flags.join(",")
+            }
+        );
+        if let Some(url) = report.url {
+            println!("  url: {url}");
+        }
+        if !report.leftover_noise_candidates.is_empty() {
+            println!(
+                "  leftover_noise: {}",
+                report.leftover_noise_candidates.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn judge_articles(
+    paths: &RuntimePaths,
+    id: Option<String>,
+    all: bool,
+    no_llm: bool,
+) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let value_config = if no_llm {
+        let mut resolved = resolve_article_value_config(paths, &config.providers)?
+            .ok_or_else(|| anyhow!("article value judging is disabled"))?;
+        resolved.llm_judge = false;
+        Some(resolved)
+    } else {
+        resolve_article_value_config(paths, &config.providers)?
+    };
+    let reports = if all {
+        judge_all_article_value_memory(
+            paths,
+            value_config
+                .as_ref()
+                .ok_or_else(|| anyhow!("article value judging is disabled"))?,
+        )
+        .await?
+    } else {
+        let id = id.ok_or_else(|| anyhow!("provide --id <article-id> or --all"))?;
+        vec![
+            judge_article_value_memory(
+                paths,
+                value_config
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("article value judging is disabled"))?,
+                &id,
+            )
+            .await?,
+        ]
+    };
+    println!("Article value judging complete.");
+    for report in reports {
+        println!(
+            "- {} | value={} | score={:.2} | topics={} | risks={}",
+            report.article_id,
+            report.decision,
+            report.value_score,
+            if report.topic_tags.is_empty() {
+                "none".to_string()
+            } else {
+                report.topic_tags.join(",")
+            },
+            if report.risk_flags.is_empty() {
+                "none".to_string()
+            } else {
+                report.risk_flags.join(",")
+            }
+        );
+        for reason in report.reasons.iter().take(3) {
+            println!("  reason: {reason}");
+        }
+    }
+    Ok(())
+}
+
+fn value_audit_articles(paths: &RuntimePaths, recent: usize) -> Result<()> {
+    let response = list_article_value_reports(paths, recent)?;
+    println!(
+        "Article value reports: {} report(s), status={}",
+        response.returned, response.status
+    );
+    for report in response.reports {
+        println!(
+            "- {} | decision={} | score={:.2} | topics={} | risks={}",
+            report.article_id,
+            report.decision,
+            report.value_score,
+            if report.topic_tags.is_empty() {
+                "none".to_string()
+            } else {
+                report.topic_tags.join(",")
+            },
+            if report.risk_flags.is_empty() {
+                "none".to_string()
+            } else {
+                report.risk_flags.join(",")
+            }
+        );
+        for reason in report.reasons.iter().take(3) {
+            println!("  reason: {reason}");
+        }
+    }
+    Ok(())
+}
+
+fn review_article_strategy_input(paths: &RuntimePaths, recent: usize) -> Result<()> {
+    let response = build_article_strategy_review_input(paths, recent)?;
+    println!("Article strategy review input generated.");
+    println!("- status: {}", response.status);
+    println!("- report: {}", response.report_path);
+    println!("- editable config: {}", response.config_path);
+    println!(
+        "- implementation requests: {}",
+        response.implementation_requests_dir
+    );
+    println!();
+    println!("{}", response.markdown);
+    Ok(())
+}
+
+async fn replay_cleaning_articles(
+    paths: &RuntimePaths,
+    id: Option<String>,
+    all: bool,
+) -> Result<()> {
+    if !all && id.is_none() {
+        bail!("provide --id <article-id> or --all");
+    }
+    let response = if all {
+        replay_article_cleaning(paths, None)?
+    } else {
+        replay_article_cleaning(paths, id.as_deref())?
+    };
+    println!("Article deterministic cleaning replay complete.");
+    for report in response.reports {
+        println!(
+            "- {} | {} | strategy={}@{} | raw={} normalized={} kept={:.2} risks={}",
+            report.article_id,
+            report.clean_status,
+            report.strategy_name,
+            report.strategy_version,
+            report.raw_chars,
+            report.normalized_chars,
+            report.kept_ratio,
+            if report.risk_flags.is_empty() {
+                "none".to_string()
+            } else {
+                report.risk_flags.join(",")
+            }
+        );
+    }
+    Ok(())
+}
+
+async fn index_articles(paths: &RuntimePaths) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let Some(embedding_config) =
+        resolve_article_embedding_config(&config.article_memory.embedding, &config.providers)?
+    else {
+        bail!("article_memory.embedding is disabled. Enable it in config/davis/local.toml first");
+    };
+    let response = rebuild_article_memory_embeddings(paths, &embedding_config).await?;
+    println!("Article memory semantic index rebuilt.");
+    println!("- provider: {}", response.provider);
+    println!("- model: {}", response.model);
+    println!("- dimensions: {}", response.dimensions);
+    println!("- indexed: {}", response.indexed);
+    println!("- skipped: {}", response.skipped);
+    println!("- index: {}", response.index_path);
+    Ok(())
+}
+
+async fn ingest_article(paths: &RuntimePaths, request: ArticleMemoryIngestRequest) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let response = ingest_article_from_browser(
+        paths,
+        &config.browser_bridge,
+        &config.article_memory,
+        &config.providers,
+        request,
+    )
+    .await?;
+
+    match response.status.as_str() {
+        "ok" => {
+            let article = response
+                .article
+                .ok_or_else(|| anyhow!("ingest response did not include article"))?;
+            println!("Article ingested.");
+            println!("- id: {}", article.id);
+            println!("- title: {}", article.title);
+            if let Some(url) = article.url {
+                println!("- url: {url}");
+            }
+            println!("- status: {}", article.status);
+            println!("- content_length: {}", response.extraction.content_length);
+            println!("- embedding: {}", response.embedding_status);
+        }
+        "duplicate" => {
+            println!("Article already exists.");
+            println!("- title: {}", response.extraction.title);
+            println!("- url: {}", response.extraction.url);
+            println!("- duplicate_count: {}", response.duplicate_count);
+        }
+        other => bail!(
+            "{}",
+            response
+                .message
+                .unwrap_or_else(|| format!("article ingest failed: {other}"))
+        ),
+    }
+    Ok(())
+}
+
+fn read_optional_text_file(path: Option<&Path>) -> Result<Option<String>> {
+    path.map(|path| {
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))
+    })
+    .transpose()
+}
+
+fn print_article_status(status: &crate::ArticleMemoryStatusResponse) {
+    println!("- root: {}", status.root);
+    println!("- index: {}", status.index_path);
+    println!("- articles: {}", status.total_articles);
+    println!("- saved: {}", status.saved_articles);
+    println!("- candidates: {}", status.candidate_articles);
+    println!("- rejected: {}", status.rejected_articles);
+    println!("- archived: {}", status.archived_articles);
+}
+
+async fn start(paths: &RuntimePaths) -> Result<()> {
+    println!("DavisZeroClaw startup");
+    println!("Repository: {}", paths.repo_root.display());
+    println!("Runtime: {}", paths.runtime_dir.display());
+
+    print_start_step(1, "Preflight");
     let zeroclaw = require_command("zeroclaw")
-        .context("找不到底层引擎 zeroclaw。请先通过 Homebrew 安装: brew install zeroclaw")?;
+        .context("zeroclaw was not found. Install it first: brew install zeroclaw")?;
     fs::create_dir_all(&paths.runtime_dir)?;
 
     if !paths.config_template_path().is_file() {
-        bail!("找不到配置模板: {}", paths.config_template_path().display());
+        bail!(
+            "config template was not found: {}",
+            paths.config_template_path().display()
+        );
     }
     if !paths.local_config_path().is_file() {
         bail!(
-            "找不到用户配置文件: {}。请先复制模板：cp {} {}",
+            "local config was not found: {}\nCreate it first: cp {} {}",
             paths.local_config_path().display(),
             paths.local_config_example_path().display(),
             paths.local_config_path().display()
@@ -217,40 +1035,39 @@ async fn start(paths: &RuntimePaths) -> Result<()> {
     }
 
     check_imessage_permissions()?;
+    println!("Preflight OK.");
 
     let cargo =
-        require_command("cargo").context("找不到 cargo，无法编译并启动本地 Davis Rust 服务")?;
-    println!("🦀 正在编译 Davis Rust 服务...");
+        require_command("cargo").context("cargo was not found; cannot build Davis services")?;
+    print_start_step(2, "Build local Rust service");
     run_status(
         Command::new(cargo)
             .arg("build")
             .arg("--release")
             .arg("--bin")
-            .arg("davis-ha-proxy")
+            .arg("davis-local-proxy")
             .arg("--manifest-path")
             .arg(paths.repo_root.join("Cargo.toml"))
             .env("PATH", tool_path_env())
             .current_dir(&paths.repo_root),
-        "cargo build --release --bin davis-ha-proxy",
+        "cargo build --release --bin davis-local-proxy",
     )?;
+    println!("Build OK.");
 
-    println!("🔎 正在校验 config/davis/local.toml ...");
+    print_start_step(3, "Load config and provider credentials");
     let config = check_local_config(paths)?;
-    println!("local.toml ok");
-
-    println!("🔑 正在为 ZeroClaw 准备 provider 凭证环境变量...");
     let provider_env = zeroclaw_env_vars(&config);
-    println!("🌐 正在读取 browser worker 运行时配置...");
+    println!("Config OK: {}", paths.local_config_path().display());
+    println!("Provider environment prepared for ZeroClaw.");
 
+    print_start_step(4, "Prepare runtime skills");
     report_agent_browser_status();
     report_skill_inventory(paths);
-
-    println!("🧩 正在同步运行时 skills（project-skills + skills.sh 第三方 skills）...");
     sync_runtime_skills(paths)?;
 
-    let proxy_bin = release_bin_path(paths, "davis-ha-proxy");
-    let audit_proxy_log = paths.runtime_dir.join("ha_audit_proxy.log");
-    let audit_proxy_pid = paths.runtime_dir.join("ha_audit_proxy.pid");
+    let proxy_bin = release_bin_path(paths, "davis-local-proxy");
+    let local_proxy_log = paths.local_proxy_log_path();
+    let local_proxy_pid = paths.local_proxy_pid_path();
     let mut proxy_cmd = Command::new(&proxy_bin);
     proxy_cmd
         .env("DAVIS_REPO_ROOT", &paths.repo_root)
@@ -261,54 +1078,69 @@ async fn start(paths: &RuntimePaths) -> Result<()> {
         proxy_cmd.env(key, value);
     }
 
-    println!("🚀 正在启动 Davis 本地 Rust 服务...");
+    print_start_step(5, "Start Davis local proxy");
     start_process(
-        "Davis HA Proxy",
-        &audit_proxy_pid,
-        &audit_proxy_log,
+        "Davis Local Proxy",
+        &local_proxy_pid,
+        &local_proxy_log,
         Probe::Http("http://127.0.0.1:3010/health".to_string()),
         proxy_cmd,
     )
     .await?;
 
+    print_start_step(6, "Start browser worker");
     start_browser_worker(paths, &config.browser_bridge).await?;
 
-    println!("🧠 等待初始模型路由与 ZeroClaw 运行时配置生成...");
+    print_start_step(7, "Wait for model routing");
     if !wait_for_model_routing_ready(60, Duration::from_secs(2)).await {
-        println!("❌ 模型路由未能就绪。最近日志如下：");
-        print_tail(&audit_proxy_log, 120);
-        bail!("模型路由未能就绪");
+        println!("Model routing did not become ready. Recent proxy log:");
+        print_tail(&local_proxy_log, 120);
+        bail!("model routing did not become ready");
     }
+    println!("Model routing OK.");
 
     if !paths.config_report_cache_path().is_file() {
-        println!("🩺 首次启动后自动生成 HA 配置体检报告...");
+        println!("Generating the initial Home Assistant advisor report...");
         let _ = http_get_text("http://127.0.0.1:3010/advisor/config-report").await;
     }
 
-    println!("🚀 正在启动 ZeroClaw Daemon...");
+    print_start_step(8, "Start ZeroClaw daemon");
     start_runtime_daemon(paths, &zeroclaw, &provider_env).await?;
 
-    println!("🔎 本地 Davis HA 代理: http://127.0.0.1:3010/health");
-    println!("🧠 模型路由状态: http://127.0.0.1:3010/model-routing/status");
-    println!("🧾 ZeroClaw Runtime Traces: http://127.0.0.1:3010/zeroclaw/runtime-traces");
-    println!("🌍 Browser Bridge 状态: http://127.0.0.1:3010/browser/status");
-    println!("🩺 HA 配置体检报告: http://127.0.0.1:3010/advisor/config-report");
-    println!("🌐 Gateway 健康检查: http://<mac-ip>:3000/health");
-    println!("🔗 Shortcut Webhook Channel: http://<mac-ip>:3001/shortcut");
-    println!("💬 iMessage Channel: 由本机 Messages.app 常驻接入");
-    println!("🛑 停止服务: daviszeroclaw stop");
+    println!();
+    println!("Startup complete.");
+    println!("Local status:");
+    println!("- Davis local proxy: http://127.0.0.1:3010/health");
+    println!("- Model routing: http://127.0.0.1:3010/model-routing/status");
+    println!("- Runtime traces: http://127.0.0.1:3010/zeroclaw/runtime-traces");
+    println!("- Browser bridge: http://127.0.0.1:3010/browser/status");
+    println!("- HA advisor report: http://127.0.0.1:3010/advisor/config-report");
+    println!();
+    println!("Network endpoints:");
+    println!("- Gateway health: http://<mac-ip>:3000/health");
+    println!("- Shortcut bridge: http://<mac-ip>:3012/shortcut");
+    println!();
+    println!("Channels:");
+    println!("- iMessage: served through this Mac's Messages.app");
+    println!("- Stop services: daviszeroclaw stop");
 
     Ok(())
 }
 
+fn print_start_step(index: usize, title: &str) {
+    println!();
+    println!("[{index}/8] {title}");
+}
+
 fn stop(paths: &RuntimePaths) -> Result<()> {
     println!("======================================");
-    println!("    停止 DavisZeroClaw 智能管家");
+    println!("    Stop DavisZeroClaw");
     println!("======================================");
 
+    stop_process("Davis Local Proxy", &paths.local_proxy_pid_path())?;
     stop_process(
-        "HA Audit Proxy",
-        &paths.runtime_dir.join("ha_audit_proxy.pid"),
+        "Legacy Davis Local Proxy",
+        &paths.legacy_local_proxy_pid_path(),
     )?;
     stop_process("Browser Worker", &paths.browser_worker_pid_path())?;
     stop_process("ZeroClaw Daemon", &paths.daemon_pid_path())?;
@@ -317,29 +1149,391 @@ fn stop(paths: &RuntimePaths) -> Result<()> {
     Ok(())
 }
 
+async fn install_davis_service(paths: &RuntimePaths) -> Result<()> {
+    ensure_macos("Davis service management")?;
+    fs::create_dir_all(&paths.runtime_dir)?;
+    render_current_runtime_config(paths)?;
+    let proxy_bin = ensure_release_binary(paths, "davis-local-proxy")?;
+    let zeroclaw = require_command("zeroclaw")
+        .context("zeroclaw was not found. Install it first: brew install zeroclaw")?;
+    let plist_path = davis_service_plist_path()?;
+    if let Some(parent) = plist_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let stdout_path = paths.runtime_dir.join("daemon.launchd.stdout.log");
+    let stderr_path = paths.runtime_dir.join("daemon.launchd.stderr.log");
+    let spec = DavisServiceSpec {
+        label: davis_service_label().to_string(),
+        repo_root: paths.repo_root.clone(),
+        runtime_dir: paths.runtime_dir.clone(),
+        zeroclaw_bin: zeroclaw,
+        proxy_bin,
+        stdout_path,
+        stderr_path,
+        path_env: tool_path_env().to_string_lossy().to_string(),
+    };
+    let plist = render_davis_launchd_plist(&spec);
+    fs::write(&plist_path, plist)
+        .with_context(|| format!("failed to write {}", plist_path.display()))?;
+
+    if let Some(plutil) = command_path("plutil") {
+        run_status(
+            Command::new(plutil)
+                .arg("-lint")
+                .arg(&plist_path)
+                .env("PATH", tool_path_env()),
+            "plutil -lint Davis service plist",
+        )?;
+    }
+
+    let user_target = launchd_user_target()?;
+    bootout_davis_service(&user_target, &plist_path);
+    run_status(
+        Command::new("launchctl")
+            .arg("bootstrap")
+            .arg(&user_target)
+            .arg(&plist_path)
+            .env("PATH", tool_path_env()),
+        "launchctl bootstrap Davis service",
+    )?;
+    run_status(
+        Command::new("launchctl")
+            .arg("enable")
+            .arg(launchd_service_target(&user_target))
+            .env("PATH", tool_path_env()),
+        "launchctl enable Davis service",
+    )?;
+    run_status(
+        Command::new("launchctl")
+            .arg("kickstart")
+            .arg("-k")
+            .arg(launchd_service_target(&user_target))
+            .env("PATH", tool_path_env()),
+        "launchctl kickstart Davis service",
+    )?;
+
+    let _ = wait_for_probe(
+        &Probe::Http("http://127.0.0.1:3000/health".to_string()),
+        20,
+        Duration::from_millis(500),
+    )
+    .await;
+    println!("Davis ZeroClaw service installed.");
+    println!("- plist: {}", plist_path.display());
+    println!("- config: {}", paths.runtime_config_path().display());
+    status_davis_service(paths).await
+}
+
+async fn status_davis_service(paths: &RuntimePaths) -> Result<()> {
+    ensure_macos("Davis service management")?;
+    let plist_path = davis_service_plist_path()?;
+    let user_target = launchd_user_target()?;
+    let mut print_cmd = Command::new("launchctl");
+    print_cmd
+        .arg("print")
+        .arg(launchd_service_target(&user_target))
+        .env("PATH", tool_path_env());
+    let output = command_output(&mut print_cmd).unwrap_or(CommandOutput {
+        status_success: false,
+        stdout: String::new(),
+        stderr: String::new(),
+    });
+
+    println!("Davis ZeroClaw service");
+    println!("- label: {}", davis_service_label());
+    println!("- plist: {}", plist_path.display());
+    println!("- config: {}", paths.runtime_config_path().display());
+    if output.status_success {
+        let state = launchd_state_label(&output.stdout);
+        println!("- launchd: loaded ({state})");
+    } else if plist_path.is_file() {
+        println!("- launchd: not loaded");
+    } else {
+        println!("- launchd: not installed");
+    }
+
+    match http_get_text("http://127.0.0.1:3000/health").await {
+        Ok(payload) => {
+            let health = serde_json::from_str::<Value>(&payload).ok();
+            let top_status = health
+                .as_ref()
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str)
+                .unwrap_or("ok");
+            println!("- zeroclaw: {top_status} (http://127.0.0.1:3000/health)");
+            if let Some(health) = &health {
+                if let Some(pid) = health.pointer("/runtime/pid").and_then(Value::as_u64) {
+                    println!("- pid: {pid}");
+                }
+                print_health_component(health, "gateway", "gateway");
+                print_health_component(health, "scheduler", "scheduler");
+                print_health_component(health, "channel:webhook", "webhook");
+                print_health_component(health, "channel:imessage", "iMessage");
+            }
+        }
+        Err(err) => println!("- zeroclaw: unavailable ({err})"),
+    }
+
+    println!(
+        "- stdout: {}",
+        paths
+            .runtime_dir
+            .join("daemon.launchd.stdout.log")
+            .display()
+    );
+    println!(
+        "- stderr: {}",
+        paths
+            .runtime_dir
+            .join("daemon.launchd.stderr.log")
+            .display()
+    );
+    Ok(())
+}
+
+async fn restart_davis_service(paths: &RuntimePaths) -> Result<()> {
+    ensure_macos("Davis service management")?;
+    let plist_path = davis_service_plist_path()?;
+    if !plist_path.is_file() {
+        println!("Davis service is not installed; installing it now.");
+        return install_davis_service(paths).await;
+    }
+
+    render_current_runtime_config(paths)?;
+    let user_target = launchd_user_target()?;
+    run_status(
+        Command::new("launchctl")
+            .arg("kickstart")
+            .arg("-k")
+            .arg(launchd_service_target(&user_target))
+            .env("PATH", tool_path_env()),
+        "launchctl kickstart Davis service",
+    )?;
+    let _ = wait_for_probe(
+        &Probe::Http("http://127.0.0.1:3000/health".to_string()),
+        20,
+        Duration::from_millis(500),
+    )
+    .await;
+    println!("Davis ZeroClaw service restarted.");
+    status_davis_service(paths).await
+}
+
+fn uninstall_davis_service(_paths: &RuntimePaths) -> Result<()> {
+    ensure_macos("Davis service management")?;
+    let plist_path = davis_service_plist_path()?;
+    let user_target = launchd_user_target()?;
+    bootout_davis_service(&user_target, &plist_path);
+    if plist_path.is_file() {
+        fs::remove_file(&plist_path)
+            .with_context(|| format!("failed to remove {}", plist_path.display()))?;
+    }
+    println!("Davis ZeroClaw service uninstalled.");
+    println!("- removed: {}", plist_path.display());
+    Ok(())
+}
+
+#[derive(Debug)]
+struct DavisServiceSpec {
+    label: String,
+    repo_root: PathBuf,
+    runtime_dir: PathBuf,
+    zeroclaw_bin: PathBuf,
+    proxy_bin: PathBuf,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    path_env: String,
+}
+
+fn render_current_runtime_config(paths: &RuntimePaths) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let _manager = ModelRoutingManager::spawn(paths.clone(), config)?;
+    Ok(())
+}
+
+fn ensure_release_binary(paths: &RuntimePaths, name: &str) -> Result<PathBuf> {
+    let bin = release_bin_path(paths, name);
+    if bin.is_file() {
+        return Ok(bin);
+    }
+
+    let cargo =
+        require_command("cargo").context("cargo was not found; cannot build Davis binary")?;
+    run_status(
+        Command::new(cargo)
+            .arg("build")
+            .arg("--release")
+            .arg("--bin")
+            .arg(name)
+            .arg("--manifest-path")
+            .arg(paths.repo_root.join("Cargo.toml"))
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+        &format!("cargo build --release --bin {name}"),
+    )?;
+    Ok(bin)
+}
+
+fn render_davis_launchd_plist(spec: &DavisServiceSpec) -> String {
+    let command = format!(
+        "cd {} && eval \"$({} print-zeroclaw-env)\" && exec {} daemon --config-dir {}",
+        shell_quote(&spec.repo_root.display().to_string()),
+        shell_quote(&spec.proxy_bin.display().to_string()),
+        shell_quote(&spec.zeroclaw_bin.display().to_string()),
+        shell_quote(&spec.runtime_dir.display().to_string())
+    );
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>{}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DAVIS_REPO_ROOT</key>
+    <string>{}</string>
+    <key>DAVIS_RUNTIME_DIR</key>
+    <string>{}</string>
+    <key>ZEROCLAW_CONFIG_DIR</key>
+    <string>{}</string>
+    <key>PATH</key>
+    <string>{}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>{}</string>
+  <key>StandardErrorPath</key>
+  <string>{}</string>
+</dict>
+</plist>
+"#,
+        xml_escape(&spec.label),
+        xml_escape(&command),
+        xml_escape(&spec.repo_root.display().to_string()),
+        xml_escape(&spec.repo_root.display().to_string()),
+        xml_escape(&spec.runtime_dir.display().to_string()),
+        xml_escape(&spec.runtime_dir.display().to_string()),
+        xml_escape(&spec.path_env),
+        xml_escape(&spec.stdout_path.display().to_string()),
+        xml_escape(&spec.stderr_path.display().to_string())
+    )
+}
+
+fn davis_service_label() -> &'static str {
+    "com.daviszeroclaw.zeroclaw"
+}
+
+fn davis_service_plist_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?;
+    Ok(PathBuf::from(home)
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{}.plist", davis_service_label())))
+}
+
+fn launchd_user_target() -> Result<String> {
+    let uid = command_text(Command::new("id").arg("-u").env("PATH", tool_path_env()))?;
+    Ok(format!("gui/{}", uid.trim()))
+}
+
+fn launchd_service_target(user_target: &str) -> String {
+    format!("{user_target}/{}", davis_service_label())
+}
+
+fn bootout_davis_service(user_target: &str, plist_path: &Path) {
+    let _ = Command::new("launchctl")
+        .arg("bootout")
+        .arg(user_target)
+        .arg(plist_path)
+        .env("PATH", tool_path_env())
+        .status();
+}
+
+fn launchd_state_label(output: &str) -> String {
+    output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("state = "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("loaded")
+        .to_string()
+}
+
+fn print_health_component(health: &Value, component: &str, label: &str) {
+    let Some(component) = health
+        .get("runtime")
+        .and_then(|runtime| runtime.get("components"))
+        .and_then(|components| components.get(component))
+    else {
+        return;
+    };
+    let status = component
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let last_error = component.get("last_error").and_then(Value::as_str);
+    if let Some(error) = last_error.filter(|error| !error.is_empty()) {
+        println!("- {label}: {status} ({error})");
+    } else {
+        println!("- {label}: {status}");
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 async fn start_browser_worker(paths: &RuntimePaths, config: &BrowserBridgeConfig) -> Result<()> {
     if !config.enabled {
-        println!("ℹ️ browser bridge 已禁用，跳过 browser worker。");
+        println!("Browser bridge is disabled; skipping browser worker.");
         return Ok(());
     }
 
     let worker_entry = paths.browser_worker_script_path();
     if !worker_entry.is_file() {
-        bail!("找不到 browser worker 入口：{}", worker_entry.display());
+        bail!(
+            "browser worker entry was not found: {}",
+            worker_entry.display()
+        );
     }
 
     ensure_browser_worker_deps(paths)?;
 
     let runner = command_path("bun")
         .or_else(|| command_path("node"))
-        .ok_or_else(|| anyhow!("browser worker 需要 bun 或 node"))?;
+        .ok_or_else(|| anyhow!("browser worker requires bun or node"))?;
     let runner_name = runner
         .file_name()
         .and_then(OsStr::to_str)
         .unwrap_or("runner")
         .to_string();
 
-    println!("🚀 正在启动 browser worker（{}）...", runner_name);
+    println!("Starting browser worker with {runner_name}.");
     let mut cmd = Command::new(runner);
     cmd.arg(&worker_entry)
         .env("DAVIS_BROWSER_BRIDGE_ENABLED", "true")
@@ -382,16 +1576,16 @@ async fn start_browser_worker(paths: &RuntimePaths, config: &BrowserBridgeConfig
 fn ensure_browser_worker_deps(paths: &RuntimePaths) -> Result<()> {
     let worker_dir = paths.repo_root.join("browser-worker");
     if !worker_dir.join("package.json").is_file() {
-        println!("ℹ️ 未检测到 browser worker package.json，跳过依赖安装。");
+        println!("No browser-worker package.json found; skipping dependency install.");
         return Ok(());
     }
     if worker_dir.join("node_modules").join("playwright").is_dir() {
-        println!("ℹ️ browser worker 依赖已存在。");
+        println!("Browser worker dependencies already installed.");
         return Ok(());
     }
 
     if let Some(bun) = command_path("bun") {
-        println!("📦 使用 Bun 安装 browser worker 依赖...");
+        println!("Installing browser worker dependencies with Bun.");
         run_status(
             Command::new(bun)
                 .arg("install")
@@ -403,7 +1597,7 @@ fn ensure_browser_worker_deps(paths: &RuntimePaths) -> Result<()> {
     }
 
     if let Some(npm) = command_path("npm") {
-        println!("📦 使用 npm 安装 browser worker 依赖...");
+        println!("Installing browser worker dependencies with npm.");
         run_status(
             Command::new(npm)
                 .arg("install")
@@ -414,7 +1608,378 @@ fn ensure_browser_worker_deps(paths: &RuntimePaths) -> Result<()> {
         return Ok(());
     }
 
-    bail!("browser worker 需要 bun 或 npm 来安装依赖");
+    bail!("browser worker requires bun or npm to install dependencies");
+}
+
+fn install_mempalace(paths: &RuntimePaths) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let package = config.memory_integrations.mempalace.package;
+    let python3 = require_command("python3").context("python3 is required to install MemPalace")?;
+    let venv_dir = paths.mempalace_venv_dir();
+    let python = paths.mempalace_python_path();
+    let palace_dir = paths.mempalace_palace_dir();
+
+    fs::create_dir_all(&paths.runtime_dir)?;
+    if !python.is_file() {
+        println!("Creating MemPalace venv: {}", venv_dir.display());
+        run_status(
+            Command::new(&python3)
+                .arg("-m")
+                .arg("venv")
+                .arg(&venv_dir)
+                .env("PATH", tool_path_env())
+                .current_dir(&paths.repo_root),
+            "python3 -m venv .runtime/davis/mempalace-venv",
+        )?;
+    } else {
+        println!("MemPalace venv already exists: {}", venv_dir.display());
+    }
+
+    println!("Upgrading pip.");
+    run_status(
+        Command::new(&python)
+            .arg("-m")
+            .arg("pip")
+            .arg("install")
+            .arg("--upgrade")
+            .arg("pip")
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+        "mempalace pip upgrade",
+    )?;
+
+    println!("Installing MemPalace package: {package}");
+    run_status(
+        Command::new(&python)
+            .arg("-m")
+            .arg("pip")
+            .arg("install")
+            .arg("--upgrade")
+            .arg(&package)
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+        "pip install mempalace",
+    )?;
+
+    fs::create_dir_all(&palace_dir)?;
+    println!("MemPalace installed.");
+    println!("Python: {}", python.display());
+    println!("Palace: {}", palace_dir.display());
+    println!("Next: daviszeroclaw memory mempalace enable");
+    Ok(())
+}
+
+fn enable_mempalace(paths: &RuntimePaths) -> Result<()> {
+    let config_path = paths.local_config_path();
+    let raw = fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let section = r#"[memory_integrations.mempalace]
+enabled = true
+python = ""
+palace_dir = ""
+package = "mempalace"
+tool_timeout_secs = 30
+"#;
+    let updated = replace_toml_section(&raw, "[memory_integrations.mempalace]", section);
+    fs::write(&config_path, updated)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+    println!("MemPalace enabled in {}", config_path.display());
+    println!("Next: daviszeroclaw memory mempalace check");
+    Ok(())
+}
+
+fn check_mempalace(paths: &RuntimePaths) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let mempalace = config.memory_integrations.mempalace;
+    let python = if mempalace.python.trim().is_empty() {
+        paths.mempalace_python_path()
+    } else {
+        PathBuf::from(mempalace.python.trim())
+    };
+    let palace_dir = if mempalace.palace_dir.trim().is_empty() {
+        paths.mempalace_palace_dir()
+    } else {
+        PathBuf::from(mempalace.palace_dir.trim())
+    };
+
+    println!("MemPalace config:");
+    println!("- enabled: {}", mempalace.enabled);
+    println!("- python: {}", python.display());
+    println!("- palace_dir: {}", palace_dir.display());
+    println!("- package: {}", mempalace.package);
+    println!("- tool_timeout_secs: {}", mempalace.tool_timeout_secs);
+
+    if !mempalace.enabled {
+        bail!("MemPalace is not enabled. Run: daviszeroclaw memory mempalace enable");
+    }
+    if !python.is_file() {
+        bail!(
+            "MemPalace Python was not found: {}\nRun: daviszeroclaw memory mempalace install",
+            python.display()
+        );
+    }
+    fs::create_dir_all(&palace_dir)?;
+
+    let import_check = command_output(
+        Command::new(&python)
+            .arg("-c")
+            .arg("import mempalace; print('mempalace import ok')")
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+    )?;
+    print_command_streams(&import_check.stdout, &import_check.stderr);
+    if !import_check.status_success {
+        bail!("MemPalace package import failed");
+    }
+
+    let help_check = command_output(
+        Command::new(&python)
+            .arg("-m")
+            .arg("mempalace.mcp_server")
+            .arg("--help")
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+    )?;
+    if !help_check.status_success {
+        print_command_streams(&help_check.stdout, &help_check.stderr);
+        bail!("MemPalace MCP server did not respond to --help");
+    }
+
+    println!("MemPalace MCP server is available.");
+    println!("Running MemPalace MCP smoke test.");
+    let smoke_check = command_output(
+        Command::new(&python)
+            .arg("-c")
+            .arg(MEMPALACE_SMOKE_TEST_SCRIPT)
+            .arg(&palace_dir)
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+    )?;
+    print_command_streams(&smoke_check.stdout, &smoke_check.stderr);
+    if !smoke_check.status_success {
+        bail!("MemPalace MCP smoke test failed");
+    }
+
+    println!("Restart Davis to render the MCP server into ZeroClaw config.");
+    Ok(())
+}
+
+const MEMPALACE_SMOKE_TEST_SCRIPT: &str = r#"
+import json
+import sqlite3
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+palace = Path(sys.argv[1])
+marker = f"davis_mempalace_check_{int(time.time())}"
+drawer_content = f"{marker}: temporary MemPalace MCP check drawer. Delete after verification."
+diary_content = f"{marker}: temporary MemPalace MCP check diary entry. Delete after verification."
+subject = f"{marker}_subject"
+
+proc = subprocess.Popen(
+    [sys.executable, "-m", "mempalace.mcp_server", "--palace", str(palace)],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    bufsize=1,
+)
+next_id = 1
+
+def request(method, params=None):
+    global next_id
+    payload = {"jsonrpc": "2.0", "id": next_id, "method": method}
+    if params is not None:
+        payload["params"] = params
+    next_id += 1
+    proc.stdin.write(json.dumps(payload) + "\n")
+    proc.stdin.flush()
+    line = proc.stdout.readline()
+    if not line:
+        stderr = proc.stderr.read()
+        raise RuntimeError(f"MemPalace MCP server returned no response: {stderr}")
+    response = json.loads(line)
+    if "error" in response:
+        raise RuntimeError(response["error"])
+    return response
+
+def tool(name, arguments=None):
+    response = request("tools/call", {"name": name, "arguments": arguments or {}})
+    text = response["result"]["content"][0]["text"]
+    return json.loads(text)
+
+def ensure(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+def cleanup_kg():
+    db = palace / "knowledge_graph.sqlite3"
+    if not db.is_file():
+        return
+    with sqlite3.connect(db) as conn:
+        conn.execute("delete from triples where subject = ? or object = ?", (subject, subject))
+        conn.execute("delete from entities where id = ?", (subject,))
+        conn.commit()
+
+drawer_id = None
+diary_id = None
+try:
+    request("initialize", {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {},
+        "clientInfo": {"name": "daviszeroclaw-mempalace-check", "version": "0"},
+    })
+    tools = request("tools/list")["result"]["tools"]
+    tool_names = {tool["name"] for tool in tools}
+    required = {
+        "mempalace_status",
+        "mempalace_search",
+        "mempalace_add_drawer",
+        "mempalace_delete_drawer",
+        "mempalace_diary_write",
+        "mempalace_diary_read",
+        "mempalace_kg_add",
+        "mempalace_kg_query",
+        "mempalace_kg_invalidate",
+    }
+    missing = sorted(required - tool_names)
+    ensure(not missing, f"missing required tools: {', '.join(missing)}")
+
+    status_before = tool("mempalace_status")
+
+    added = tool("mempalace_add_drawer", {
+        "wing": "davis",
+        "room": "smoke-test",
+        "content": drawer_content,
+    })
+    ensure(added.get("success"), f"add_drawer failed: {added.get('error')}")
+    drawer_id = added.get("drawer_id")
+    ensure(drawer_id, "add_drawer did not return drawer_id")
+
+    search = tool("mempalace_search", {"query": marker, "limit": 3})
+    results_text = json.dumps(search, ensure_ascii=False)
+    ensure(drawer_content in results_text, "search did not return the smoke-test drawer")
+
+    deleted = tool("mempalace_delete_drawer", {"drawer_id": drawer_id})
+    ensure(deleted.get("success"), f"delete_drawer failed: {deleted.get('error')}")
+    drawer_id = None
+
+    search_after_delete = tool("mempalace_search", {"query": marker, "limit": 3})
+    remaining = search_after_delete.get("results") or []
+    ensure(
+        not any(drawer_content in json.dumps(item, ensure_ascii=False) for item in remaining),
+        "deleted drawer still appears in search results",
+    )
+
+    diary = tool("mempalace_diary_write", {
+        "agent_name": "davis",
+        "topic": "smoke-test",
+        "entry": diary_content,
+    })
+    ensure(diary.get("success"), f"diary_write failed: {diary.get('error')}")
+    diary_id = diary.get("entry_id")
+    ensure(diary_id, "diary_write did not return entry_id")
+
+    diary_read = tool("mempalace_diary_read", {"agent_name": "davis", "last_n": 5})
+    ensure(diary_content in json.dumps(diary_read, ensure_ascii=False), "diary_read did not return the smoke-test entry")
+
+    diary_delete = tool("mempalace_delete_drawer", {"drawer_id": diary_id})
+    ensure(diary_delete.get("success"), f"delete diary entry failed: {diary_delete.get('error')}")
+    diary_id = None
+
+    kg_add = tool("mempalace_kg_add", {
+        "subject": subject,
+        "predicate": "check_predicate",
+        "object": "check_object",
+        "valid_from": "2026-04-17",
+    })
+    ensure(kg_add.get("success"), f"kg_add failed: {kg_add.get('error')}")
+
+    kg_query = tool("mempalace_kg_query", {"entity": subject, "direction": "both"})
+    ensure(kg_query.get("count", 0) >= 1, "kg_query did not return the smoke-test fact")
+
+    kg_invalidate = tool("mempalace_kg_invalidate", {
+        "subject": subject,
+        "predicate": "check_predicate",
+        "object": "check_object",
+        "ended": "2026-04-17",
+    })
+    ensure(kg_invalidate.get("success"), f"kg_invalidate failed: {kg_invalidate.get('error')}")
+    cleanup_kg()
+
+    status_after = tool("mempalace_status")
+    ensure(status_after.get("protocol"), "mempalace_status did not return Memory Protocol after smoke test")
+
+    before_drawers = status_before.get("total_drawers")
+    after_drawers = status_after.get("total_drawers")
+    print("MemPalace MCP smoke test ok.")
+    print(f"- tools: {len(tool_names)} available")
+    print(f"- drawer/search/delete: ok")
+    print(f"- diary write/read/delete: ok")
+    print(f"- KG add/query/invalidate: ok")
+    print(f"- Memory Protocol: ok")
+    if before_drawers is not None and after_drawers is not None:
+        print(f"- total_drawers: {before_drawers} -> {after_drawers}")
+except Exception as exc:
+    print(f"MemPalace MCP smoke test failed: {exc}", file=sys.stderr)
+    print("Hint: if the error mentions SSL, handshake, or ONNX, remove a corrupt Chroma model cache and retry:", file=sys.stderr)
+    print("  rm -f ~/.cache/chroma/onnx_models/all-MiniLM-L6-v2/onnx.tar.gz", file=sys.stderr)
+    raise
+finally:
+    try:
+        if drawer_id:
+            tool("mempalace_delete_drawer", {"drawer_id": drawer_id})
+    except Exception:
+        pass
+    try:
+        if diary_id:
+            tool("mempalace_delete_drawer", {"drawer_id": diary_id})
+    except Exception:
+        pass
+    try:
+        cleanup_kg()
+    except Exception:
+        pass
+    proc.terminate()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+"#;
+
+fn replace_toml_section(raw: &str, header: &str, replacement: &str) -> String {
+    let lines = raw.lines().collect::<Vec<_>>();
+    let Some(start) = lines.iter().position(|line| line.trim() == header) else {
+        let mut output = raw.trim_end().to_string();
+        output.push_str("\n\n");
+        output.push_str(replacement.trim_end());
+        output.push('\n');
+        return output;
+    };
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find_map(|(index, line)| {
+            let trimmed = line.trim();
+            (trimmed.starts_with('[') && trimmed.ends_with(']')).then_some(index)
+        })
+        .unwrap_or(lines.len());
+
+    let mut output = String::new();
+    for line in &lines[..start] {
+        output.push_str(line);
+        output.push('\n');
+    }
+    output.push_str(replacement.trim_end());
+    output.push('\n');
+    for line in &lines[end..] {
+        output.push_str(line);
+        output.push('\n');
+    }
+    output
 }
 
 async fn start_runtime_daemon(
@@ -431,8 +1996,8 @@ async fn start_runtime_daemon(
             )
             .await
         {
-            println!("ℹ️ ZeroClaw Daemon 已在运行，PID: {existing_pid}");
-            println!("   日志: {}", paths.daemon_log_path().display());
+            println!("ZeroClaw Daemon is already running. PID: {existing_pid}");
+            println!("Log: {}", paths.daemon_log_path().display());
             return Ok(());
         }
         let _ = fs::remove_file(paths.daemon_pid_path());
@@ -491,7 +2056,7 @@ fn sync_runtime_skills_with_sources(
     }
     fs::rename(&staging_dir, &runtime_skills_dir)?;
 
-    println!("🧩 已同步运行时 skills 到 {}", runtime_skills_dir.display());
+    println!("Runtime skills synced: {}", runtime_skills_dir.display());
     Ok(())
 }
 
@@ -518,7 +2083,7 @@ fn copy_skill_tree(source_root: &Path, source_label: &str, staging_dir: &Path) -
         let dest_path = staging_dir.join(skill_name);
         if dest_path.exists() {
             bail!(
-                "检测到同名 skill 冲突: {skill_name}\n   来源目录: {}\n   已存在于: {}\n   请把项目自带 skill 与 skills.sh 第三方 skill 保持不同名字。",
+                "duplicate skill name detected: {skill_name}\n   source directory: {}\n   existing destination: {}\n   Keep project skills and skills.sh vendor skills under distinct names.",
                 source_root.display(),
                 dest_path.display()
             );
@@ -630,30 +2195,288 @@ fn is_script_link(url: &str) -> bool {
         .any(|suffix| target.ends_with(suffix))
 }
 
-fn install_vendor_skills(paths: &RuntimePaths) -> Result<()> {
-    let npx = require_command("npx").context("未检测到 npx。请先安装 Node.js / npm")?;
-    fs::create_dir_all(paths.repo_root.join("skills"))?;
+fn install_skills(paths: &RuntimePaths) -> Result<()> {
+    let installed = install_mempalace_vendor_skill(paths)?;
 
-    println!("🧩 正在安装第三方 skill: agent-browser");
-    run_status(
-        Command::new(npx)
-            .arg("skills")
-            .arg("add")
-            .arg("https://github.com/vercel-labs/agent-browser")
-            .arg("--skill")
-            .arg("agent-browser")
-            .arg("--agent")
-            .arg("openclaw")
-            .arg("-y")
+    println!("Installed vendor skills:");
+    println!("- mempalace ({})", installed.display());
+    println!("Next: daviszeroclaw skills sync");
+    Ok(())
+}
+
+fn install_mempalace_vendor_skill(paths: &RuntimePaths) -> Result<PathBuf> {
+    let skill_dir = paths.repo_root.join("skills").join("mempalace");
+    fs::create_dir_all(&skill_dir)
+        .with_context(|| format!("failed to create {}", skill_dir.display()))?;
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        render_mempalace_vendor_skill_adapter(paths),
+    )
+    .with_context(|| format!("failed to write {}", skill_dir.join("SKILL.md").display()))?;
+    Ok(skill_dir)
+}
+
+fn render_mempalace_vendor_skill_adapter(paths: &RuntimePaths) -> String {
+    let python = paths.mempalace_python_path();
+    format!(
+        r#"---
+name: mempalace
+description: "MemPalace maintenance skill for DavisZeroClaw. Use only when the user explicitly asks to operate MemPalace itself: setup, init, mine external data, direct manual search, status, repair, MCP setup, or CLI help. For everyday Davis long-term personal memory and cross-session recall, use the project skill mempalace-memory and MemPalace MCP tools instead."
+---
+
+# MemPalace
+
+This is a thin Davis/ZeroClaw adapter for MemPalace's official dynamic instructions. Use it only for MemPalace maintenance operations. It is not the daily memory path; that belongs to the `mempalace-memory` project skill plus MemPalace MCP tools.
+
+## Official Instructions
+
+MemPalace provides dynamic official instructions through its CLI. From this DavisZeroClaw repo, prefer the Davis-managed Python:
+
+```bash
+{} -m mempalace instructions <command>
+```
+
+Use one of these commands:
+
+- `help`: available MemPalace commands and capabilities.
+- `init`: initialize a palace.
+- `mine`: mine projects or conversation exports into the palace.
+- `search`: directly search the user's palace.
+- `status`: show palace health, counts, and stats.
+
+Read the returned instructions and follow them step by step.
+
+Do not initialize or mine the DavisZeroClaw repository by default. DavisZeroClaw is the user's agent runtime, not the primary memory corpus. Only run `init` or `mine` when the user explicitly provides a source directory or asks to ingest data.
+
+## MCP First
+
+When MemPalace MCP tools are available, prefer them over shell commands for day-to-day recall, status, knowledge graph, and diary operations. Use CLI instructions only for maintenance workflows or explicit direct search.
+
+## Boundaries
+
+- If the user asks Davis to remember, recall, correct, forget, or preserve long-term facts, use the `mempalace-memory` project skill.
+- If the user asks how to operate MemPalace itself, use this vendor skill.
+- Do not install the generic upstream `search`, `status`, or `help` skills as top-level skills; this single `mempalace` entry is the vendor boundary.
+"#,
+        python.display()
+    )
+}
+
+fn check_skills(paths: &RuntimePaths) -> Result<()> {
+    let project_skills_dir = paths.repo_root.join("project-skills");
+    let vendor_skills_dir = paths.repo_root.join("skills");
+    let runtime_skills_dir = paths.workspace_dir().join("skills");
+
+    let project_names = skill_name_set(&project_skills_dir);
+    let vendor_names = skill_name_set(&vendor_skills_dir);
+    let runtime_names = skill_name_set(&runtime_skills_dir);
+    let duplicates = project_names
+        .intersection(&vendor_names)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    println!(
+        "Project skills: {} ({})",
+        format_skill_count(project_names.len()),
+        project_skills_dir.display()
+    );
+    println!(
+        "Vendor skills: {} ({})",
+        format_skill_count(vendor_names.len()),
+        vendor_skills_dir.display()
+    );
+    println!(
+        "Runtime skills: {}",
+        runtime_skill_status(&project_names, &vendor_names, &runtime_names)
+    );
+
+    if duplicates.is_empty() {
+        println!("Duplicate names: none");
+    } else {
+        println!("Duplicate names: WARN ({})", duplicates.join(", "));
+    }
+
+    report_mempalace_vendor_skill_status(&vendor_skills_dir);
+    report_mempalace_policy_skill_status(&project_skills_dir);
+    report_mempalace_mcp_status(paths);
+
+    Ok(())
+}
+
+fn format_skill_count(count: usize) -> String {
+    if count == 1 {
+        "ok (1 skill)".to_string()
+    } else {
+        format!("ok ({count} skills)")
+    }
+}
+
+fn runtime_skill_status(
+    project_names: &BTreeSet<String>,
+    vendor_names: &BTreeSet<String>,
+    runtime_names: &BTreeSet<String>,
+) -> String {
+    let expected = project_names
+        .union(vendor_names)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if expected.is_empty() && runtime_names.is_empty() {
+        return "ok (empty)".to_string();
+    }
+    let missing = expected
+        .difference(runtime_names)
+        .cloned()
+        .collect::<Vec<_>>();
+    let extra = runtime_names
+        .difference(&expected)
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() && extra.is_empty() {
+        return format!("synced ({} skills)", runtime_names.len());
+    }
+
+    let mut parts = Vec::new();
+    if !missing.is_empty() {
+        parts.push(format!("missing: {}", missing.join(", ")));
+    }
+    if !extra.is_empty() {
+        parts.push(format!("extra: {}", extra.join(", ")));
+    }
+    format!("WARN stale ({})", parts.join("; "))
+}
+
+fn report_mempalace_vendor_skill_status(vendor_skills_dir: &Path) {
+    let skill_path = vendor_skills_dir.join("mempalace").join("SKILL.md");
+    if !skill_path.is_file() {
+        println!("MemPalace vendor skill: WARN missing (run: daviszeroclaw skills install)");
+        return;
+    }
+
+    match fs::read_to_string(&skill_path) {
+        Ok(raw)
+            if raw.contains("mempalace instructions <command>")
+                && raw.contains("project skill mempalace-memory") =>
+        {
+            println!("MemPalace vendor skill: ok");
+        }
+        Ok(_) => {
+            println!(
+                "MemPalace vendor skill: WARN installed but does not look like the Davis vendor wrapper"
+            );
+        }
+        Err(error) => {
+            println!("MemPalace vendor skill: WARN failed to read ({error})");
+        }
+    }
+}
+
+fn report_mempalace_policy_skill_status(project_skills_dir: &Path) {
+    let skill_path = project_skills_dir.join("mempalace-memory").join("SKILL.md");
+    if !skill_path.is_file() {
+        println!("MemPalace memory policy skill: WARN missing");
+        return;
+    }
+
+    let required_markers = [
+        "Use MemPalace When",
+        "Do Not Use MemPalace When",
+        "Runtime Protocol",
+        "Load the protocol",
+        "Read before answering",
+        "Write deliberately",
+        "Placement",
+        "Boundary With ZeroClaw Memory",
+        "vendor `mempalace` skill",
+    ];
+    match fs::read_to_string(&skill_path) {
+        Ok(raw) => {
+            let missing = required_markers
+                .iter()
+                .filter(|marker| !raw.contains(**marker))
+                .copied()
+                .collect::<Vec<_>>();
+            if missing.is_empty() {
+                println!("MemPalace memory policy skill: ok");
+            } else {
+                println!(
+                    "MemPalace memory policy skill: WARN too vague (missing: {})",
+                    missing.join(", ")
+                );
+            }
+        }
+        Err(error) => {
+            println!("MemPalace memory policy skill: WARN failed to read ({error})");
+        }
+    }
+}
+
+fn report_mempalace_mcp_status(paths: &RuntimePaths) {
+    let config = match check_local_config(paths) {
+        Ok(config) => config,
+        Err(error) => {
+            println!("MemPalace MCP: WARN config invalid ({error})");
+            return;
+        }
+    };
+    let mempalace = config.memory_integrations.mempalace;
+    let python = if mempalace.python.trim().is_empty() {
+        paths.mempalace_python_path()
+    } else {
+        PathBuf::from(mempalace.python.trim())
+    };
+
+    if !mempalace.enabled {
+        println!("MemPalace MCP: WARN disabled (run: daviszeroclaw memory mempalace enable)");
+        return;
+    }
+    if !python.is_file() {
+        println!(
+            "MemPalace MCP: WARN Python missing at {} (run: daviszeroclaw memory mempalace install)",
+            python.display()
+        );
+        return;
+    }
+
+    let import_check = command_output(
+        Command::new(&python)
+            .arg("-c")
+            .arg("import mempalace")
             .env("PATH", tool_path_env())
             .current_dir(&paths.repo_root),
-        "npx skills add https://github.com/vercel-labs/agent-browser --skill agent-browser --agent openclaw -y",
-    )?;
+    );
+    match import_check {
+        Ok(output) if output.status_success => {}
+        Ok(output) => {
+            let detail = first_non_empty_line(&output.stderr).unwrap_or("import failed");
+            println!("MemPalace MCP: WARN package import failed ({detail})");
+            return;
+        }
+        Err(error) => {
+            println!("MemPalace MCP: WARN import check failed ({error})");
+            return;
+        }
+    }
 
-    println!("🧩 正在同步运行时 skills...");
-    sync_runtime_skills(paths)?;
-    println!("✅ 第三方 skills 安装完成");
-    Ok(())
+    let help_check = command_output(
+        Command::new(&python)
+            .arg("-m")
+            .arg("mempalace.mcp_server")
+            .arg("--help")
+            .env("PATH", tool_path_env())
+            .current_dir(&paths.repo_root),
+    );
+    match help_check {
+        Ok(output) if output.status_success => println!("MemPalace MCP: ok"),
+        Ok(output) => {
+            let detail = first_non_empty_line(&output.stderr).unwrap_or("mcp server --help failed");
+            println!("MemPalace MCP: WARN unavailable ({detail})");
+        }
+        Err(error) => println!("MemPalace MCP: WARN check failed ({error})"),
+    }
+}
+
+fn first_non_empty_line(text: &str) -> Option<&str> {
+    text.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
 fn build_shortcut(
@@ -662,7 +2485,7 @@ fn build_shortcut(
     secret: Option<String>,
     no_secret: bool,
 ) -> Result<ShortcutBuild> {
-    ensure_macos("Shortcut 构建")?;
+    ensure_macos("Shortcut build")?;
     let plutil =
         require_command("plutil").context("plutil is required to build the shortcut template")?;
     let shortcuts = require_command("shortcuts")
@@ -689,7 +2512,7 @@ fn build_shortcut(
                 "<mac-ip>".to_string()
             });
             let port =
-                std::env::var("DAVIS_SHORTCUT_WEBHOOK_PORT").unwrap_or_else(|_| "3001".to_string());
+                std::env::var("DAVIS_SHORTCUT_WEBHOOK_PORT").unwrap_or_else(|_| "3012".to_string());
             let path = std::env::var("DAVIS_SHORTCUT_WEBHOOK_PATH")
                 .unwrap_or_else(|_| "/shortcut".to_string());
             format!("http://{host_ip}:{port}{path}")
@@ -725,7 +2548,7 @@ fn build_shortcut(
             .env("PATH", tool_path_env()),
         "plutil -convert binary1",
     )?;
-    run_status(
+    run_status_filtering_shortcuts_warnings(
         Command::new(shortcuts)
             .arg("sign")
             .arg("-m")
@@ -767,7 +2590,7 @@ fn install_shortcut(
 }
 
 fn open_shortcut_import(shortcut_path: &Path) -> Result<()> {
-    ensure_macos("Shortcut 导入")?;
+    ensure_macos("Shortcut import")?;
     let open = require_command("open").context("open is required to launch Shortcut import")?;
     run_status(
         Command::new(open)
@@ -792,6 +2615,10 @@ fn resolve_shortcut_secret(
         toml_string_value(&paths.local_config_path(), "webhook", "secret")
             .filter(|value| !value.is_empty())
             .or_else(|| {
+                toml_string_value(&paths.runtime_config_path(), "channels.webhook", "secret")
+                    .filter(|value| !value.is_empty())
+            })
+            .or_else(|| {
                 toml_string_value(
                     &paths.runtime_config_path(),
                     "channels_config.webhook",
@@ -812,6 +2639,26 @@ fn toml_string_value(path: &Path, section: &str, key: &str) -> Option<String> {
         value = value.get(part)?;
     }
     value.get(key)?.as_str().map(ToString::to_string)
+}
+
+fn toml_string_array_value(path: &Path, section: &str, key: &str) -> Option<Vec<String>> {
+    let raw = fs::read_to_string(path).ok()?;
+    let parsed: toml::Value = raw.parse().ok()?;
+    let mut value = &parsed;
+    for part in section.split('.') {
+        value = value.get(part)?;
+    }
+    Some(
+        value
+            .get(key)?
+            .as_array()?
+            .iter()
+            .filter_map(|item| item.as_str())
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+    )
 }
 
 pub fn customize_shortcut_json(
@@ -910,29 +2757,29 @@ fn detect_host_ip() -> Option<String> {
 
 fn check_imessage_permissions() -> Result<()> {
     ensure_macos("iMessage channel")?;
-    println!("🔐 正在检查 iMessage 常驻能力所需权限...");
+    println!("Checking iMessage permissions.");
 
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("无法读取 HOME 环境变量"))?;
+        .ok_or_else(|| anyhow!("HOME environment variable is not set"))?;
     let messages_db = home.join("Library").join("Messages").join("chat.db");
     let messages_app = Path::new("/System/Applications/Messages.app");
 
     if !messages_app.is_dir() {
         bail!(
-            "找不到 {}。当前系统似乎不可用 Messages.app。",
+            "Messages.app was not found at {}. This macOS installation does not appear to support Messages.app.",
             messages_app.display()
         );
     }
     if !messages_db.is_file() {
         bail!(
-            "未找到 {}。请先打开 Messages.app，登录 iMessage，并至少收发一条消息。",
+            "{} was not found. Open Messages.app, sign in to iMessage, and send or receive at least one message before retrying.",
             messages_db.display()
         );
     }
 
-    let sqlite3 =
-        require_command("sqlite3").context("系统缺少 sqlite3，无法验证 Messages 数据库权限")?;
+    let sqlite3 = require_command("sqlite3")
+        .context("sqlite3 is required to verify Messages database access")?;
     let sqlite_output = command_output(
         Command::new(sqlite3)
             .arg(&messages_db)
@@ -941,16 +2788,14 @@ fn check_imessage_permissions() -> Result<()> {
     )?;
     if !sqlite_output.status_success {
         bail!(
-            "当前宿主没有读取 Messages 数据库的权限。\n   请前往：系统设置 -> 隐私与安全性 -> 完全磁盘访问权限\n   然后给你实际运行 daviszeroclaw start 的宿主 App 授权。\n   常见宿主 App：Terminal、iTerm、Codex。\n   sqlite3 错误：{}",
+            "The current host cannot read the Messages database.\n   Open System Settings -> Privacy & Security -> Full Disk Access.\n   Grant access to the app that runs daviszeroclaw start, such as Terminal, iTerm, or Codex.\n   sqlite3 error: {}",
             sqlite_output.stderr.replace('\n', " ")
         );
     }
 
-    println!(
-        "ℹ️ 即将验证 Automation 权限。首次运行时，macOS 可能会弹出“允许控制 Messages”的提示。"
-    );
-    let osascript =
-        require_command("osascript").context("系统缺少 osascript，无法验证 Automation 权限")?;
+    println!("Checking Messages automation permission. macOS may ask whether to allow control of Messages.");
+    let osascript = require_command("osascript")
+        .context("osascript is required to verify Automation permission")?;
     let ae_output = command_output(
         Command::new(osascript)
             .arg("-e")
@@ -959,18 +2804,18 @@ fn check_imessage_permissions() -> Result<()> {
     )?;
     if !ae_output.status_success {
         bail!(
-            "当前宿主还不能通过 Apple Events 控制 Messages.app。\n   请前往：系统设置 -> 隐私与安全性 -> 自动化\n   然后允许当前宿主 App 控制 Messages。\n   osascript 错误：{}",
+            "The current host cannot control Messages.app through Apple Events.\n   Open System Settings -> Privacy & Security -> Automation.\n   Allow the current host app to control Messages.\n   osascript error: {}",
             ae_output.stderr.replace('\n', " ")
         );
     }
 
-    println!("✅ iMessage 权限检查通过。");
+    println!("iMessage permissions OK.");
     Ok(())
 }
 
-fn inspect_imessage() -> Result<()> {
+fn inspect_imessage(paths: &RuntimePaths) -> Result<()> {
     ensure_macos("iMessage inspect")?;
-    println!("🔎 正在检查本机 iMessage 配置...");
+    println!("Inspecting local iMessage configuration...");
 
     let home = home_dir()?;
     let messages_db = home.join("Library").join("Messages").join("chat.db");
@@ -982,33 +2827,36 @@ fn inspect_imessage() -> Result<()> {
 
     if !messages_app.is_dir() {
         bail!(
-            "找不到 {}。当前系统似乎不可用 Messages.app。",
+            "Messages.app was not found at {}. This macOS installation does not appear to support Messages.app.",
             messages_app.display()
         );
     }
     if !messages_db.is_file() {
         bail!(
-            "未找到 {}。请先打开 Messages.app，登录 iMessage，并至少收发一条消息。",
+            "{} was not found. Open Messages.app, sign in to iMessage, and send or receive at least one message before retrying.",
             messages_db.display()
         );
     }
 
     let sqlite3 =
-        require_command("sqlite3").context("系统缺少 sqlite3，无法读取 iMessage 诊断信息")?;
-    ensure_sqlite_readable(&sqlite3, &messages_db, "Messages 数据库")?;
+        require_command("sqlite3").context("sqlite3 is required to read iMessage diagnostics")?;
+    ensure_sqlite_readable(&sqlite3, &messages_db, "Messages database")?;
 
     let apple_accounts = if accounts_db.is_file() {
-        ensure_sqlite_readable(&sqlite3, &accounts_db, "Accounts 数据库")?;
+        ensure_sqlite_readable(&sqlite3, &accounts_db, "Accounts database")?;
         imessage_apple_accounts(&sqlite3, &accounts_db)?
     } else {
         Vec::new()
     };
     let candidates = imessage_allowed_contact_candidates(&sqlite3, &messages_db)?;
+    let configured_contacts =
+        toml_string_array_value(&paths.local_config_path(), "imessage", "allowed_contacts")
+            .unwrap_or_default();
 
     println!();
     println!("Messages Apple Account:");
     if apple_accounts.is_empty() {
-        println!("- 未能从 Accounts4.sqlite 确认。");
+        println!("- Not found in Accounts4.sqlite.");
     } else {
         for account in &apple_accounts {
             println!("- {account}");
@@ -1016,13 +2864,53 @@ fn inspect_imessage() -> Result<()> {
     }
 
     println!();
-    println!("Davis allowed_contacts candidates:");
-    if candidates.is_empty() {
-        println!("- 未能从历史 iMessage 元数据中确认。");
-        println!("  请从 iPhone 给这台 Mac 的手机号或 Apple Account 发一条测试消息后重试。");
+    println!("Davis config file:");
+    println!("- {}", paths.local_config_path().display());
+
+    println!();
+    println!("Configured allowed_contacts:");
+    if configured_contacts.is_empty() {
+        println!("- No string values found in [imessage].allowed_contacts.");
     } else {
+        for contact in &configured_contacts {
+            println!("- {contact}");
+        }
+    }
+
+    println!();
+    println!("Configuration status:");
+    if candidates.is_empty() {
+        println!("- Unable to verify allowed_contacts from iMessage metadata.");
+        println!(
+            "- Send a test iMessage from your iPhone to this Mac, then run this command again."
+        );
+    } else {
+        let best_candidate = &candidates[0];
+        let config_contains_best = configured_contacts
+            .iter()
+            .any(|contact| contact == &best_candidate.identity);
+
+        if config_contains_best {
+            println!(
+                "OK: [imessage].allowed_contacts already includes the best observed sender: {}.",
+                best_candidate.identity
+            );
+        } else if configured_contacts.is_empty() {
+            println!(
+                "Update needed: [imessage].allowed_contacts is empty or missing the best observed sender: {}.",
+                best_candidate.identity
+            );
+        } else {
+            println!(
+                "Review needed: [imessage].allowed_contacts does not include the best observed sender: {}.",
+                best_candidate.identity
+            );
+        }
+
+        println!();
+        println!("Observed allowed_contacts candidates:");
         for (index, candidate) in candidates.iter().take(5).enumerate() {
-            let suffix = if index == 0 { " (recommended)" } else { "" };
+            let suffix = if index == 0 { " (best match)" } else { "" };
             println!(
                 "{}. {}{} | {} messages, incoming={}, outgoing={}, last={}, rowid={}",
                 index + 1,
@@ -1037,21 +2925,23 @@ fn inspect_imessage() -> Result<()> {
             println!("   reason: {}", candidate.reason);
         }
 
-        println!();
-        println!("Suggested config:");
-        println!("[imessage]");
-        println!("allowed_contacts = [\"{}\"]", candidates[0].identity);
+        if !config_contains_best {
+            println!();
+            println!("Suggested config:");
+            println!("[imessage]");
+            println!("allowed_contacts = [\"{}\"]", best_candidate.identity);
+        }
     }
 
     println!();
-    println!("Note: inspect 只读取账号、句柄、方向和时间等元数据，不读取消息正文。");
+    println!("Note: inspect reads account, handle, direction, and timestamp metadata only. It does not read message bodies.");
     Ok(())
 }
 
 fn home_dir() -> Result<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("无法读取 HOME 环境变量"))
+        .ok_or_else(|| anyhow!("HOME environment variable is not set"))
 }
 
 fn ensure_sqlite_readable(sqlite3: &Path, db: &Path, label: &str) -> Result<()> {
@@ -1064,8 +2954,7 @@ fn ensure_sqlite_readable(sqlite3: &Path, db: &Path, label: &str) -> Result<()> 
     )?;
     if !output.status_success {
         bail!(
-            "当前宿主无法读取{}: {}\n   请前往：系统设置 -> 隐私与安全性 -> 完全磁盘访问权限\n   然后给你实际运行 daviszeroclaw 的宿主 App 授权。\n   sqlite3 错误：{}",
-            label,
+            "The current host cannot read the {label}: {}\n   Open System Settings -> Privacy & Security -> Full Disk Access.\n   Grant access to the app that runs daviszeroclaw, such as Terminal, iTerm, or Codex.\n   sqlite3 error: {}",
             db.display(),
             output.stderr.replace('\n', " ")
         );
@@ -1216,7 +3105,7 @@ fn sqlite_rows(sqlite3: &Path, db: &Path, query: &str) -> Result<Vec<Vec<String>
 }
 
 fn express_login(source: ExpressLoginSource) -> Result<()> {
-    ensure_macos("快递登录页")?;
+    ensure_macos("express login page")?;
     let open = require_command("open").context("macOS open command is required")?;
     let url = match source {
         ExpressLoginSource::Ali => ALI_ORDER_URL,
@@ -1291,8 +3180,8 @@ async fn start_process(
 ) -> Result<()> {
     if let Some(existing_pid) = read_pid(pid_file) {
         if pid_is_alive(existing_pid) && wait_for_probe(&probe, 2, Duration::from_secs(1)).await {
-            println!("ℹ️ {name} 已在运行，PID: {existing_pid}");
-            println!("   日志: {}", log_file.display());
+            println!("{name} is already running. PID: {existing_pid}");
+            println!("Log: {}", log_file.display());
             return Ok(());
         }
         let _ = fs::remove_file(pid_file);
@@ -1313,33 +3202,33 @@ async fn start_process(
     fs::write(pid_file, pid.to_string())?;
 
     if wait_for_probe(&probe, 15, Duration::from_secs(1)).await {
-        println!("✅ {name} 已启动，PID: {pid}");
-        println!("   日志: {}", log_file.display());
+        println!("{name} started. PID: {pid}");
+        println!("Log: {}", log_file.display());
         return Ok(());
     }
 
-    println!("❌ {name} 启动失败。最近日志如下：");
+    println!("{name} failed to start. Recent log:");
     print_tail(log_file, 120);
-    bail!("{name} 启动失败");
+    bail!("{name} failed to start");
 }
 
 fn stop_process(name: &str, pid_file: &Path) -> Result<()> {
     if !pid_file.is_file() {
-        println!("ℹ️ {name} 未运行。");
+        println!("{name} is not running.");
         return Ok(());
     }
 
     let Some(pid) = read_pid(pid_file) else {
-        println!("ℹ️ {name} 的 PID 文件无效，已清理。");
+        println!("{name} has an invalid PID file; removing it.");
         fs::remove_file(pid_file)?;
         return Ok(());
     };
 
     if pid_is_alive(pid) {
         terminate_pid(pid)?;
-        println!("✅ 已停止 {name}，PID: {pid}");
+        println!("Stopped {name}. PID: {pid}");
     } else {
-        println!("ℹ️ {name} 的 PID 文件已过期，已清理。");
+        println!("{name} PID file is stale; removing it.");
     }
     fs::remove_file(pid_file)?;
     Ok(())
@@ -1368,7 +3257,7 @@ async fn wait_for_model_routing_ready(attempts: usize, delay: Duration) -> bool 
             return true;
         }
         if payload.contains("\"status\":\"error\"") {
-            println!("❌ 模型路由初始化失败：{payload}");
+            println!("Model routing initialization failed: {payload}");
             return false;
         }
         tokio::time::sleep(delay).await;
@@ -1421,6 +3310,44 @@ fn run_status(command: &mut Command, description: &str) -> Result<()> {
     Ok(())
 }
 
+fn run_status_filtering_shortcuts_warnings(command: &mut Command, description: &str) -> Result<()> {
+    let output = command_output(command).with_context(|| format!("failed to run {description}"))?;
+    print_command_streams(
+        &output.stdout,
+        &filter_known_shortcuts_warnings(&output.stderr),
+    );
+    if !output.status_success {
+        bail!("{description} failed");
+    }
+    Ok(())
+}
+
+fn print_command_streams(stdout: &str, stderr: &str) {
+    if !stdout.is_empty() {
+        print!("{stdout}");
+        if !stdout.ends_with('\n') {
+            println!();
+        }
+    }
+    if !stderr.is_empty() {
+        eprint!("{stderr}");
+        if !stderr.ends_with('\n') {
+            eprintln!();
+        }
+    }
+}
+
+fn filter_known_shortcuts_warnings(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|line| {
+            !(line.contains("Unrecognized attribute string flag '?'")
+                && line.contains("property debugDescription"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[derive(Debug)]
 struct CommandOutput {
     status_success: bool,
@@ -1466,16 +3393,16 @@ fn report_agent_browser_status() {
             .status()
             .is_ok_and(|status| status.success())
         {
-            println!("ℹ️ 已检测到 Homebrew 安装的 agent-browser CLI。");
+            println!("agent-browser: installed through Homebrew.");
             return;
         }
     }
 
     if command_path("agent-browser").is_some() {
-        println!("ℹ️ 已检测到 agent-browser CLI。项目推荐优先使用 Homebrew 安装：brew install agent-browser");
+        println!("agent-browser: found on PATH. Homebrew install is preferred: brew install agent-browser");
     } else {
-        println!("ℹ️ 未检测到 agent-browser CLI。若要启用按需知乎研究，优先执行：brew install agent-browser");
-        println!("   如机器上没有可复用的 Chrome / Chromium，再执行：agent-browser install");
+        println!("agent-browser: not found. Optional install: brew install agent-browser");
+        println!("If this Mac has no reusable Chrome or Chromium, also run: agent-browser install");
     }
 }
 
@@ -1486,15 +3413,12 @@ fn report_skill_inventory(paths: &RuntimePaths) {
     let vendor_skill_names = skill_names(&vendor_skills_dir);
 
     println!(
-        "ℹ️ 已检测到 {} 个仓库自带 skill（目录：{}）。",
+        "Project skills: {} ({})",
         project_skill_count,
         project_skills_dir.display()
     );
     if !vendor_skill_names.is_empty() {
-        println!(
-            "ℹ️ 已检测到 skills.sh 管理的第三方 skill：{}",
-            vendor_skill_names.join(", ")
-        );
+        println!("Vendor skills: {}", vendor_skill_names.join(", "));
     }
 }
 
@@ -1521,6 +3445,10 @@ fn skill_names(root: &Path) -> Vec<String> {
     names
 }
 
+fn skill_name_set(root: &Path) -> BTreeSet<String> {
+    skill_names(root).into_iter().collect()
+}
+
 fn release_bin_path(paths: &RuntimePaths, name: &str) -> PathBuf {
     let mut bin = paths.repo_root.join("target").join("release").join(name);
     if cfg!(windows) {
@@ -1533,7 +3461,7 @@ fn ensure_macos(feature: &str) -> Result<()> {
     if cfg!(target_os = "macos") {
         Ok(())
     } else {
-        bail!("{feature} 仅支持 macOS")
+        bail!("{feature} is only supported on macOS")
     }
 }
 
@@ -1696,6 +3624,66 @@ mod tests {
     }
 
     #[test]
+    fn replace_toml_section_appends_missing_section() {
+        let raw = "[webhook]\nsecret = \"x\"\n";
+        let updated = replace_toml_section(
+            raw,
+            "[memory_integrations.mempalace]",
+            "[memory_integrations.mempalace]\nenabled = true\n",
+        );
+
+        assert!(updated.contains("[webhook]\nsecret = \"x\""));
+        assert!(updated.contains("[memory_integrations.mempalace]\nenabled = true"));
+    }
+
+    #[test]
+    fn replace_toml_section_replaces_existing_section() {
+        let raw = "[webhook]\nsecret = \"x\"\n\n[memory_integrations.mempalace]\nenabled = false\npython = \"old\"\n\n[browser_bridge]\nenabled = true\n";
+        let updated = replace_toml_section(
+            raw,
+            "[memory_integrations.mempalace]",
+            "[memory_integrations.mempalace]\nenabled = true\n",
+        );
+
+        assert!(updated.contains("[memory_integrations.mempalace]\nenabled = true\n"));
+        assert!(!updated.contains("python = \"old\""));
+        assert!(updated.contains("[browser_bridge]\nenabled = true"));
+    }
+
+    #[test]
+    fn toml_string_array_value_reads_imessage_allowed_contacts() {
+        let root = unique_test_dir("toml-string-array");
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("local.toml");
+        fs::write(
+            &config_path,
+            r#"
+[imessage]
+allowed_contacts = [" +8618672954807 ", "user@example.com"]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            toml_string_array_value(&config_path, "imessage", "allowed_contacts").unwrap(),
+            vec!["+8618672954807".to_string(), "user@example.com".to_string()]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn filter_known_shortcuts_warnings_removes_debug_description_noise_only() {
+        let raw = concat!(
+            "ERROR: Unrecognized attribute string flag '?' in attribute string ",
+            "\"T@\\\"NSString\\\",?,R,C\" for property debugDescription\n",
+            "real error\n"
+        );
+
+        assert_eq!(filter_known_shortcuts_warnings(raw), "real error");
+    }
+
+    #[test]
     fn sync_runtime_skills_copies_and_marks_sources() {
         let root = unique_test_dir("sync_runtime_skills_copies");
         let paths = RuntimePaths {
@@ -1764,9 +3752,69 @@ mod tests {
         let error = sync_runtime_skills_with_sources(&paths, &project, &vendor)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("同名 skill 冲突"));
+        assert!(error.contains("duplicate skill name detected"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn install_mempalace_vendor_skill_writes_thin_adapter_skill() {
+        let root = unique_test_dir("install_mempalace_vendor_skill");
+        let paths = RuntimePaths {
+            repo_root: root.join("repo"),
+            runtime_dir: root.join("runtime"),
+        };
+        fs::create_dir_all(&paths.repo_root).unwrap();
+
+        let skill_dir = install_mempalace_vendor_skill(&paths).unwrap();
+        let skill = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+
+        assert!(skill.contains("name: mempalace"));
+        assert!(skill.contains("mempalace instructions <command>"));
+        assert!(skill.contains("project skill mempalace-memory"));
+        assert!(skill.contains("mempalace-venv/bin/python"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_skill_status_reports_synced_and_stale_states() {
+        let project = BTreeSet::from(["mempalace-memory".to_string()]);
+        let vendor = BTreeSet::from(["mempalace".to_string()]);
+        let synced = BTreeSet::from(["mempalace-memory".to_string(), "mempalace".to_string()]);
+        let stale = BTreeSet::from(["mempalace-memory".to_string(), "old".to_string()]);
+
+        assert_eq!(
+            runtime_skill_status(&project, &vendor, &synced),
+            "synced (2 skills)"
+        );
+        assert_eq!(
+            runtime_skill_status(&project, &vendor, &stale),
+            "WARN stale (missing: mempalace; extra: old)"
+        );
+    }
+
+    #[test]
+    fn render_davis_launchd_plist_uses_davis_runtime_config() {
+        let spec = DavisServiceSpec {
+            label: davis_service_label().to_string(),
+            repo_root: PathBuf::from("/tmp/Davis ZeroClaw"),
+            runtime_dir: PathBuf::from("/tmp/Davis ZeroClaw/.runtime/davis"),
+            zeroclaw_bin: PathBuf::from("/opt/homebrew/bin/zeroclaw"),
+            proxy_bin: PathBuf::from("/tmp/Davis ZeroClaw/target/release/davis-local-proxy"),
+            stdout_path: PathBuf::from("/tmp/Davis ZeroClaw/.runtime/davis/stdout.log"),
+            stderr_path: PathBuf::from("/tmp/Davis ZeroClaw/.runtime/davis/stderr.log"),
+            path_env: "/opt/homebrew/bin:/usr/local/bin".to_string(),
+        };
+
+        let plist = render_davis_launchd_plist(&spec);
+        assert!(plist.contains("<string>com.daviszeroclaw.zeroclaw</string>"));
+        assert!(
+            plist.contains("daemon --config-dir &apos;/tmp/Davis ZeroClaw/.runtime/davis&apos;")
+        );
+        assert!(plist.contains("<key>ZEROCLAW_CONFIG_DIR</key>"));
+        assert!(plist.contains("<key>DAVIS_REPO_ROOT</key>"));
+        assert!(!plist.contains("/opt/homebrew/var/zeroclaw"));
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
