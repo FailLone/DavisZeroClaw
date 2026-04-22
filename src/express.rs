@@ -11,6 +11,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 const EXPRESS_CACHE_TTL_SECS: i64 = 600;
+// If this grows beyond ~3 entries, swap the join_all fan-out in
+// express_auth_status / express_packages for buffer_unordered(N) to cap
+// concurrent Chromium attaches against the crawl4ai adapter.
 const EXPRESS_SOURCES: [&str; 2] = ["ali", "jd"];
 const EXPRESS_PAYLOAD_ATTR: &str = "data-davis-express-payload=\"";
 
@@ -22,7 +25,7 @@ pub async fn express_auth_status(
     // Fan out per-source fetches concurrently. Each future acquires its own
     // per-profile lock *inside* the async block so contention is scoped to
     // same-profile calls; different sources proceed in parallel.
-    let futures = EXPRESS_SOURCES.iter().map(|source| {
+    let source_futures = EXPRESS_SOURCES.iter().map(|source| {
         let paths = paths.clone();
         let cfg = crawl4ai_config.clone();
         let locks = profile_locks.clone();
@@ -31,7 +34,7 @@ pub async fn express_auth_status(
             fetch_source_status(&paths, &cfg, lock, source).await
         }
     });
-    let sources: Vec<_> = join_all(futures).await;
+    let sources: Vec<_> = join_all(source_futures).await;
     ExpressAuthStatusResponse {
         status: aggregate_status_from_statuses(&sources),
         checked_at: isoformat(now_utc()),
