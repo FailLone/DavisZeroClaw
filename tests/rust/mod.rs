@@ -1,4 +1,5 @@
 mod control;
+mod crawl4ai;
 mod express;
 mod fixtures;
 mod routes;

@@ -2,9 +2,10 @@ use crate::{Crawl4aiConfig, Crawl4aiTransport, RuntimePaths, USER_AGENT};
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::io::Write;
-use std::process::{Command, Stdio};
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 #[derive(Debug, Clone)]
 pub struct Crawl4aiPageRequest {
@@ -59,7 +60,7 @@ pub async fn crawl4ai_crawl(
 
     let result = match config.transport {
         Crawl4aiTransport::Server => crawl_via_server(paths, config, request).await,
-        Crawl4aiTransport::Python => crawl_via_python(paths, config, request),
+        Crawl4aiTransport::Python => crawl_via_python(paths, config, request).await,
     };
     match &result {
         Ok(page) => tracing::info!(
@@ -147,7 +148,7 @@ async fn crawl_via_server(
     Ok(parse_result_value(result))
 }
 
-fn crawl_via_python(
+async fn crawl_via_python(
     paths: &RuntimePaths,
     config: &Crawl4aiConfig,
     request: Crawl4aiPageRequest,
@@ -167,6 +168,8 @@ fn crawl_via_python(
         "remove_overlay_elements": config.remove_overlay_elements,
         "enable_stealth": config.enable_stealth,
     });
+    let raw = serde_json::to_vec(&payload)
+        .map_err(|err| format!("serialize crawl4ai adapter payload: {err}"))?;
 
     let mut child = Command::new(&python)
         .arg("-m")
@@ -176,23 +179,33 @@ fn crawl_via_python(
         .arg(paths.runtime_dir.display().to_string())
         .current_dir(&paths.repo_root)
         .env("PYTHONPATH", paths.repo_root.display().to_string())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|err| format!("spawn crawl4ai_adapter crawl: {err}"))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        let raw = serde_json::to_vec(&payload)
-            .map_err(|err| format!("serialize crawl4ai adapter payload: {err}"))?;
         stdin
             .write_all(&raw)
+            .await
             .map_err(|err| format!("write crawl4ai adapter payload: {err}"))?;
+        drop(stdin);
     }
 
-    let output = child
-        .wait_with_output()
-        .map_err(|err| format!("wait for crawl4ai_adapter crawl: {err}"))?;
+    let budget = Duration::from_secs(config.timeout_secs.saturating_add(30));
+    let output = match timeout(budget, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(err)) => return Err(format!("wait for crawl4ai_adapter crawl: {err}")),
+        Err(_) => {
+            return Err(format!(
+                "crawl4ai adapter subprocess timed out after {}s",
+                budget.as_secs()
+            ));
+        }
+    };
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(format!("crawl4ai adapter failed: {stderr}"));
