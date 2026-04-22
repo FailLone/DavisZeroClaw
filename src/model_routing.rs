@@ -96,9 +96,46 @@ pub fn render_runtime_config(paths: &RuntimePaths, config: &LocalConfig) -> Resu
         );
 
     std::fs::create_dir_all(&paths.runtime_dir)?;
-    std::fs::write(paths.runtime_config_path(), rendered)?;
+    let runtime_path = paths.runtime_config_path();
+    std::fs::write(&runtime_path, rendered)?;
+    restrict_secret_file_permissions(&runtime_path);
     Ok(())
 }
+
+/// Tighten file mode to 0600 on Unix. Rendered runtime config contains API
+/// keys and the HA token, so world/group-readable bits are never needed.
+/// Silent on failure — best-effort hardening, not a correctness gate.
+#[cfg(unix)]
+fn restrict_secret_file_permissions(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_secret_file_permissions(_path: &std::path::Path) {}
+
+/// Emit a warning on stderr when a file containing secrets is world- or
+/// group-readable. Soft check — we never bail, so first-time onboarding
+/// (where `cp local.example.toml local.toml` inherits umask 0644) still works.
+#[cfg(unix)]
+pub fn warn_if_secret_file_is_loose(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        eprintln!(
+            "warning: {} is mode {:o}; contains secrets — run `chmod 600 {}`",
+            path.display(),
+            mode,
+            path.display()
+        );
+    }
+}
+
+#[cfg(not(unix))]
+pub fn warn_if_secret_file_is_loose(_path: &std::path::Path) {}
 
 // ── Environment variables ────────────────────────────────────────────
 
@@ -207,17 +244,19 @@ fn find_model_for_provider(config: &LocalConfig, provider_name: &str) -> String 
 }
 
 fn render_model_routes(config: &LocalConfig) -> String {
+    // NOTE: do NOT emit `api_key` here. ZeroClaw resolves credentials from
+    // [providers.models.<id>].api_key (rendered by render_providers_config).
+    // Inlining keys per-route duplicates the secret N times on disk.
     let mut blocks = Vec::new();
     for profile in RoutingProfile::all() {
         let pc = profile.profile_config(config);
         if let Some(provider) = config.providers.iter().find(|p| p.name == pc.provider) {
             let provider_id = zeroclaw_provider_id(provider);
             blocks.push(format!(
-                "[[providers.model_routes]]\nhint = \"{}\"\nprovider = \"{}\"\nmodel = \"{}\"\napi_key = \"{}\"\n",
+                "[[providers.model_routes]]\nhint = \"{}\"\nprovider = \"{}\"\nmodel = \"{}\"\n",
                 profile.as_str(),
                 toml_escape(&provider_id),
                 toml_escape(&pc.model),
-                toml_escape(&provider.api_key)
             ));
         }
     }
@@ -491,6 +530,19 @@ max_fallbacks = 1
         assert!(
             rendered.contains("hint = \"structured_lookup\"\nprovider = \"openrouter\"\nmodel = \"openai/gpt-4o\""),
             "structured_lookup route should use openai/gpt-4o, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn render_model_routes_does_not_inline_api_key() {
+        let rendered = render_model_routes(&sample_config());
+        assert!(
+            !rendered.contains("api_key"),
+            "model_routes must not inline api_key; credentials belong to [providers.models.<id>]. Got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("test-key"),
+            "model_routes must not leak provider secrets into per-route entries. Got:\n{rendered}"
         );
     }
 

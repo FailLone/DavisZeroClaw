@@ -289,6 +289,7 @@ impl Default for ArticleMemoryNormalizeConfig {
 
 pub fn load_local_config(paths: &RuntimePaths) -> Result<LocalConfig> {
     let path = paths.local_config_path();
+    crate::model_routing::warn_if_secret_file_is_loose(&path);
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("local config not found: {}", path.display()))?;
     let config: LocalConfig = toml::from_str(&raw)
