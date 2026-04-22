@@ -90,7 +90,7 @@ pub use models::{
 };
 pub use observability::init_tracing;
 pub use runtime_paths::RuntimePaths;
-pub use server::{build_app, build_shortcut_bridge_app, AppState};
+pub use server::{build_app, build_shortcut_bridge_app, AppState, Crawl4aiProfileLocks};
 pub use support::{build_issue, isoformat, normalize_text};
 
 pub(crate) use constants::{CONTROL_DOMAINS, ROOM_LIGHT_KEYWORDS};

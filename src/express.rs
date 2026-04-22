@@ -1,11 +1,13 @@
 use crate::{
     build_issue, crawl4ai_crawl, isoformat, normalize_text, now_utc, Crawl4aiConfig,
-    Crawl4aiPageRequest, ExpressAuthStatusResponse, ExpressPackage, ExpressPackagesResponse,
-    ExpressSourceSnapshot, ExpressSourceStatus, RuntimePaths,
+    Crawl4aiPageRequest, Crawl4aiProfileLocks, ExpressAuthStatusResponse, ExpressPackage,
+    ExpressPackagesResponse, ExpressSourceSnapshot, ExpressSourceStatus, RuntimePaths,
 };
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 const EXPRESS_CACHE_TTL_SECS: i64 = 600;
 const EXPRESS_SOURCES: [&str; 2] = ["ali", "jd"];
@@ -14,10 +16,12 @@ const EXPRESS_PAYLOAD_ATTR: &str = "data-davis-express-payload=\"";
 pub async fn express_auth_status(
     paths: RuntimePaths,
     crawl4ai_config: Crawl4aiConfig,
+    profile_locks: Crawl4aiProfileLocks,
 ) -> ExpressAuthStatusResponse {
     let mut sources = Vec::new();
     for source in EXPRESS_SOURCES {
-        sources.push(fetch_source_status(&paths, &crawl4ai_config, source).await);
+        let lock = acquire_profile_lock(&profile_locks, &express_profile_name(source)).await;
+        sources.push(fetch_source_status(&paths, &crawl4ai_config, lock, source).await);
     }
     ExpressAuthStatusResponse {
         status: aggregate_status_from_statuses(&sources),
@@ -29,14 +33,24 @@ pub async fn express_auth_status(
 pub async fn express_packages(
     paths: RuntimePaths,
     crawl4ai_config: Crawl4aiConfig,
+    profile_locks: Crawl4aiProfileLocks,
     source: Option<String>,
     query: Option<String>,
     force_refresh: bool,
 ) -> ExpressPackagesResponse {
     let mut snapshots = Vec::new();
     for selected_source in select_sources(source.as_deref()) {
+        let lock =
+            acquire_profile_lock(&profile_locks, &express_profile_name(selected_source)).await;
         snapshots.push(
-            load_or_fetch_source(&paths, &crawl4ai_config, selected_source, force_refresh).await,
+            load_or_fetch_source(
+                &paths,
+                &crawl4ai_config,
+                lock,
+                selected_source,
+                force_refresh,
+            )
+            .await,
         );
     }
 
@@ -92,6 +106,7 @@ fn select_sources(source: Option<&str>) -> Vec<&'static str> {
 async fn load_or_fetch_source(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
+    profile_lock: Arc<Mutex<()>>,
     source: &str,
     force_refresh: bool,
 ) -> ExpressSourceSnapshot {
@@ -104,7 +119,7 @@ async fn load_or_fetch_source(
             }
         }
     }
-    let snapshot = fetch_source_snapshot(paths, crawl4ai_config, source).await;
+    let snapshot = fetch_source_snapshot(paths, crawl4ai_config, profile_lock, source).await;
     let _ = write_cache(paths.express_cache_path(source), &snapshot);
     snapshot
 }
@@ -112,9 +127,18 @@ async fn load_or_fetch_source(
 async fn fetch_source_status(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
+    profile_lock: Arc<Mutex<()>>,
     source: &str,
 ) -> ExpressSourceStatus {
-    match crawl_source_payload(paths, crawl4ai_config, source, auth_script(source)).await {
+    match crawl_source_payload(
+        paths,
+        crawl4ai_config,
+        profile_lock,
+        source,
+        auth_script(source),
+    )
+    .await
+    {
         Ok(payload) => parse_source_status(source, &payload, None, None),
         Err(message) => {
             source_error_snapshot(source, "upstream_error", "crawl4ai_unavailable", message)
@@ -126,9 +150,18 @@ async fn fetch_source_status(
 async fn fetch_source_snapshot(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
+    profile_lock: Arc<Mutex<()>>,
     source: &str,
 ) -> ExpressSourceSnapshot {
-    match crawl_source_payload(paths, crawl4ai_config, source, packages_script(source)).await {
+    match crawl_source_payload(
+        paths,
+        crawl4ai_config,
+        profile_lock,
+        source,
+        packages_script(source),
+    )
+    .await
+    {
         Ok(payload) => {
             parse_snapshot_payload(source, &payload, None, None).unwrap_or_else(|message| {
                 source_error_snapshot(source, "upstream_error", "site_changed", message)
@@ -175,9 +208,14 @@ fn packages_script(source: &str) -> String {
 async fn crawl_source_payload(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
+    profile_lock: Arc<Mutex<()>>,
     source: &str,
     script: String,
 ) -> Result<Value, String> {
+    // Serialize concurrent fetches against the same Chromium user_data_dir;
+    // two attaches on one profile race on `SingletonLock` and the second
+    // fails opaquely. Guard is released when this function returns.
+    let _guard = profile_lock.lock().await;
     let response = crawl4ai_crawl(
         paths,
         crawl4ai_config,
@@ -202,6 +240,16 @@ async fn crawl_source_payload(
             "failed to parse crawl4ai payload for {source}: {message}. 请确认 `daviszeroclaw crawl profile login express-{source}` 已完成并且订单页结构未变化。"
         )
     })
+}
+
+async fn acquire_profile_lock(
+    profile_locks: &Crawl4aiProfileLocks,
+    profile: &str,
+) -> Arc<Mutex<()>> {
+    let mut map = profile_locks.lock().await;
+    map.entry(profile.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
 }
 
 fn express_profile_name(source: &str) -> String {

@@ -22,6 +22,7 @@ use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -46,6 +47,13 @@ struct AuditIssueResponse {
     issue: crate::Issue,
 }
 
+/// Per-profile async mutex map. Each Crawl4AI Chromium profile (keyed by
+/// `express-{source}`) gets its own `Arc<Mutex<()>>`; callers hold the guard
+/// for the duration of the `crawl4ai_crawl` call so two requests never attach
+/// the same `user_data_dir` concurrently (Chromium's `SingletonLock` would
+/// otherwise fail the second attach).
+pub type Crawl4aiProfileLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub client: HaClient,
@@ -53,6 +61,7 @@ pub struct AppState {
     pub paths: RuntimePaths,
     pub control_config: Arc<ControlConfig>,
     pub crawl4ai_config: Arc<Crawl4aiConfig>,
+    pub crawl4ai_profile_locks: Crawl4aiProfileLocks,
     pub article_memory_config: Arc<ArticleMemoryConfig>,
     pub providers: Arc<Vec<ModelProviderConfig>>,
     pub shortcut_secret: String,
@@ -75,10 +84,22 @@ impl AppState {
             paths,
             control_config,
             crawl4ai_config,
+            crawl4ai_profile_locks: Arc::new(Mutex::new(HashMap::new())),
             article_memory_config,
             providers,
             shortcut_secret,
         }
+    }
+
+    /// Return the per-profile lock for `profile`, creating it lazily on first
+    /// access. Callers must `.lock().await` the returned `Arc<Mutex<()>>`
+    /// before dispatching to `crawl4ai_crawl` to serialize access to the
+    /// underlying Chromium `user_data_dir`.
+    pub async fn crawl4ai_profile_lock(&self, profile: &str) -> Arc<Mutex<()>> {
+        let mut map = self.crawl4ai_profile_locks.lock().await;
+        map.entry(profile.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 }
 
@@ -492,7 +513,12 @@ async fn zeroclaw_runtime_traces(
 async fn express_auth_status_handler(State(state): State<AppState>) -> Json<Value> {
     Json(
         serde_json::to_value(
-            express_auth_status(state.paths.clone(), (*state.crawl4ai_config).clone()).await,
+            express_auth_status(
+                state.paths.clone(),
+                (*state.crawl4ai_config).clone(),
+                state.crawl4ai_profile_locks.clone(),
+            )
+            .await,
         )
         .unwrap_or_else(|_| json!({"status":"upstream_error","sources":[] })),
     )
@@ -513,6 +539,7 @@ async fn express_packages_handler(
             express_packages(
                 state.paths.clone(),
                 (*state.crawl4ai_config).clone(),
+                state.crawl4ai_profile_locks.clone(),
                 source,
                 query,
                 force_refresh,
@@ -537,6 +564,7 @@ async fn express_search_handler(
             express_packages(
                 state.paths.clone(),
                 (*state.crawl4ai_config).clone(),
+                state.crawl4ai_profile_locks.clone(),
                 source,
                 query,
                 false,

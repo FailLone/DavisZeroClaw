@@ -1,6 +1,9 @@
 use crate::{express_auth_status, express_packages, Crawl4aiConfig, RuntimePaths};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CrawlSourceDefinition {
@@ -68,15 +71,21 @@ pub async fn run_builtin_crawl_source(
     query: Option<String>,
     refresh: bool,
 ) -> Result<Value, String> {
+    // CLI path: each invocation is single-shot, so a fresh per-invocation
+    // lock map is fine. Daemon path threads the AppState-owned map instead.
+    let profile_locks = Arc::new(Mutex::new(HashMap::new()));
     match source_id {
-        "express-auth" => serialize_response(express_auth_status(paths, crawl4ai_config).await),
-        "express-packages" => {
-            serialize_response(express_packages(paths, crawl4ai_config, None, query, refresh).await)
+        "express-auth" => {
+            serialize_response(express_auth_status(paths, crawl4ai_config, profile_locks).await)
         }
+        "express-packages" => serialize_response(
+            express_packages(paths, crawl4ai_config, profile_locks, None, query, refresh).await,
+        ),
         "express-ali-packages" => serialize_response(
             express_packages(
                 paths,
                 crawl4ai_config,
+                profile_locks,
                 Some("ali".to_string()),
                 query,
                 refresh,
@@ -87,6 +96,7 @@ pub async fn run_builtin_crawl_source(
             express_packages(
                 paths,
                 crawl4ai_config,
+                profile_locks,
                 Some("jd".to_string()),
                 query,
                 refresh,
