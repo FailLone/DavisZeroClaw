@@ -30,3 +30,12 @@ toml = "0.8"
 toml_edit = "0.22"
 url = "2"
 urlencoding = "2"
+
+# Release profile hardening for the launchd daemon binary.
+# lto="thin"        — 15-25% smaller binary, faster startup
+# codegen-units=1   — ~5-10% runtime perf at the cost of slower compile
+# strip="symbols"   — cuts binary size roughly in half; no in-process debuggers
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

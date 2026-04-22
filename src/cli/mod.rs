@@ -527,8 +527,10 @@ mod mempalace;
 use mempalace::*;
 
 mod skills;
-pub use skills::{sync_runtime_skills, sync_runtime_sops, sync_workspace_files, sanitize_markdown_script_links};
 use skills::*;
+pub use skills::{
+    sanitize_markdown_script_links, sync_runtime_skills, sync_runtime_sops, sync_workspace_files,
+};
 
 mod shortcut;
 pub use shortcut::customize_shortcut_json;
@@ -637,7 +639,8 @@ mod tests {
     #[test]
     fn upsert_mcp_server_entry_appends_when_absent() {
         let raw = "[webhook]\nsecret = \"x\"\n";
-        let entry = "[[mcp.servers]]\nname = \"mempalace\"\ntransport = \"stdio\"\ncommand = \"/p/py\"\n";
+        let entry =
+            "[[mcp.servers]]\nname = \"mempalace\"\ntransport = \"stdio\"\ncommand = \"/p/py\"\n";
         let updated = super::mempalace::upsert_mcp_server_entry(raw, "mempalace", entry);
 
         assert!(updated.contains("[webhook]\nsecret = \"x\""));
@@ -661,7 +664,8 @@ command = \"/old/py\"
 [crawl4ai]
 enabled = true
 ";
-        let entry = "[[mcp.servers]]\nname = \"mempalace\"\ntransport = \"stdio\"\ncommand = \"/new/py\"\n";
+        let entry =
+            "[[mcp.servers]]\nname = \"mempalace\"\ntransport = \"stdio\"\ncommand = \"/new/py\"\n";
         let updated = super::mempalace::upsert_mcp_server_entry(raw, "mempalace", entry);
 
         // The filesystem block is untouched.
@@ -682,7 +686,8 @@ name = \"filesystem\"
 transport = \"stdio\"
 command = \"/fs/bin\"
 ";
-        let entry = "[[mcp.servers]]\nname = \"mempalace\"\ntransport = \"stdio\"\ncommand = \"/p/py\"\n";
+        let entry =
+            "[[mcp.servers]]\nname = \"mempalace\"\ntransport = \"stdio\"\ncommand = \"/p/py\"\n";
         let updated = super::mempalace::upsert_mcp_server_entry(raw, "mempalace", entry);
 
         assert!(updated.contains("name = \"filesystem\""));

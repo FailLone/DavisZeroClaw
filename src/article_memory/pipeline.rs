@@ -103,7 +103,6 @@ pub async fn judge_all_article_value_memory(
     Ok(reports)
 }
 
-
 pub async fn normalize_article_memory(
     paths: &RuntimePaths,
     config: Option<&ResolvedArticleNormalizeConfig>,

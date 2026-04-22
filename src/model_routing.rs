@@ -113,8 +113,7 @@ fn validate_rendered(rendered: &str) -> Result<()> {
             "rendered runtime config still contains a __DAVIS_ sentinel: {line:?}"
         ));
     }
-    toml::from_str::<toml::Value>(rendered)
-        .context("rendered runtime config is not valid TOML")?;
+    toml::from_str::<toml::Value>(rendered).context("rendered runtime config is not valid TOML")?;
     Ok(())
 }
 
@@ -366,7 +365,10 @@ fn patch_mcp_servers(doc: &mut DocumentMut, config: &LocalConfig) {
         Some(Item::ArrayOfTables(a)) => a,
         _ => {
             mcp["servers"] = Item::ArrayOfTables(ArrayOfTables::new());
-            mcp.get_mut("servers").unwrap().as_array_of_tables_mut().unwrap()
+            mcp.get_mut("servers")
+                .unwrap()
+                .as_array_of_tables_mut()
+                .unwrap()
         }
     };
     for server in &config.mcp.servers {
@@ -586,8 +588,8 @@ enabled = true
     #[test]
     fn render_runtime_config_str_is_valid_toml() {
         let rendered = render_with_test_template(&sample_config());
-        let parsed: toml::Value = toml::from_str(&rendered)
-            .expect("rendered output must be valid TOML");
+        let parsed: toml::Value =
+            toml::from_str(&rendered).expect("rendered output must be valid TOML");
         assert!(parsed.get("providers").is_some());
         assert!(parsed.get("query_classification").is_some());
     }
@@ -655,7 +657,10 @@ enabled = true
                 .map(|a| a.iter().any(|x| x.as_str() == Some("deepseek-chat")))
                 .unwrap_or(false)
         });
-        assert!(any_has_deepseek, "cross-provider fallback missing: {fallbacks:?}");
+        assert!(
+            any_has_deepseek,
+            "cross-provider fallback missing: {fallbacks:?}"
+        );
     }
 
     #[test]
@@ -738,7 +743,10 @@ legacy_field = "__DAVIS_UNPATCHED__"
         let priorities: Vec<i32> = merged.iter().map(|r| r.priority).collect();
         let mut expected = priorities.clone();
         expected.sort_by(|a, b| b.cmp(a));
-        assert_eq!(priorities, expected, "rules must be sorted descending by priority");
+        assert_eq!(
+            priorities, expected,
+            "rules must be sorted descending by priority"
+        );
 
         // User's custom_top outranks everything.
         assert_eq!(merged.first().unwrap().hint, "custom_top");
@@ -886,7 +894,10 @@ legacy_field = "__DAVIS_UNPATCHED__"
                 priority: 25,
             });
         let rendered = render_with_test_template(&config);
-        assert!(rendered.contains("开一下"), "override keyword missing:\n{rendered}");
+        assert!(
+            rendered.contains("开一下"),
+            "override keyword missing:\n{rendered}"
+        );
     }
 
     #[test]

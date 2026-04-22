@@ -7,8 +7,8 @@ use crate::{
     resolve_article_normalize_config, resolve_article_value_config, resolve_control_target,
     resolve_entity_payload, search_article_memory, upsert_article_memory_embedding,
     ArticleMemoryAddRequest, ArticleMemoryConfig, ControlAction, ControlConfig, Crawl4aiConfig,
-    ExecuteControlRequest, FailureReason, HaClient, HaMcpClient, ModelProviderConfig,
-    ProxyError, RuntimePaths,
+    ExecuteControlRequest, FailureReason, HaClient, HaMcpClient, ModelProviderConfig, ProxyError,
+    RuntimePaths,
 };
 use axum::body::Bytes;
 use axum::extract::{Query, State};

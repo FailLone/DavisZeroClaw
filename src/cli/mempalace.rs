@@ -172,9 +172,7 @@ fn run_mempalace_health_checks(
     Ok(())
 }
 
-pub(super) fn find_mempalace_server(
-    servers: &[McpServerConfig],
-) -> Option<&McpServerConfig> {
+pub(super) fn find_mempalace_server(servers: &[McpServerConfig]) -> Option<&McpServerConfig> {
     servers.iter().find(|s| s.name == MEMPALACE_SERVER_NAME)
 }
 
@@ -250,9 +248,7 @@ pub(super) fn upsert_mcp_server_entry(raw: &str, server_name: &str, entry: &str)
         }
     }
 
-    if let Some((start, end, _)) =
-        blocks.into_iter().find(|(_, _, name)| name == server_name)
-    {
+    if let Some((start, end, _)) = blocks.into_iter().find(|(_, _, name)| name == server_name) {
         let mut output = String::new();
         for line in &lines[..start] {
             output.push_str(line);
@@ -466,4 +462,3 @@ finally:
     except subprocess.TimeoutExpired:
         proc.kill()
 "#;
-

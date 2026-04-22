@@ -1,12 +1,12 @@
 use super::*;
 use crate::{
-    add_article_memory, check_article_cleaning, check_article_memory,
+    add_article_memory, check_article_cleaning, check_article_memory, check_local_config,
     hybrid_search_article_memory, init_article_memory, judge_all_article_value_memory,
     judge_article_value_memory, list_article_clean_reports, list_article_memory,
     list_article_value_reports, normalize_all_article_memory, normalize_article_memory,
     rebuild_article_memory_embeddings, replay_article_cleaning, resolve_article_embedding_config,
     resolve_article_normalize_config, resolve_article_value_config, search_article_memory,
-    upsert_article_memory_embedding, check_local_config, ArticleMemoryAddRequest, RuntimePaths,
+    upsert_article_memory_embedding, ArticleMemoryAddRequest, RuntimePaths,
 };
 use anyhow::{anyhow, bail, Result};
 use std::fs;

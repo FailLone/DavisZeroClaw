@@ -173,7 +173,11 @@ pub(super) fn toml_string_value(path: &Path, section: &str, key: &str) -> Option
     value.get(key)?.as_str().map(ToString::to_string)
 }
 
-pub(super) fn toml_string_array_value(path: &Path, section: &str, key: &str) -> Option<Vec<String>> {
+pub(super) fn toml_string_array_value(
+    path: &Path,
+    section: &str,
+    key: &str,
+) -> Option<Vec<String>> {
     let raw = fs::read_to_string(path).ok()?;
     let parsed: toml::Value = raw.parse().ok()?;
     let mut value = &parsed;
@@ -635,4 +639,3 @@ pub(super) fn sqlite_rows(sqlite3: &Path, db: &Path, query: &str) -> Result<Vec<
         .map(|line| line.split('\t').map(ToString::to_string).collect())
         .collect())
 }
-

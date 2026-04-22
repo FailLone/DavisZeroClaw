@@ -1,6 +1,6 @@
-use super::types::*;
 use super::cleaning_internals::truncate_chars;
-use super::{ARTICLE_MEMORY_INDEX_VERSION, ARTICLE_MEMORY_EMBEDDINGS_VERSION};
+use super::types::*;
+use super::{ARTICLE_MEMORY_EMBEDDINGS_VERSION, ARTICLE_MEMORY_INDEX_VERSION};
 use crate::RuntimePaths;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
@@ -114,7 +114,10 @@ pub(super) fn write_index(paths: &RuntimePaths, index: &ArticleMemoryIndex) -> R
     Ok(())
 }
 
-pub(super) fn write_embedding_index(paths: &RuntimePaths, index: &ArticleMemoryEmbeddingIndex) -> Result<()> {
+pub(super) fn write_embedding_index(
+    paths: &RuntimePaths,
+    index: &ArticleMemoryEmbeddingIndex,
+) -> Result<()> {
     ensure_article_memory_dirs(paths)?;
     let index_path = paths.article_memory_embeddings_path();
     let parent = index_path
@@ -149,7 +152,10 @@ pub(super) fn build_missing_status(paths: &RuntimePaths) -> ArticleMemoryStatusR
     }
 }
 
-pub(super) fn build_error_status(paths: &RuntimePaths, message: String) -> ArticleMemoryStatusResponse {
+pub(super) fn build_error_status(
+    paths: &RuntimePaths,
+    message: String,
+) -> ArticleMemoryStatusResponse {
     ArticleMemoryStatusResponse {
         message: Some(message),
         status: "error".to_string(),
@@ -307,7 +313,10 @@ pub(super) fn compare_hits(a: &ArticleMemorySearchHit, b: &ArticleMemorySearchHi
         .then_with(|| a.id.cmp(&b.id))
 }
 
-pub(super) fn compare_hybrid_hits(a: &ArticleMemorySearchHit, b: &ArticleMemorySearchHit) -> Ordering {
+pub(super) fn compare_hybrid_hits(
+    a: &ArticleMemorySearchHit,
+    b: &ArticleMemorySearchHit,
+) -> Ordering {
     b.combined_score
         .partial_cmp(&a.combined_score)
         .unwrap_or(Ordering::Equal)
@@ -484,7 +493,10 @@ pub(super) fn read_article_text(paths: &RuntimePaths, relative_path: &str) -> Re
         .with_context(|| format!("failed to read article text: {relative_path}"))
 }
 
-pub(super) fn read_article_raw_text(paths: &RuntimePaths, article: &ArticleMemoryRecord) -> Result<String> {
+pub(super) fn read_article_raw_text(
+    paths: &RuntimePaths,
+    article: &ArticleMemoryRecord,
+) -> Result<String> {
     if let Some(raw_path) = &article.raw_path {
         if let Ok(text) = read_article_text(paths, raw_path) {
             return Ok(text);
@@ -584,4 +596,3 @@ pub(super) struct NormalizedArticleText {
     pub(super) removed_lines_sample: Vec<String>,
     pub(super) leftover_noise_candidates: Vec<String>,
 }
-

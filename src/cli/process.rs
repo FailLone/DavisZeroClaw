@@ -3,8 +3,8 @@ use crate::{HaClient, HaMcpClient, HaState, RuntimePaths};
 use anyhow::{anyhow, Context, Result};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::fs::File;
 use std::fs;
+use std::fs::File;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -182,7 +182,10 @@ pub(super) fn run_status(command: &mut Command, description: &str) -> Result<()>
     Ok(())
 }
 
-pub(super) fn run_status_filtering_shortcuts_warnings(command: &mut Command, description: &str) -> Result<()> {
+pub(super) fn run_status_filtering_shortcuts_warnings(
+    command: &mut Command,
+    description: &str,
+) -> Result<()> {
     let output = command_output(command).with_context(|| format!("failed to run {description}"))?;
     print_command_streams(
         &output.stdout,
@@ -425,4 +428,3 @@ impl Drop for CleanupFiles {
         }
     }
 }
-

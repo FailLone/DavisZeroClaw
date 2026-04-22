@@ -374,9 +374,21 @@ fn validate_local_config(mut config: LocalConfig) -> Result<LocalConfig> {
         }
     }
 
-    validate_profile("home_control", &config.routing.profiles.home_control, &config.providers)?;
-    validate_profile("general_qa", &config.routing.profiles.general_qa, &config.providers)?;
-    validate_profile("research", &config.routing.profiles.research, &config.providers)?;
+    validate_profile(
+        "home_control",
+        &config.routing.profiles.home_control,
+        &config.providers,
+    )?;
+    validate_profile(
+        "general_qa",
+        &config.routing.profiles.general_qa,
+        &config.providers,
+    )?;
+    validate_profile(
+        "research",
+        &config.routing.profiles.research,
+        &config.providers,
+    )?;
     validate_profile(
         "structured_lookup",
         &config.routing.profiles.structured_lookup,
@@ -423,10 +435,7 @@ fn validate_mcp_servers(mcp: &mut McpConfig) -> Result<()> {
             return Err(anyhow!("mcp.servers[{index}].name is required"));
         }
         if !seen.insert(server.name.clone()) {
-            return Err(anyhow!(
-                "mcp.servers has a duplicate name: {}",
-                server.name
-            ));
+            return Err(anyhow!("mcp.servers has a duplicate name: {}", server.name));
         }
         match server.transport {
             McpTransport::Stdio => {

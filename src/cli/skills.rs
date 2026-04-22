@@ -124,7 +124,10 @@ pub(super) fn sync_runtime_skills_with_sources(
     Ok(())
 }
 
-pub(super) fn sync_runtime_sops_with_sources(paths: &RuntimePaths, project_sops_dir: &Path) -> Result<()> {
+pub(super) fn sync_runtime_sops_with_sources(
+    paths: &RuntimePaths,
+    project_sops_dir: &Path,
+) -> Result<()> {
     let workspace_dir = paths.workspace_dir();
     let runtime_sops_dir = paths.workspace_sops_dir();
     let staging_dir = workspace_dir.join("sops.staging");
@@ -146,7 +149,11 @@ pub(super) fn sync_runtime_sops_with_sources(paths: &RuntimePaths, project_sops_
     Ok(())
 }
 
-pub(super) fn copy_skill_tree(source_root: &Path, source_label: &str, staging_dir: &Path) -> Result<()> {
+pub(super) fn copy_skill_tree(
+    source_root: &Path,
+    source_label: &str,
+    staging_dir: &Path,
+) -> Result<()> {
     if !source_root.is_dir() {
         return Ok(());
     }
@@ -186,7 +193,11 @@ pub(super) fn copy_skill_tree(source_root: &Path, source_label: &str, staging_di
     Ok(())
 }
 
-pub(super) fn copy_sop_tree(source_root: &Path, source_label: &str, staging_dir: &Path) -> Result<()> {
+pub(super) fn copy_sop_tree(
+    source_root: &Path,
+    source_label: &str,
+    staging_dir: &Path,
+) -> Result<()> {
     if !source_root.is_dir() {
         return Ok(());
     }
@@ -619,9 +630,7 @@ pub(super) fn report_mempalace_mcp_status(paths: &RuntimePaths) {
         }
     };
     let Some(server) = super::mempalace::find_mempalace_server(&config.mcp.servers) else {
-        println!(
-            "MemPalace MCP: WARN not configured (run: daviszeroclaw memory mempalace enable)"
-        );
+        println!("MemPalace MCP: WARN not configured (run: daviszeroclaw memory mempalace enable)");
         return;
     };
     let python = PathBuf::from(&server.command);
@@ -670,4 +679,3 @@ pub(super) fn report_mempalace_mcp_status(paths: &RuntimePaths) {
         Err(error) => println!("MemPalace MCP: WARN check failed ({error})"),
     }
 }
-

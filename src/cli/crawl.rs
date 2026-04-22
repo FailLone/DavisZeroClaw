@@ -380,4 +380,3 @@ pub(super) fn migrate_legacy_crawl4ai_profiles(paths: &RuntimePaths) -> Result<(
     fs::rename(legacy, current)?;
     Ok(())
 }
-
