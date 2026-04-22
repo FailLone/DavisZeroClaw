@@ -509,3 +509,22 @@ fn validate_profile(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod example_config_tests {
+    use super::{validate_local_config, LocalConfig};
+
+    const EXAMPLE_TOML: &str = include_str!("../config/davis/local.example.toml");
+
+    /// Guards against schema drift — if the example still compiles but wouldn't
+    /// pass validation (stale field names, missing required sections, etc.), a
+    /// new user running `cp local.example.toml local.toml` would hit a cryptic
+    /// startup error. Catch it in CI instead.
+    #[test]
+    fn local_example_toml_parses_and_validates() {
+        let parsed: LocalConfig = toml::from_str(EXAMPLE_TOML)
+            .expect("local.example.toml must parse against the current LocalConfig schema");
+        validate_local_config(parsed)
+            .expect("local.example.toml must pass validate_local_config unchanged");
+    }
+}
