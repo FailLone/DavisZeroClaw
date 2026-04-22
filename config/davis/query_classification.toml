@@ -1,0 +1,70 @@
+# Query classification rules.
+#
+# ZeroClaw scans each incoming user message against these rule sets.
+# First hint whose keywords match wins; matches are checked in descending
+# `priority` order. The matched hint is then looked up in
+# [[providers.model_routes]] to pick the model that will answer.
+#
+# This file ships the defaults embedded in the daviszeroclaw binary.
+# Users may append or override rules in local.toml under
+# [[query_classification.rules]] — user rules merge with these defaults
+# and take precedence on priority ties.
+
+[[rules]]
+hint = "structured_lookup"
+priority = 40
+keywords = [
+  "快递",
+  "物流",
+  "运单",
+  "单号",
+  "顺丰",
+  "京东快递",
+  "圆通",
+  "订单",
+  "淘宝",
+  "天猫",
+  "京东",
+  "购买",
+  "买的",
+  "买过",
+  "在哪里买",
+  "哪买",
+  "商品",
+]
+
+[[rules]]
+hint = "research"
+priority = 30
+keywords = [
+  "为什么",
+  "原因",
+  "谁",
+  "explain",
+  "why",
+  "how",
+  "compare",
+  "分析",
+  "建议",
+  "怎么优化",
+]
+
+[[rules]]
+hint = "home_control"
+priority = 20
+keywords = [
+  "打开",
+  "关闭",
+  "开灯",
+  "关灯",
+  "亮度",
+  "调亮",
+  "调暗",
+  "空调",
+  "风扇",
+  "窗帘",
+  "插座",
+  "开关",
+  "灯带",
+  "主灯",
+]

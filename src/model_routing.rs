@@ -1,9 +1,21 @@
-use crate::app_config::{load_local_config, LocalConfig, ModelProviderConfig, RoutingProfileConfig};
+use crate::app_config::{
+    load_local_config, LocalConfig, ModelProviderConfig, QueryClassificationRule,
+    RoutingProfileConfig,
+};
 use crate::ha_client::normalize_ha_url;
 use crate::runtime_paths::RuntimePaths;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+
+const BUILTIN_QUERY_CLASSIFICATION_TOML: &str =
+    include_str!("../config/davis/query_classification.toml");
+
+#[derive(Debug, Deserialize)]
+struct BuiltinQueryClassification {
+    #[serde(default)]
+    rules: Vec<QueryClassificationRule>,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -73,7 +85,7 @@ pub fn render_runtime_config(paths: &RuntimePaths, config: &LocalConfig) -> Resu
         )
         .replace(
             "__DAVIS_QUERY_CLASSIFICATION_CONFIG__",
-            &render_query_classification(),
+            &render_query_classification(config),
         )
         .replace(
             "__DAVIS_MCP_SERVERS_CONFIG__",
@@ -295,69 +307,52 @@ fn render_model_fallbacks(config: &LocalConfig) -> String {
     output
 }
 
-fn render_query_classification() -> String {
-    let rules = [
-        (
-            "structured_lookup",
-            vec![
-                "快递",
-                "物流",
-                "运单",
-                "单号",
-                "顺丰",
-                "京东快递",
-                "圆通",
-                "订单",
-                "淘宝",
-                "天猫",
-                "京东",
-                "购买",
-                "买的",
-                "买过",
-                "在哪里买",
-                "哪买",
-                "商品",
-            ],
-            40,
-        ),
-        (
-            "research",
-            vec![
-                "为什么",
-                "原因",
-                "谁",
-                "explain",
-                "why",
-                "how",
-                "compare",
-                "分析",
-                "建议",
-                "怎么优化",
-            ],
-            30,
-        ),
-        (
-            "home_control",
-            vec![
-                "打开", "关闭", "开灯", "关灯", "亮度", "调亮", "调暗", "空调", "风扇", "窗帘",
-                "插座", "开关", "灯带", "主灯",
-            ],
-            20,
-        ),
-    ];
+/// Build the rendered `[query_classification]` section ZeroClaw consumes.
+/// Starts from the built-in defaults (config/davis/query_classification.toml),
+/// then appends any user rules from `local.toml`'s `[[query_classification.rules]]`.
+/// User rules land first inside each priority level, so they win on ties.
+fn render_query_classification(config: &LocalConfig) -> String {
+    let merged = merge_classification_rules(&config.query_classification.rules);
+
     let mut output = String::from("[query_classification]\nenabled = true\n");
-    for (hint, keywords, priority) in rules {
-        let rendered_keywords = keywords
-            .into_iter()
+    for rule in merged {
+        let rendered_keywords = rule
+            .keywords
+            .iter()
             .map(|item| format!("\"{}\"", toml_escape(item)))
             .collect::<Vec<_>>()
             .join(", ");
         output.push_str("\n[[query_classification.rules]]\n");
-        output.push_str(&format!("hint = \"{hint}\"\n"));
+        output.push_str(&format!("hint = \"{}\"\n", toml_escape(&rule.hint)));
         output.push_str(&format!("keywords = [{rendered_keywords}]\n"));
-        output.push_str(&format!("priority = {priority}\n"));
+        output.push_str(&format!("priority = {}\n", rule.priority));
     }
     output
+}
+
+/// Load the built-in default rules embedded at compile time. Panic on
+/// malformed TOML is intentional: a corrupted default file is a build-time
+/// bug, not a runtime condition. Verified by
+/// `builtin_query_classification_defaults_parse`.
+fn load_builtin_classification_rules() -> Vec<QueryClassificationRule> {
+    toml::from_str::<BuiltinQueryClassification>(BUILTIN_QUERY_CLASSIFICATION_TOML)
+        .expect("config/davis/query_classification.toml must be valid TOML")
+        .rules
+}
+
+/// Merge user overrides on top of built-in defaults and sort by priority
+/// (descending). User rules appear before built-in rules of equal priority
+/// so ZeroClaw's classifier sees them first.
+fn merge_classification_rules(
+    user_rules: &[QueryClassificationRule],
+) -> Vec<QueryClassificationRule> {
+    let builtin = load_builtin_classification_rules();
+    // User first so that after a stable sort_by on priority, user rules
+    // keep the lead on ties.
+    let mut merged: Vec<QueryClassificationRule> =
+        user_rules.iter().cloned().chain(builtin).collect();
+    merged.sort_by(|a, b| b.priority.cmp(&a.priority));
+    merged
 }
 
 fn render_mcp_servers_config(paths: &RuntimePaths, config: &LocalConfig) -> String {
@@ -562,12 +557,100 @@ max_fallbacks = 1
     }
 
     #[test]
-    fn query_classification_includes_expected_hints() {
-        let rendered = render_query_classification();
+    fn query_classification_includes_builtin_defaults() {
+        let rendered = render_query_classification(&sample_config());
         assert!(rendered.contains("hint = \"structured_lookup\""));
         assert!(rendered.contains("hint = \"home_control\""));
         assert!(rendered.contains("hint = \"research\""));
         assert!(rendered.contains("\"淘宝\""));
         assert!(rendered.contains("\"打开\""));
+    }
+
+    #[test]
+    fn builtin_query_classification_defaults_parse() {
+        let rules = load_builtin_classification_rules();
+        let hints: Vec<&str> = rules.iter().map(|r| r.hint.as_str()).collect();
+        assert!(hints.contains(&"structured_lookup"));
+        assert!(hints.contains(&"research"));
+        assert!(hints.contains(&"home_control"));
+    }
+
+    #[test]
+    fn user_override_rules_merge_and_sort_by_priority_desc() {
+        let user = vec![
+            QueryClassificationRule {
+                hint: "custom_top".to_string(),
+                keywords: vec!["特殊场景".to_string()],
+                priority: 100,
+            },
+            QueryClassificationRule {
+                hint: "home_control".to_string(),
+                keywords: vec!["开一下".to_string(), "关一下".to_string()],
+                priority: 25,
+            },
+        ];
+        let merged = merge_classification_rules(&user);
+
+        // Descending by priority, user rules first on ties.
+        let priorities: Vec<i32> = merged.iter().map(|r| r.priority).collect();
+        let mut expected = priorities.clone();
+        expected.sort_by(|a, b| b.cmp(a));
+        assert_eq!(priorities, expected, "rules must be sorted descending by priority");
+
+        // User's custom_top outranks everything.
+        assert_eq!(merged.first().unwrap().hint, "custom_top");
+
+        // Built-in structured_lookup (priority=40) survives.
+        assert!(merged
+            .iter()
+            .any(|r| r.hint == "structured_lookup" && r.priority == 40));
+
+        // User override for home_control (priority=25) appears BEFORE the
+        // built-in home_control (priority=20).
+        let user_home_idx = merged
+            .iter()
+            .position(|r| r.hint == "home_control" && r.priority == 25)
+            .expect("user home_control rule missing");
+        let builtin_home_idx = merged
+            .iter()
+            .position(|r| r.hint == "home_control" && r.priority == 20)
+            .expect("builtin home_control rule missing");
+        assert!(
+            user_home_idx < builtin_home_idx,
+            "user override must precede built-in rule of same hint"
+        );
+    }
+
+    #[test]
+    fn user_override_wins_on_priority_tie() {
+        let user = vec![QueryClassificationRule {
+            hint: "research".to_string(),
+            keywords: vec!["为啥".to_string()],
+            priority: 30, // same as built-in research
+        }];
+        let merged = merge_classification_rules(&user);
+        let first_research = merged
+            .iter()
+            .find(|r| r.hint == "research")
+            .expect("research rule missing");
+        assert!(
+            first_research.keywords.contains(&"为啥".to_string()),
+            "on priority tie, user rule must come first"
+        );
+    }
+
+    #[test]
+    fn user_override_appears_in_rendered_output() {
+        let mut config = sample_config();
+        config
+            .query_classification
+            .rules
+            .push(QueryClassificationRule {
+                hint: "home_control".to_string(),
+                keywords: vec!["开一下".to_string()],
+                priority: 25,
+            });
+        let rendered = render_query_classification(&config);
+        assert!(rendered.contains("\"开一下\""), "override keyword missing from render:\n{rendered}");
     }
 }

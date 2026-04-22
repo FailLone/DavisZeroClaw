@@ -17,6 +17,24 @@ pub struct LocalConfig {
     pub memory_integrations: MemoryIntegrationsConfig,
     #[serde(default)]
     pub article_memory: ArticleMemoryConfig,
+    #[serde(default)]
+    pub query_classification: QueryClassificationOverride,
+}
+
+/// User-supplied overrides merged on top of config/davis/query_classification.toml.
+/// Append rules here in local.toml under [[query_classification.rules]] to bias
+/// routing without editing the shipped defaults. User rules win on priority ties.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct QueryClassificationOverride {
+    #[serde(default)]
+    pub rules: Vec<QueryClassificationRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryClassificationRule {
+    pub hint: String,
+    pub keywords: Vec<String>,
+    pub priority: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -404,8 +422,35 @@ fn validate_local_config(mut config: LocalConfig) -> Result<LocalConfig> {
     }
 
     validate_article_memory_config(&mut config)?;
+    validate_query_classification_override(&mut config.query_classification)?;
 
     Ok(config)
+}
+
+fn validate_query_classification_override(
+    override_cfg: &mut QueryClassificationOverride,
+) -> Result<()> {
+    for (index, rule) in override_cfg.rules.iter_mut().enumerate() {
+        rule.hint = rule.hint.trim().to_string();
+        if rule.hint.is_empty() {
+            return Err(anyhow!(
+                "query_classification.rules[{index}].hint must not be empty"
+            ));
+        }
+        rule.keywords = rule
+            .keywords
+            .iter()
+            .map(|kw| kw.trim().to_string())
+            .filter(|kw| !kw.is_empty())
+            .collect();
+        if rule.keywords.is_empty() {
+            return Err(anyhow!(
+                "query_classification.rules[{index}].keywords must not be empty (hint={})",
+                rule.hint
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_article_memory_config(config: &mut LocalConfig) -> Result<()> {

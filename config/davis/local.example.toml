@@ -46,6 +46,20 @@ provider = "openrouter"
 model = "anthropic/claude-sonnet-4.6"
 max_fallbacks = 2
 
+# Optional: extend or bias the built-in query classifier.
+# Built-in defaults live in config/davis/query_classification.toml and always apply.
+# User rules below are merged on top and win on priority ties.
+#
+# [[query_classification.rules]]
+# hint = "home_control"
+# keywords = ["开一下", "关一下"]
+# priority = 25
+#
+# [[query_classification.rules]]
+# hint = "research"
+# keywords = ["为啥", "是怎么回事"]
+# priority = 35
+
 [crawl4ai]
 enabled = true
 transport = "python"
