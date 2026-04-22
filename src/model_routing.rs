@@ -2,11 +2,11 @@ use crate::app_config::{
     load_local_config, LocalConfig, ModelProviderConfig, QueryClassificationRule,
     RoutingProfileConfig,
 };
-use crate::ha_client::normalize_ha_url;
 use crate::runtime_paths::RuntimePaths;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Formatted, Item, Table, Value};
 
 const BUILTIN_QUERY_CLASSIFICATION_TOML: &str =
     include_str!("../config/davis/query_classification.toml");
@@ -60,57 +60,61 @@ impl RoutingProfile {
 /// Render the ZeroClaw runtime config.toml from local.toml + template.
 /// Called once at startup. After this, model changes go through ZeroClaw's
 /// built-in `model_routing_config` tool (no daemon restart needed).
+///
+/// The template is valid TOML. We parse it with `toml_edit::DocumentMut` so
+/// comments survive in the output, then patch specific paths. Sections that
+/// vary in shape (provider models, model_routes, query_classification rules,
+/// mcp.servers) are constructed as real TOML values and inserted by path —
+/// no string templating, so typos surface at render time, not on ZeroClaw
+/// startup.
 pub fn render_runtime_config(paths: &RuntimePaths, config: &LocalConfig) -> Result<()> {
     let template = std::fs::read_to_string(paths.config_template_path())
         .context("failed to read ZeroClaw config template")?;
-
-    let default_profile = config
-        .routing
-        .default_profile
-        .as_deref()
-        .unwrap_or("general_qa");
-
-    let rendered = template
-        .replace(
-            "__DAVIS_IMESSAGE_CONFIG__",
-            &render_imessage_config(config),
-        )
-        .replace(
-            "__DAVIS_WEBHOOK_SECRET_CONFIG__",
-            &render_webhook_secret_config(config),
-        )
-        .replace(
-            "__DAVIS_PROVIDERS_CONFIG__",
-            &render_providers_config(config, default_profile),
-        )
-        .replace(
-            "__DAVIS_QUERY_CLASSIFICATION_CONFIG__",
-            &render_query_classification(config),
-        )
-        .replace(
-            "__DAVIS_MCP_SERVERS_CONFIG__",
-            &render_mcp_servers_config(paths, config),
-        )
-        .replace(
-            "__DAVIS_REPO_ROOT__",
-            &toml_escape(&paths.repo_root.display().to_string()),
-        )
-        .replace("__DAVIS_MODEL_FALLBACKS__", &render_model_fallbacks(config))
-        .replace(
-            "__DAVIS_HA_URL__",
-            &toml_escape(
-                &normalize_ha_url(&config.home_assistant.url).map_err(anyhow::Error::msg)?,
-            ),
-        )
-        .replace(
-            "__DAVIS_HA_TOKEN__",
-            &toml_escape(&config.home_assistant.token),
-        );
+    let rendered = render_runtime_config_str(&template, &paths.repo_root, config)?;
 
     std::fs::create_dir_all(&paths.runtime_dir)?;
     let runtime_path = paths.runtime_config_path();
     std::fs::write(&runtime_path, rendered)?;
     restrict_secret_file_permissions(&runtime_path);
+    Ok(())
+}
+
+/// Pure-string version of `render_runtime_config` for testing. No disk I/O.
+fn render_runtime_config_str(
+    template: &str,
+    repo_root: &std::path::Path,
+    config: &LocalConfig,
+) -> Result<String> {
+    let mut doc: DocumentMut = template
+        .parse()
+        .context("ZeroClaw config template is not valid TOML")?;
+
+    patch_allowed_roots(&mut doc, repo_root)?;
+    patch_webhook_secret(&mut doc, config);
+    patch_imessage(&mut doc, config);
+    patch_providers(&mut doc, config)?;
+    patch_query_classification(&mut doc, config);
+    patch_model_fallbacks(&mut doc, config);
+    patch_mcp_servers(&mut doc, config);
+
+    let rendered = doc.to_string();
+    validate_rendered(&rendered)?;
+    Ok(rendered)
+}
+
+/// Final safety net. The template is parsed TOML and every patch writes
+/// through toml_edit, so the output is syntactically guaranteed. This check
+/// catches a different class of bug: if anyone reintroduces string-level
+/// templating with a `__DAVIS_...__` sentinel and forgets to substitute it,
+/// fail loudly here instead of letting ZeroClaw choke at startup.
+fn validate_rendered(rendered: &str) -> Result<()> {
+    if let Some(line) = rendered.lines().find(|line| line.contains("__DAVIS_")) {
+        return Err(anyhow!(
+            "rendered runtime config still contains a __DAVIS_ sentinel: {line:?}"
+        ));
+    }
+    toml::from_str::<toml::Value>(rendered)
+        .context("rendered runtime config is not valid TOML")?;
     Ok(())
 }
 
@@ -168,74 +172,245 @@ pub fn check_local_config(paths: &RuntimePaths) -> Result<LocalConfig> {
     load_local_config(paths)
 }
 
-// ── Render helpers ───────────────────────────────────────────────────
+// ── Render helpers (toml_edit-based) ─────────────────────────────────
 
-fn render_imessage_config(config: &LocalConfig) -> String {
-    let contacts = config
-        .imessage
-        .allowed_contacts
-        .iter()
-        .map(|item| format!("\"{}\"", toml_escape(item)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[channels.imessage]\nenabled = true\nallowed_contacts = [{contacts}]\n")
+fn patch_allowed_roots(doc: &mut DocumentMut, repo_root: &std::path::Path) -> Result<()> {
+    let repo_root_str = repo_root.display().to_string();
+    let allowed_roots = doc
+        .get_mut("autonomy")
+        .and_then(Item::as_table_mut)
+        .and_then(|t| t.get_mut("allowed_roots"))
+        .and_then(Item::as_array_mut)
+        .ok_or_else(|| anyhow!("template is missing [autonomy].allowed_roots array"))?;
+    // The template ships with a single __DAVIS_REPO_ROOT__ entry that we
+    // rewrite in-place, so any handcrafted trailing entries survive.
+    if allowed_roots.is_empty() {
+        allowed_roots.push(repo_root_str);
+    } else {
+        allowed_roots.replace(0, repo_root_str);
+    }
+    Ok(())
 }
 
-fn render_webhook_secret_config(config: &LocalConfig) -> String {
-    if config.webhook.secret.trim().is_empty() {
-        "# secret = \"replace-with-your-webhook-secret\"".to_string()
-    } else {
-        format!("secret = \"{}\"", toml_escape(config.webhook.secret.trim()))
+fn patch_webhook_secret(doc: &mut DocumentMut, config: &LocalConfig) {
+    let secret = config.webhook.secret.trim();
+    if secret.is_empty() {
+        return;
+    }
+    if let Some(webhook) = doc
+        .get_mut("channels")
+        .and_then(Item::as_table_mut)
+        .and_then(|t| t.get_mut("webhook"))
+        .and_then(Item::as_table_mut)
+    {
+        webhook["secret"] = Item::Value(string_value(secret));
     }
 }
 
-fn render_providers_config(config: &LocalConfig, default_profile: &str) -> String {
-    // Find the default profile's provider to set as ZeroClaw's fallback provider.
+fn patch_imessage(doc: &mut DocumentMut, config: &LocalConfig) {
+    let channels = match doc.get_mut("channels").and_then(Item::as_table_mut) {
+        Some(t) => t,
+        None => return,
+    };
+    let mut imessage = Table::new();
+    imessage.set_implicit(false);
+    imessage["enabled"] = Item::Value(Value::Boolean(Formatted::new(true)));
+    let mut contacts = Array::new();
+    for contact in &config.imessage.allowed_contacts {
+        contacts.push(contact.clone());
+    }
+    imessage["allowed_contacts"] = Item::Value(Value::Array(contacts));
+    channels["imessage"] = Item::Table(imessage);
+}
+
+fn patch_providers(doc: &mut DocumentMut, config: &LocalConfig) -> Result<()> {
+    let default_profile = config
+        .routing
+        .default_profile
+        .as_deref()
+        .unwrap_or("general_qa");
     let default_provider_name = RoutingProfile::all()
         .iter()
         .find(|p| p.as_str() == default_profile)
-        .map(|p| p.profile_config(config).provider.as_str())
-        .unwrap_or_else(|| config.providers.first().map(|p| p.name.as_str()).unwrap_or(""));
-
+        .map(|p| p.profile_config(config).provider.clone())
+        .or_else(|| config.providers.first().map(|p| p.name.clone()))
+        .unwrap_or_default();
     let fallback_id = config
         .providers
         .iter()
         .find(|p| p.name == default_provider_name)
-        .map(|p| zeroclaw_provider_id(p))
-        .unwrap_or_default();
+        .map(zeroclaw_provider_id);
 
-    let mut output = String::from("[providers]\n");
-    if !fallback_id.is_empty() {
-        output.push_str(&format!("fallback = \"{}\"\n", toml_escape(&fallback_id)));
+    let mut providers = Table::new();
+    providers.set_implicit(false);
+    if let Some(id) = fallback_id {
+        providers["fallback"] = Item::Value(string_value(&id));
     }
 
-    // Render each provider definition.
+    // [providers.models.<id>]
+    let mut models = Table::new();
+    models.set_implicit(true);
     for provider in &config.providers {
         let provider_id = zeroclaw_provider_id(provider);
-        output.push_str(&format!(
-            "\n[providers.models.{}]\n",
-            toml_key_segment(&provider_id)
-        ));
+        let mut entry = Table::new();
+        entry.set_implicit(false);
         if provider.base_url.trim().is_empty() {
-            output.push_str(&format!("name = \"{}\"\n", toml_escape(&provider.name)));
+            entry["name"] = Item::Value(string_value(&provider.name));
         }
         if !provider.api_key.trim().is_empty() {
-            output.push_str(&format!(
-                "api_key = \"{}\"\n",
-                toml_escape(&provider.api_key)
-            ));
+            entry["api_key"] = Item::Value(string_value(&provider.api_key));
         }
-        // Use the first model from allowed_models as the default for this provider,
-        // or the model from whichever profile references this provider.
-        let model = find_model_for_provider(config, &provider.name);
-        output.push_str(&format!("model = \"{}\"\n", toml_escape(&model)));
+        entry["model"] = Item::Value(string_value(&find_model_for_provider(
+            config,
+            &provider.name,
+        )));
+        models[provider_id.as_str()] = Item::Table(entry);
+    }
+    providers["models"] = Item::Table(models);
+
+    // [[providers.model_routes]]
+    let mut routes = ArrayOfTables::new();
+    for profile in RoutingProfile::all() {
+        let pc = profile.profile_config(config);
+        if let Some(provider) = config.providers.iter().find(|p| p.name == pc.provider) {
+            let provider_id = zeroclaw_provider_id(provider);
+            let mut route = Table::new();
+            route["hint"] = Item::Value(string_value(profile.as_str()));
+            route["provider"] = Item::Value(string_value(&provider_id));
+            route["model"] = Item::Value(string_value(&pc.model));
+            routes.push(route);
+        }
+    }
+    providers["model_routes"] = Item::ArrayOfTables(routes);
+
+    doc["providers"] = Item::Table(providers);
+    Ok(())
+}
+
+fn patch_query_classification(doc: &mut DocumentMut, config: &LocalConfig) {
+    let merged = merge_classification_rules(&config.query_classification.rules);
+
+    let mut section = Table::new();
+    section.set_implicit(false);
+    section["enabled"] = Item::Value(Value::Boolean(Formatted::new(true)));
+
+    let mut rules = ArrayOfTables::new();
+    for rule in merged {
+        let mut table = Table::new();
+        table["hint"] = Item::Value(string_value(&rule.hint));
+        let mut keywords = Array::new();
+        for kw in &rule.keywords {
+            keywords.push(kw.clone());
+        }
+        table["keywords"] = Item::Value(Value::Array(keywords));
+        table["priority"] = Item::Value(Value::Integer(Formatted::new(rule.priority as i64)));
+        rules.push(table);
+    }
+    section["rules"] = Item::ArrayOfTables(rules);
+
+    doc["query_classification"] = Item::Table(section);
+}
+
+fn patch_model_fallbacks(doc: &mut DocumentMut, config: &LocalConfig) {
+    let mut fallbacks = Table::new();
+    fallbacks.set_implicit(false);
+    let mut emitted = BTreeSet::new();
+    for profile in RoutingProfile::all() {
+        let pc = profile.profile_config(config);
+        if !emitted.insert(pc.model.clone()) {
+            continue;
+        }
+        let models: Vec<String> = config
+            .providers
+            .iter()
+            .filter(|p| p.name != pc.provider)
+            .filter_map(|p| p.allowed_models.first().cloned())
+            .take(pc.max_fallbacks)
+            .collect();
+        if models.is_empty() {
+            continue;
+        }
+        let mut arr = Array::new();
+        for model in models {
+            arr.push(model);
+        }
+        fallbacks[pc.model.as_str()] = Item::Value(Value::Array(arr));
     }
 
-    // Render model routes from profile declarations.
-    output.push('\n');
-    output.push_str(&render_model_routes(config));
+    // The template ships with an empty [reliability] table so we can
+    // insert model_fallbacks underneath without wiping sibling keys.
+    if let Some(reliability) = doc.get_mut("reliability").and_then(Item::as_table_mut) {
+        reliability["model_fallbacks"] = Item::Table(fallbacks);
+    } else {
+        let mut reliability = Table::new();
+        reliability.set_implicit(false);
+        reliability["model_fallbacks"] = Item::Table(fallbacks);
+        doc["reliability"] = Item::Table(reliability);
+    }
+}
 
-    output
+fn patch_mcp_servers(doc: &mut DocumentMut, config: &LocalConfig) {
+    if config.mcp.servers.is_empty() {
+        return;
+    }
+    let mcp = match doc.get_mut("mcp").and_then(Item::as_table_mut) {
+        Some(t) => t,
+        None => {
+            let mut t = Table::new();
+            t.set_implicit(false);
+            doc["mcp"] = Item::Table(t);
+            doc.get_mut("mcp").unwrap().as_table_mut().unwrap()
+        }
+    };
+    let servers = match mcp.get_mut("servers") {
+        Some(Item::ArrayOfTables(a)) => a,
+        _ => {
+            mcp["servers"] = Item::ArrayOfTables(ArrayOfTables::new());
+            mcp.get_mut("servers").unwrap().as_array_of_tables_mut().unwrap()
+        }
+    };
+    for server in &config.mcp.servers {
+        let mut table = Table::new();
+        table["name"] = Item::Value(string_value(&server.name));
+        table["transport"] = Item::Value(string_value(mcp_transport_str(server.transport)));
+        match server.transport {
+            crate::app_config::McpTransport::Stdio => {
+                table["command"] = Item::Value(string_value(&server.command));
+                if !server.args.is_empty() {
+                    let mut args = Array::new();
+                    for arg in &server.args {
+                        args.push(arg.clone());
+                    }
+                    table["args"] = Item::Value(Value::Array(args));
+                }
+                if !server.env.is_empty() {
+                    let mut env = Table::new();
+                    for (k, v) in &server.env {
+                        env[k.as_str()] = Item::Value(string_value(v));
+                    }
+                    table["env"] = Item::Table(env);
+                }
+            }
+            crate::app_config::McpTransport::Sse | crate::app_config::McpTransport::Http => {
+                table["url"] = Item::Value(string_value(&server.url));
+                if !server.headers.is_empty() {
+                    let mut headers = Table::new();
+                    for (k, v) in &server.headers {
+                        headers[k.as_str()] = Item::Value(string_value(v));
+                    }
+                    table["headers"] = Item::Table(headers);
+                }
+            }
+        }
+        table["tool_timeout_secs"] = Item::Value(Value::Integer(Formatted::new(
+            server.tool_timeout_secs as i64,
+        )));
+        servers.push(table);
+    }
+}
+
+fn string_value(s: &str) -> Value {
+    Value::String(Formatted::new(s.to_string()))
 }
 
 fn find_model_for_provider(config: &LocalConfig, provider_name: &str) -> String {
@@ -253,81 +428,6 @@ fn find_model_for_provider(config: &LocalConfig, provider_name: &str) -> String 
         .find(|p| p.name == provider_name)
         .and_then(|p| p.allowed_models.first().cloned())
         .unwrap_or_default()
-}
-
-fn render_model_routes(config: &LocalConfig) -> String {
-    // NOTE: do NOT emit `api_key` here. ZeroClaw resolves credentials from
-    // [providers.models.<id>].api_key (rendered by render_providers_config).
-    // Inlining keys per-route duplicates the secret N times on disk.
-    let mut blocks = Vec::new();
-    for profile in RoutingProfile::all() {
-        let pc = profile.profile_config(config);
-        if let Some(provider) = config.providers.iter().find(|p| p.name == pc.provider) {
-            let provider_id = zeroclaw_provider_id(provider);
-            blocks.push(format!(
-                "[[providers.model_routes]]\nhint = \"{}\"\nprovider = \"{}\"\nmodel = \"{}\"\n",
-                profile.as_str(),
-                toml_escape(&provider_id),
-                toml_escape(&pc.model),
-            ));
-        }
-    }
-    blocks.join("\n")
-}
-
-fn render_model_fallbacks(config: &LocalConfig) -> String {
-    let mut rendered_keys = BTreeSet::new();
-    let mut output = String::from("[reliability.model_fallbacks]\n");
-    for profile in RoutingProfile::all() {
-        let pc = profile.profile_config(config);
-        if !rendered_keys.insert(pc.model.clone()) {
-            continue;
-        }
-        // Fallbacks are other providers' models (up to max_fallbacks).
-        let fallback_models: Vec<String> = config
-            .providers
-            .iter()
-            .filter(|p| p.name != pc.provider)
-            .filter_map(|p| p.allowed_models.first().cloned())
-            .take(pc.max_fallbacks)
-            .collect();
-        if !fallback_models.is_empty() {
-            let rendered = fallback_models
-                .iter()
-                .map(|m| format!("\"{}\"", toml_escape(m)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            output.push_str(&format!(
-                "\"{}\" = [{}]\n",
-                toml_escape(&pc.model),
-                rendered
-            ));
-        }
-    }
-    output
-}
-
-/// Build the rendered `[query_classification]` section ZeroClaw consumes.
-/// Starts from the built-in defaults (config/davis/query_classification.toml),
-/// then appends any user rules from `local.toml`'s `[[query_classification.rules]]`.
-/// User rules land first inside each priority level, so they win on ties.
-fn render_query_classification(config: &LocalConfig) -> String {
-    let merged = merge_classification_rules(&config.query_classification.rules);
-
-    let mut output = String::from("[query_classification]\nenabled = true\n");
-    for rule in merged {
-        let rendered_keywords = rule
-            .keywords
-            .iter()
-            .map(|item| format!("\"{}\"", toml_escape(item)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        output.push_str("\n[[query_classification.rules]]\n");
-        output.push_str(&format!("hint = \"{}\"\n", toml_escape(&rule.hint)));
-        output.push_str(&format!("keywords = [{rendered_keywords}]\n"));
-        output.push_str(&format!("priority = {}\n", rule.priority));
-    }
-    output
 }
 
 /// Load the built-in default rules embedded at compile time. Panic on
@@ -355,61 +455,6 @@ fn merge_classification_rules(
     merged
 }
 
-/// Render the full [[mcp.servers]] array ZeroClaw consumes. Every entry
-/// in local.toml's `[[mcp.servers]]` is passed through verbatim, including
-/// transport type, args, env, url/headers. Davis does not special-case
-/// any server name — mempalace is just one user-declared entry among many.
-fn render_mcp_servers_config(_paths: &RuntimePaths, config: &LocalConfig) -> String {
-    let mut output = String::new();
-    for server in &config.mcp.servers {
-        output.push_str("\n[[mcp.servers]]\n");
-        output.push_str(&format!("name = \"{}\"\n", toml_escape(&server.name)));
-        output.push_str(&format!("transport = \"{}\"\n", mcp_transport_str(server.transport)));
-        match server.transport {
-            crate::app_config::McpTransport::Stdio => {
-                output.push_str(&format!(
-                    "command = \"{}\"\n",
-                    toml_escape(&server.command)
-                ));
-                if !server.args.is_empty() {
-                    let rendered_args = server
-                        .args
-                        .iter()
-                        .map(|arg| format!("\"{}\"", toml_escape(arg)))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    output.push_str(&format!("args = [{rendered_args}]\n"));
-                }
-                if !server.env.is_empty() {
-                    output.push_str("\n[mcp.servers.env]\n");
-                    for (key, value) in &server.env {
-                        output.push_str(&format!(
-                            "{} = \"{}\"\n",
-                            toml_key_segment(key),
-                            toml_escape(value)
-                        ));
-                    }
-                }
-            }
-            crate::app_config::McpTransport::Sse | crate::app_config::McpTransport::Http => {
-                output.push_str(&format!("url = \"{}\"\n", toml_escape(&server.url)));
-                if !server.headers.is_empty() {
-                    output.push_str("\n[mcp.servers.headers]\n");
-                    for (key, value) in &server.headers {
-                        output.push_str(&format!(
-                            "{} = \"{}\"\n",
-                            toml_key_segment(key),
-                            toml_escape(value)
-                        ));
-                    }
-                }
-            }
-        }
-        output.push_str(&format!("tool_timeout_secs = {}\n", server.tool_timeout_secs));
-    }
-    output
-}
-
 fn mcp_transport_str(transport: crate::app_config::McpTransport) -> &'static str {
     match transport {
         crate::app_config::McpTransport::Stdio => "stdio",
@@ -425,22 +470,6 @@ fn zeroclaw_provider_id(provider: &ModelProviderConfig) -> String {
         provider.name.clone()
     } else {
         format!("custom:{}", provider.base_url.trim())
-    }
-}
-
-fn toml_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn toml_key_segment(value: &str) -> String {
-    if !value.is_empty()
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
-    {
-        value.to_string()
-    } else {
-        format!("\"{}\"", toml_escape(value))
     }
 }
 
@@ -526,76 +555,158 @@ max_fallbacks = 1
         assert!(exports.contains(&("DEEPSEEK_API_KEY".to_string(), "key-2".to_string())));
     }
 
+    /// Template stripped to just the sections the renderer reads/patches.
+    /// Must stay in sync with the behavior-affecting bits of
+    /// config/davis/config.toml; shape only, no comments needed.
+    const TEST_TEMPLATE: &str = r#"
+schema_version = 2
+
+[channels.webhook]
+enabled = true
+
+[autonomy]
+level = "full"
+allowed_roots = ["__DAVIS_REPO_ROOT__"]
+
+[reliability]
+
+[mcp]
+enabled = true
+"#;
+
+    fn render_with_test_template(config: &LocalConfig) -> String {
+        render_runtime_config_str(
+            TEST_TEMPLATE,
+            std::path::Path::new("/tmp/davis-test"),
+            config,
+        )
+        .expect("render must succeed on sample config")
+    }
+
     #[test]
-    fn render_providers_config_includes_routes_and_fallback() {
-        let config = sample_config();
-        let rendered = render_providers_config(&config, "general_qa");
-        assert!(rendered.contains("[providers]\nfallback = \"openrouter\""));
-        assert!(rendered.contains("[providers.models.openrouter]"));
+    fn render_runtime_config_str_is_valid_toml() {
+        let rendered = render_with_test_template(&sample_config());
+        let parsed: toml::Value = toml::from_str(&rendered)
+            .expect("rendered output must be valid TOML");
+        assert!(parsed.get("providers").is_some());
+        assert!(parsed.get("query_classification").is_some());
+    }
+
+    #[test]
+    fn render_runtime_config_patches_providers_and_routes() {
+        let rendered = render_with_test_template(&sample_config());
+        assert!(rendered.contains("fallback = \"openrouter\""), "{rendered}");
+        // deepseek has a base_url → custom:... provider id
+        assert!(
+            rendered.contains("\"custom:https://api.deepseek.com/v1\""),
+            "{rendered}"
+        );
         assert!(rendered.contains("[[providers.model_routes]]"));
-        assert!(rendered.contains("hint = \"home_control\""));
-        assert!(rendered.contains("hint = \"general_qa\""));
     }
 
     #[test]
-    fn render_model_routes_respects_per_profile_model() {
-        let config = sample_config();
-        let rendered = render_model_routes(&config);
-        // home_control uses sonnet, general_qa uses gpt-4o — they must differ.
+    fn render_runtime_config_respects_per_profile_model() {
+        let rendered = render_with_test_template(&sample_config());
+        let parsed: toml::Value = toml::from_str(&rendered).unwrap();
+        let routes = parsed["providers"]["model_routes"].as_array().unwrap();
+        let find = |hint: &str| -> String {
+            routes
+                .iter()
+                .find(|r| r.get("hint").and_then(|v| v.as_str()) == Some(hint))
+                .and_then(|r| r.get("model"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        };
+        assert_eq!(find("home_control"), "anthropic/claude-sonnet-4.6");
+        assert_eq!(find("general_qa"), "openai/gpt-4o");
+        assert_eq!(find("research"), "anthropic/claude-sonnet-4.6");
+        assert_eq!(find("structured_lookup"), "openai/gpt-4o");
+    }
+
+    #[test]
+    fn render_runtime_config_does_not_inline_api_key_in_routes() {
+        let rendered = render_with_test_template(&sample_config());
+        let parsed: toml::Value = toml::from_str(&rendered).unwrap();
+        let routes = parsed["providers"]["model_routes"].as_array().unwrap();
+        for route in routes {
+            assert!(
+                route.get("api_key").is_none(),
+                "model_routes must not contain api_key: {route:?}"
+            );
+        }
+        // Secret should still be present in [providers.models.<id>]
         assert!(
-            rendered.contains("hint = \"home_control\"\nprovider = \"openrouter\"\nmodel = \"anthropic/claude-sonnet-4.6\""),
-            "home_control route should use claude-sonnet-4.6, got:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("hint = \"general_qa\"\nprovider = \"openrouter\"\nmodel = \"openai/gpt-4o\""),
-            "general_qa route should use openai/gpt-4o, got:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("hint = \"research\"\nprovider = \"openrouter\"\nmodel = \"anthropic/claude-sonnet-4.6\""),
-            "research route should use claude-sonnet-4.6, got:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("hint = \"structured_lookup\"\nprovider = \"openrouter\"\nmodel = \"openai/gpt-4o\""),
-            "structured_lookup route should use openai/gpt-4o, got:\n{rendered}"
+            rendered.contains("test-key") || rendered.contains("key-2"),
+            "provider api_key must still appear under [providers.models.<id>]"
         );
     }
 
     #[test]
-    fn render_model_routes_does_not_inline_api_key() {
-        let rendered = render_model_routes(&sample_config());
+    fn render_runtime_config_emits_model_fallbacks() {
+        let rendered = render_with_test_template(&sample_config());
+        let parsed: toml::Value = toml::from_str(&rendered).unwrap();
+        let fallbacks = parsed["reliability"]["model_fallbacks"]
+            .as_table()
+            .expect("model_fallbacks must be a table");
+        // The default profile's model should have a fallback list.
+        let any_has_deepseek = fallbacks.values().any(|v| {
+            v.as_array()
+                .map(|a| a.iter().any(|x| x.as_str() == Some("deepseek-chat")))
+                .unwrap_or(false)
+        });
+        assert!(any_has_deepseek, "cross-provider fallback missing: {fallbacks:?}");
+    }
+
+    #[test]
+    fn render_runtime_config_patches_allowed_roots() {
+        let rendered = render_runtime_config_str(
+            TEST_TEMPLATE,
+            std::path::Path::new("/opt/davis"),
+            &sample_config(),
+        )
+        .unwrap();
+        let parsed: toml::Value = toml::from_str(&rendered).unwrap();
+        let roots = parsed["autonomy"]["allowed_roots"].as_array().unwrap();
+        assert_eq!(roots[0].as_str(), Some("/opt/davis"));
+    }
+
+    #[test]
+    fn render_runtime_config_rejects_leftover_sentinels() {
+        // Include the required [autonomy]/[reliability]/[mcp] scaffolding so
+        // the patch pass succeeds, but plant a stray sentinel somewhere the
+        // renderer doesn't touch. validate_rendered must catch it.
+        let bad_template = r#"
+[autonomy]
+allowed_roots = ["__DAVIS_REPO_ROOT__"]
+
+[reliability]
+
+[mcp]
+enabled = true
+
+[extra]
+legacy_field = "__DAVIS_UNPATCHED__"
+"#;
+        let err = render_runtime_config_str(
+            bad_template,
+            std::path::Path::new("/tmp/x"),
+            &sample_config(),
+        )
+        .expect_err("unmatched sentinel must fail the render");
+        let msg = err.to_string();
         assert!(
-            !rendered.contains("api_key"),
-            "model_routes must not inline api_key; credentials belong to [providers.models.<id>]. Got:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("test-key"),
-            "model_routes must not leak provider secrets into per-route entries. Got:\n{rendered}"
+            msg.contains("__DAVIS_"),
+            "error should mention the leftover sentinel: {msg}"
         );
     }
 
     #[test]
-    fn render_providers_config_uses_custom_provider_id_for_base_url() {
-        let config = sample_config();
-        let rendered = render_providers_config(&config, "general_qa");
-        assert!(rendered.contains("[providers.models.\"custom:https://api.deepseek.com/v1\"]"));
-    }
-
-    #[test]
-    fn render_model_fallbacks_generates_cross_provider_fallbacks() {
-        let config = sample_config();
-        let rendered = render_model_fallbacks(&config);
-        assert!(rendered.contains("[reliability.model_fallbacks]"));
-        assert!(rendered.contains("deepseek-chat"));
-    }
-
-    #[test]
-    fn query_classification_includes_builtin_defaults() {
-        let rendered = render_query_classification(&sample_config());
-        assert!(rendered.contains("hint = \"structured_lookup\""));
-        assert!(rendered.contains("hint = \"home_control\""));
-        assert!(rendered.contains("hint = \"research\""));
-        assert!(rendered.contains("\"淘宝\""));
-        assert!(rendered.contains("\"打开\""));
+    fn render_runtime_config_includes_builtin_classification_defaults() {
+        let rendered = render_with_test_template(&sample_config());
+        assert!(rendered.contains("structured_lookup"));
+        assert!(rendered.contains("淘宝"));
+        assert!(rendered.contains("打开"));
     }
 
     #[test]
@@ -672,21 +783,19 @@ max_fallbacks = 1
     }
 
     #[test]
-    fn render_mcp_servers_emits_empty_output_when_none_configured() {
-        let config = sample_config();
-        let paths = crate::RuntimePaths {
-            repo_root: std::path::PathBuf::from("/tmp/davis-test"),
-            runtime_dir: std::path::PathBuf::from("/tmp/davis-test/.runtime/davis"),
-        };
-        let rendered = render_mcp_servers_config(&paths, &config);
-        assert!(
-            rendered.trim().is_empty(),
-            "no servers configured must yield empty output, got:\n{rendered}"
-        );
+    fn render_runtime_config_emits_no_mcp_servers_when_none_configured() {
+        let rendered = render_with_test_template(&sample_config());
+        let parsed: toml::Value = toml::from_str(&rendered).unwrap();
+        let servers = parsed["mcp"]
+            .get("servers")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        assert_eq!(servers, 0, "no servers configured must yield empty array");
     }
 
     #[test]
-    fn render_mcp_servers_emits_stdio_entry_with_args() {
+    fn render_runtime_config_emits_stdio_mcp_entry() {
         let mut config = sample_config();
         config.mcp.servers.push(crate::app_config::McpServerConfig {
             name: "mempalace".to_string(),
@@ -703,23 +812,18 @@ max_fallbacks = 1
             headers: Default::default(),
             tool_timeout_secs: 45,
         });
-        let paths = crate::RuntimePaths {
-            repo_root: std::path::PathBuf::from("/tmp/davis-test"),
-            runtime_dir: std::path::PathBuf::from("/tmp/davis-test/.runtime/davis"),
-        };
-        let rendered = render_mcp_servers_config(&paths, &config);
-        assert!(rendered.contains("name = \"mempalace\""), "{rendered}");
-        assert!(rendered.contains("transport = \"stdio\""), "{rendered}");
-        assert!(rendered.contains("command = \"/p/bin/python\""), "{rendered}");
-        assert!(
-            rendered.contains("args = [\"-m\", \"mempalace.mcp_server\", \"--palace\", \"/p/palace\"]"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("tool_timeout_secs = 45"), "{rendered}");
+        let rendered = render_with_test_template(&config);
+        let parsed: toml::Value = toml::from_str(&rendered).unwrap();
+        let server = &parsed["mcp"]["servers"].as_array().unwrap()[0];
+        assert_eq!(server["name"].as_str(), Some("mempalace"));
+        assert_eq!(server["transport"].as_str(), Some("stdio"));
+        assert_eq!(server["command"].as_str(), Some("/p/bin/python"));
+        assert_eq!(server["tool_timeout_secs"].as_integer(), Some(45));
+        assert_eq!(server["args"].as_array().unwrap().len(), 4);
     }
 
     #[test]
-    fn render_mcp_servers_emits_http_entry_with_headers() {
+    fn render_runtime_config_emits_http_mcp_entry_with_headers() {
         let mut config = sample_config();
         let mut headers = std::collections::BTreeMap::new();
         headers.insert("X-Auth".to_string(), "placeholder-value".to_string());
@@ -733,52 +837,45 @@ max_fallbacks = 1
             headers,
             tool_timeout_secs: 30,
         });
-        let paths = crate::RuntimePaths {
-            repo_root: std::path::PathBuf::from("/tmp/davis-test"),
-            runtime_dir: std::path::PathBuf::from("/tmp/davis-test/.runtime/davis"),
-        };
-        let rendered = render_mcp_servers_config(&paths, &config);
-        assert!(rendered.contains("transport = \"http\""), "{rendered}");
-        assert!(rendered.contains("url = \"https://example.com/mcp\""), "{rendered}");
-        assert!(rendered.contains("X-Auth = \"placeholder-value\""), "{rendered}");
-        assert!(!rendered.contains("command ="), "http entry must not emit command:\n{rendered}");
+        let rendered = render_with_test_template(&config);
+        let parsed: toml::Value = toml::from_str(&rendered).unwrap();
+        let server = &parsed["mcp"]["servers"].as_array().unwrap()[0];
+        assert_eq!(server["transport"].as_str(), Some("http"));
+        assert_eq!(server["url"].as_str(), Some("https://example.com/mcp"));
+        assert_eq!(
+            server["headers"]["X-Auth"].as_str(),
+            Some("placeholder-value")
+        );
+        assert!(
+            server.get("command").is_none(),
+            "http entry must not emit command: {server:?}"
+        );
     }
 
     #[test]
-    fn render_mcp_servers_emits_multiple_entries_in_order() {
+    fn render_runtime_config_preserves_mcp_server_order() {
         let mut config = sample_config();
-        config.mcp.servers.push(crate::app_config::McpServerConfig {
-            name: "first".to_string(),
-            transport: crate::app_config::McpTransport::Stdio,
-            command: "/a".to_string(),
-            args: Vec::new(),
-            env: Default::default(),
-            url: String::new(),
-            headers: Default::default(),
-            tool_timeout_secs: 30,
-        });
-        config.mcp.servers.push(crate::app_config::McpServerConfig {
-            name: "second".to_string(),
-            transport: crate::app_config::McpTransport::Stdio,
-            command: "/b".to_string(),
-            args: Vec::new(),
-            env: Default::default(),
-            url: String::new(),
-            headers: Default::default(),
-            tool_timeout_secs: 30,
-        });
-        let paths = crate::RuntimePaths {
-            repo_root: std::path::PathBuf::from("/tmp/davis-test"),
-            runtime_dir: std::path::PathBuf::from("/tmp/davis-test/.runtime/davis"),
-        };
-        let rendered = render_mcp_servers_config(&paths, &config);
-        let first_pos = rendered.find("name = \"first\"").expect("first missing");
-        let second_pos = rendered.find("name = \"second\"").expect("second missing");
-        assert!(first_pos < second_pos, "entries must render in config order");
+        for name in ["first", "second"] {
+            config.mcp.servers.push(crate::app_config::McpServerConfig {
+                name: name.to_string(),
+                transport: crate::app_config::McpTransport::Stdio,
+                command: "/x".to_string(),
+                args: Vec::new(),
+                env: Default::default(),
+                url: String::new(),
+                headers: Default::default(),
+                tool_timeout_secs: 30,
+            });
+        }
+        let rendered = render_with_test_template(&config);
+        let parsed: toml::Value = toml::from_str(&rendered).unwrap();
+        let servers = parsed["mcp"]["servers"].as_array().unwrap();
+        assert_eq!(servers[0]["name"].as_str(), Some("first"));
+        assert_eq!(servers[1]["name"].as_str(), Some("second"));
     }
 
     #[test]
-    fn user_override_appears_in_rendered_output() {
+    fn render_runtime_config_surfaces_user_classification_override() {
         let mut config = sample_config();
         config
             .query_classification
@@ -788,7 +885,22 @@ max_fallbacks = 1
                 keywords: vec!["开一下".to_string()],
                 priority: 25,
             });
-        let rendered = render_query_classification(&config);
-        assert!(rendered.contains("\"开一下\""), "override keyword missing from render:\n{rendered}");
+        let rendered = render_with_test_template(&config);
+        assert!(rendered.contains("开一下"), "override keyword missing:\n{rendered}");
+    }
+
+    #[test]
+    fn render_runtime_config_preserves_template_comments() {
+        let template = "# top comment\n[autonomy]\nallowed_roots = [\"__DAVIS_REPO_ROOT__\"]\n[reliability]\n[mcp]\nenabled = true\n";
+        let rendered = render_runtime_config_str(
+            template,
+            std::path::Path::new("/tmp/davis-test"),
+            &sample_config(),
+        )
+        .unwrap();
+        assert!(
+            rendered.contains("# top comment"),
+            "toml_edit must preserve comments:\n{rendered}"
+        );
     }
 }

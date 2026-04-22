@@ -1,5 +1,9 @@
 # DavisZeroClaw runtime template.
 # Rendered to .runtime/davis/config.toml by the Davis local proxy.
+#
+# This file is valid TOML. Davis parses it with toml_edit and patches the
+# sentinel values below using config paths (not string replace). Comments
+# are preserved in the rendered output.
 
 schema_version = 2
 
@@ -13,9 +17,9 @@ allow_public_bind = true
 enabled = true
 port = 3001
 listen_path = "/shortcut"
-__DAVIS_WEBHOOK_SECRET_CONFIG__
+# `secret` is inserted by Davis when webhook.secret is set in local.toml.
 
-__DAVIS_IMESSAGE_CONFIG__
+# `[channels.imessage]` is emitted by Davis from local.toml's [imessage].
 
 [memory]
 backend = "sqlite"
@@ -48,6 +52,7 @@ enabled = true
 [autonomy]
 # 局域网开发默认值：Webhook 请求可直接进入工具调用链。
 level = "full"
+# `allowed_roots[0]` is rewritten to the absolute repo_root by Davis.
 allowed_roots = ["__DAVIS_REPO_ROOT__"]
 allowed_commands = [
   "git",
@@ -71,11 +76,12 @@ allowed_commands = [
 ]
 shell_timeout_secs = 300
 
-__DAVIS_PROVIDERS_CONFIG__
-__DAVIS_QUERY_CLASSIFICATION_CONFIG__
+# `[providers]`, `[providers.models.*]`, `[[providers.model_routes]]`,
+# `[query_classification]`, and `[reliability.model_fallbacks]` are all
+# inserted by Davis from local.toml. `[reliability]` is provided so Davis
+# can append model_fallbacks underneath it without clobbering settings.
 
 [reliability]
-__DAVIS_MODEL_FALLBACKS__
 
 [mcp]
 enabled = true
@@ -89,4 +95,6 @@ deferred_loading = false
 # name = "life_services"
 # command = "npx"
 # args = ["-y", "@greater-china/local-life-services-mcp"]
-__DAVIS_MCP_SERVERS_CONFIG__
+#
+# `[[mcp.servers]]` entries declared in local.toml under [[mcp.servers]]
+# are appended here by Davis at render time.

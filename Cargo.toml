@@ -27,5 +27,6 @@ serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "0.8"
+toml_edit = "0.22"
 url = "2"
 urlencoding = "2"
