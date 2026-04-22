@@ -76,6 +76,12 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         _ => {}
     }
 
+    // Daemon mode — bring up structured logging before we talk to HA or
+    // bind any sockets. CLI subcommands above intentionally skipped this
+    // to keep their stdout clean.
+    crate::init_tracing();
+    tracing::info!("davis-local-proxy starting");
+
     std::fs::create_dir_all(paths.state_dir())?;
     let local_config = check_local_config(&paths)?;
     let control_config = Arc::new(load_control_config(&paths)?);

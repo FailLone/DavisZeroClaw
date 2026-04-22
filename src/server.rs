@@ -109,6 +109,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/article-memory/search", get(article_memory_search_handler))
         .route("/ha-mcp/capabilities", get(ha_mcp_capabilities))
         .route("/ha-mcp/live-context", get(ha_mcp_live_context))
+        .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state)
 }
 
@@ -116,6 +117,7 @@ pub fn build_shortcut_bridge_app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(shortcut_bridge_health))
         .route("/shortcut", post(shortcut_bridge))
+        .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state)
 }
 

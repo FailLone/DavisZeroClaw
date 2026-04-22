@@ -14,6 +14,7 @@ mod ha_mcp;
 mod local_proxy;
 mod model_routing;
 mod models;
+mod observability;
 mod runtime_paths;
 mod server;
 mod support;
@@ -87,6 +88,7 @@ pub use models::{
     MissingRoomSemanticFinding, ReplacementCandidateReview, ReplacementCandidatesReport,
     ResolveEntityPayload, ServiceExecution, TopFailedQuery,
 };
+pub use observability::init_tracing;
 pub use runtime_paths::RuntimePaths;
 pub use server::{build_app, build_shortcut_bridge_app, AppState};
 pub use support::{build_issue, isoformat, normalize_text};

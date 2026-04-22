@@ -32,12 +32,18 @@ struct ConfigEnvelope {
     params: Value,
 }
 
+#[tracing::instrument(
+    name = "crawl4ai",
+    skip(paths, config),
+    fields(profile = %request.profile_name, url = %request.url, transport = ?config.transport),
+)]
 pub async fn crawl4ai_crawl(
     paths: &RuntimePaths,
     config: &Crawl4aiConfig,
     request: Crawl4aiPageRequest,
 ) -> Result<Crawl4aiPageResult, String> {
     if !config.enabled {
+        tracing::warn!("crawl4ai called while disabled in local config");
         return Err("crawl4ai is disabled in local config".to_string());
     }
 
@@ -51,10 +57,20 @@ pub async fn crawl4ai_crawl(
         )
     })?;
 
-    match config.transport {
+    let result = match config.transport {
         Crawl4aiTransport::Server => crawl_via_server(paths, config, request).await,
         Crawl4aiTransport::Python => crawl_via_python(paths, config, request),
+    };
+    match &result {
+        Ok(page) => tracing::info!(
+            success = page.success,
+            status_code = ?page.status_code,
+            final_url = ?page.current_url,
+            "crawl4ai complete",
+        ),
+        Err(err) => tracing::warn!(error = %err, "crawl4ai failed"),
     }
+    result
 }
 
 async fn crawl_via_server(

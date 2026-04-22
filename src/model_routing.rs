@@ -67,6 +67,16 @@ impl RoutingProfile {
 /// mcp.servers) are constructed as real TOML values and inserted by path —
 /// no string templating, so typos surface at render time, not on ZeroClaw
 /// startup.
+#[tracing::instrument(
+    name = "render_runtime_config",
+    skip(paths, config),
+    fields(
+        providers = config.providers.len(),
+        mcp_servers = config.mcp.servers.len(),
+        classification_overrides = config.query_classification.rules.len(),
+        runtime_path = tracing::field::Empty,
+    ),
+)]
 pub fn render_runtime_config(paths: &RuntimePaths, config: &LocalConfig) -> Result<()> {
     let template = std::fs::read_to_string(paths.config_template_path())
         .context("failed to read ZeroClaw config template")?;
@@ -74,8 +84,10 @@ pub fn render_runtime_config(paths: &RuntimePaths, config: &LocalConfig) -> Resu
 
     std::fs::create_dir_all(&paths.runtime_dir)?;
     let runtime_path = paths.runtime_config_path();
+    tracing::Span::current().record("runtime_path", runtime_path.display().to_string());
     std::fs::write(&runtime_path, rendered)?;
     restrict_secret_file_permissions(&runtime_path);
+    tracing::info!("ZeroClaw runtime config rendered");
     Ok(())
 }
 

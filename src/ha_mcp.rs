@@ -213,6 +213,11 @@ impl HaMcpClient {
         })
     }
 
+    #[tracing::instrument(
+        name = "ha_mcp_rpc",
+        skip(self, params),
+        fields(endpoint = %self.endpoint, method = %method, status = tracing::field::Empty),
+    )]
     async fn rpc<T: for<'de> Deserialize<'de>>(
         &self,
         method: &str,
@@ -232,12 +237,18 @@ impl HaMcpClient {
             .json(&payload)
             .send()
             .await
-            .map_err(|_| ProxyError::Unreachable)?;
+            .map_err(|err| {
+                tracing::warn!(error = %err, "HA MCP RPC transport failed");
+                ProxyError::Unreachable
+            })?;
         let status = response.status();
+        tracing::Span::current().record("status", status.as_u16());
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            tracing::warn!("HA MCP rejected credentials; check token rotation");
             return Err(ProxyError::AuthFailed);
         }
         if !status.is_success() {
+            tracing::warn!(%status, "HA MCP returned non-2xx");
             return Err(ProxyError::Unreachable);
         }
         let body: RpcEnvelope<T> = response
@@ -245,6 +256,7 @@ impl HaMcpClient {
             .await
             .map_err(|err| ProxyError::Invalid(err.to_string()))?;
         if let Some(error) = body.error {
+            tracing::warn!(error_message = %error.message, "HA MCP returned error envelope");
             return Err(ProxyError::Invalid(format!(
                 "ha mcp {} failed: {}",
                 method, error.message

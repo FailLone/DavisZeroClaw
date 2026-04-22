@@ -39,6 +39,11 @@ impl HaClient {
         })
     }
 
+    #[tracing::instrument(
+        name = "ha_rest",
+        skip(self, payload),
+        fields(origin = %self.origin, method = %method, path = %path, status = tracing::field::Empty),
+    )]
     async fn request_value(
         &self,
         method: Method,
@@ -53,18 +58,24 @@ impl HaClient {
         if let Some(body) = payload {
             request = request.json(&body);
         }
-        let response = request.send().await.map_err(|_| ProxyError::Unreachable)?;
+        let response = request.send().await.map_err(|err| {
+            tracing::warn!(error = %err, "HA REST request failed to reach server");
+            ProxyError::Unreachable
+        })?;
         let status = response.status();
+        tracing::Span::current().record("status", status.as_u16());
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            tracing::warn!("HA REST rejected credentials; check token rotation");
             return Err(ProxyError::AuthFailed);
         }
         if !status.is_success() {
+            tracing::warn!(%status, "HA REST returned non-2xx");
             return Err(ProxyError::Unreachable);
         }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|_| ProxyError::Unreachable)?;
+        let bytes = response.bytes().await.map_err(|err| {
+            tracing::warn!(error = %err, "HA REST body read failed");
+            ProxyError::Unreachable
+        })?;
         if bytes.is_empty() {
             return Ok(Value::Null);
         }
