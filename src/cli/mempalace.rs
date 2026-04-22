@@ -1,13 +1,14 @@
 use super::*;
-use crate::{check_local_config, RuntimePaths};
+use crate::{check_local_config, McpServerConfig, McpTransport, RuntimePaths};
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+const MEMPALACE_SERVER_NAME: &str = "mempalace";
+const MEMPALACE_DEFAULT_PACKAGE: &str = "mempalace";
+
 pub(super) fn install_mempalace(paths: &RuntimePaths) -> Result<()> {
-    let config = check_local_config(paths)?;
-    let package = config.memory_integrations.mempalace.package;
     let python3 = require_command("python3").context("python3 is required to install MemPalace")?;
     let venv_dir = paths.mempalace_venv_dir();
     let python = paths.mempalace_python_path();
@@ -42,14 +43,14 @@ pub(super) fn install_mempalace(paths: &RuntimePaths) -> Result<()> {
         "mempalace pip upgrade",
     )?;
 
-    println!("Installing MemPalace package: {package}");
+    println!("Installing MemPalace package: {MEMPALACE_DEFAULT_PACKAGE}");
     run_status(
         Command::new(&python)
             .arg("-m")
             .arg("pip")
             .arg("install")
             .arg("--upgrade")
-            .arg(&package)
+            .arg(MEMPALACE_DEFAULT_PACKAGE)
             .env("PATH", tool_path_env())
             .current_dir(&paths.repo_root),
         "pip install mempalace",
@@ -67,55 +68,70 @@ pub(super) fn enable_mempalace(paths: &RuntimePaths) -> Result<()> {
     let config_path = paths.local_config_path();
     let raw = fs::read_to_string(&config_path)
         .with_context(|| format!("failed to read {}", config_path.display()))?;
-    let section = r#"[memory_integrations.mempalace]
-enabled = true
-python = ""
-palace_dir = ""
-package = "mempalace"
-tool_timeout_secs = 30
-"#;
-    let updated = replace_toml_section(&raw, "[memory_integrations.mempalace]", section);
+
+    let python = paths.mempalace_python_path();
+    let palace_dir = paths.mempalace_palace_dir();
+    let entry = format_mempalace_mcp_entry(&python, &palace_dir);
+    let updated = upsert_mcp_server_entry(&raw, MEMPALACE_SERVER_NAME, &entry);
+
     fs::write(&config_path, updated)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
-    println!("MemPalace enabled in {}", config_path.display());
+    println!(
+        "MemPalace [[mcp.servers]] entry written to {}",
+        config_path.display()
+    );
     println!("Next: daviszeroclaw memory mempalace check");
     Ok(())
 }
 
 pub(super) fn check_mempalace(paths: &RuntimePaths) -> Result<()> {
     let config = check_local_config(paths)?;
-    let mempalace = config.memory_integrations.mempalace;
-    let python = if mempalace.python.trim().is_empty() {
-        paths.mempalace_python_path()
-    } else {
-        PathBuf::from(mempalace.python.trim())
-    };
-    let palace_dir = if mempalace.palace_dir.trim().is_empty() {
-        paths.mempalace_palace_dir()
-    } else {
-        PathBuf::from(mempalace.palace_dir.trim())
-    };
+    let server = find_mempalace_server(&config.mcp.servers);
 
     println!("MemPalace config:");
-    println!("- enabled: {}", mempalace.enabled);
-    println!("- python: {}", python.display());
-    println!("- palace_dir: {}", palace_dir.display());
-    println!("- package: {}", mempalace.package);
-    println!("- tool_timeout_secs: {}", mempalace.tool_timeout_secs);
+    match server {
+        None => {
+            bail!("MemPalace is not configured. Run: daviszeroclaw memory mempalace enable");
+        }
+        Some(server) => {
+            let python = PathBuf::from(&server.command);
+            let palace_dir = mempalace_palace_from_args(&server.args)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| paths.mempalace_palace_dir());
+            println!("- transport: {:?}", server.transport);
+            println!("- command: {}", server.command);
+            println!("- palace_dir: {}", palace_dir.display());
+            println!("- tool_timeout_secs: {}", server.tool_timeout_secs);
 
-    if !mempalace.enabled {
-        bail!("MemPalace is not enabled. Run: daviszeroclaw memory mempalace enable");
-    }
-    if !python.is_file() {
-        bail!(
-            "MemPalace Python was not found: {}\nRun: daviszeroclaw memory mempalace install",
-            python.display()
-        );
-    }
-    fs::create_dir_all(&palace_dir)?;
+            if server.transport != McpTransport::Stdio {
+                bail!(
+                    "MemPalace [[mcp.servers]] entry must use stdio transport; got {:?}",
+                    server.transport
+                );
+            }
+            if !python.is_file() {
+                bail!(
+                    "MemPalace Python was not found: {}\nRun: daviszeroclaw memory mempalace install",
+                    python.display()
+                );
+            }
+            fs::create_dir_all(&palace_dir)?;
 
+            run_mempalace_health_checks(paths, &python, &palace_dir)?;
+        }
+    }
+
+    println!("Restart Davis to render the MCP server into ZeroClaw config.");
+    Ok(())
+}
+
+fn run_mempalace_health_checks(
+    paths: &RuntimePaths,
+    python: &PathBuf,
+    palace_dir: &PathBuf,
+) -> Result<()> {
     let import_check = command_output(
-        Command::new(&python)
+        Command::new(python)
             .arg("-c")
             .arg("import mempalace; print('mempalace import ok')")
             .env("PATH", tool_path_env())
@@ -127,7 +143,7 @@ pub(super) fn check_mempalace(paths: &RuntimePaths) -> Result<()> {
     }
 
     let help_check = command_output(
-        Command::new(&python)
+        Command::new(python)
             .arg("-m")
             .arg("mempalace.mcp_server")
             .arg("--help")
@@ -142,10 +158,10 @@ pub(super) fn check_mempalace(paths: &RuntimePaths) -> Result<()> {
     println!("MemPalace MCP server is available.");
     println!("Running MemPalace MCP smoke test.");
     let smoke_check = command_output(
-        Command::new(&python)
+        Command::new(python)
             .arg("-c")
             .arg(MEMPALACE_SMOKE_TEST_SCRIPT)
-            .arg(&palace_dir)
+            .arg(palace_dir)
             .env("PATH", tool_path_env())
             .current_dir(&paths.repo_root),
     )?;
@@ -153,9 +169,117 @@ pub(super) fn check_mempalace(paths: &RuntimePaths) -> Result<()> {
     if !smoke_check.status_success {
         bail!("MemPalace MCP smoke test failed");
     }
-
-    println!("Restart Davis to render the MCP server into ZeroClaw config.");
     Ok(())
+}
+
+pub(super) fn find_mempalace_server(
+    servers: &[McpServerConfig],
+) -> Option<&McpServerConfig> {
+    servers.iter().find(|s| s.name == MEMPALACE_SERVER_NAME)
+}
+
+fn mempalace_palace_from_args(args: &[String]) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--palace" {
+            return iter.next().cloned();
+        }
+    }
+    None
+}
+
+fn format_mempalace_mcp_entry(python: &PathBuf, palace_dir: &PathBuf) -> String {
+    format!(
+        r#"[[mcp.servers]]
+name = "{name}"
+transport = "stdio"
+command = "{command}"
+args = ["-m", "mempalace.mcp_server", "--palace", "{palace}"]
+tool_timeout_secs = 30
+"#,
+        name = MEMPALACE_SERVER_NAME,
+        command = escape_toml_string(&python.display().to_string()),
+        palace = escape_toml_string(&palace_dir.display().to_string()),
+    )
+}
+
+fn escape_toml_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Rewrite `raw` so it contains exactly one `[[mcp.servers]]` block with
+/// `name = "<server_name>"`. If one already exists it is replaced; otherwise
+/// `entry` is appended to the file.
+///
+/// Array-of-tables in TOML is finicky to edit as text — we identify each
+/// table by its header line (`[[mcp.servers]]`) and look forward for the
+/// `name = ...` key to pick the right block.
+pub(super) fn upsert_mcp_server_entry(raw: &str, server_name: &str, entry: &str) -> String {
+    let lines: Vec<&str> = raw.lines().collect();
+    let header = "[[mcp.servers]]";
+
+    // Find all [[mcp.servers]] block start indices with their `name` values.
+    let mut blocks: Vec<(usize, usize, String)> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim() == header {
+            let start = i;
+            let mut end = lines.len();
+            let mut name: Option<String> = None;
+            let mut j = i + 1;
+            while j < lines.len() {
+                let trimmed = lines[j].trim();
+                // Stop at the next table/array-of-tables header.
+                if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                    end = j;
+                    break;
+                }
+                if name.is_none() {
+                    if let Some(rest) = trimmed.strip_prefix("name") {
+                        if let Some(v) = parse_toml_string_value(rest) {
+                            name = Some(v);
+                        }
+                    }
+                }
+                j += 1;
+            }
+            blocks.push((start, end, name.unwrap_or_default()));
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+
+    if let Some((start, end, _)) =
+        blocks.into_iter().find(|(_, _, name)| name == server_name)
+    {
+        let mut output = String::new();
+        for line in &lines[..start] {
+            output.push_str(line);
+            output.push('\n');
+        }
+        output.push_str(entry.trim_end());
+        output.push('\n');
+        for line in &lines[end..] {
+            output.push_str(line);
+            output.push('\n');
+        }
+        return output;
+    }
+
+    let mut output = raw.trim_end().to_string();
+    output.push_str("\n\n");
+    output.push_str(entry.trim_end());
+    output.push('\n');
+    output
+}
+
+fn parse_toml_string_value(rest: &str) -> Option<String> {
+    // `rest` looks like: ` = "mempalace"` possibly with trailing comments/spaces.
+    let after_eq = rest.trim_start().strip_prefix('=')?.trim_start();
+    let after_quote = after_eq.strip_prefix('"')?;
+    let end = after_quote.find('"')?;
+    Some(after_quote[..end].to_string())
 }
 
 const MEMPALACE_SMOKE_TEST_SCRIPT: &str = r#"
@@ -342,37 +466,4 @@ finally:
     except subprocess.TimeoutExpired:
         proc.kill()
 "#;
-
-pub(super) fn replace_toml_section(raw: &str, header: &str, replacement: &str) -> String {
-    let lines = raw.lines().collect::<Vec<_>>();
-    let Some(start) = lines.iter().position(|line| line.trim() == header) else {
-        let mut output = raw.trim_end().to_string();
-        output.push_str("\n\n");
-        output.push_str(replacement.trim_end());
-        output.push('\n');
-        return output;
-    };
-    let end = lines
-        .iter()
-        .enumerate()
-        .skip(start + 1)
-        .find_map(|(index, line)| {
-            let trimmed = line.trim();
-            (trimmed.starts_with('[') && trimmed.ends_with(']')).then_some(index)
-        })
-        .unwrap_or(lines.len());
-
-    let mut output = String::new();
-    for line in &lines[..start] {
-        output.push_str(line);
-        output.push('\n');
-    }
-    output.push_str(replacement.trim_end());
-    output.push('\n');
-    for line in &lines[end..] {
-        output.push_str(line);
-        output.push('\n');
-    }
-    output
-}
 

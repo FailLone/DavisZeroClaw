@@ -355,35 +355,67 @@ fn merge_classification_rules(
     merged
 }
 
-fn render_mcp_servers_config(paths: &RuntimePaths, config: &LocalConfig) -> String {
-    let mempalace = &config.memory_integrations.mempalace;
-    if !mempalace.enabled {
-        return String::new();
+/// Render the full [[mcp.servers]] array ZeroClaw consumes. Every entry
+/// in local.toml's `[[mcp.servers]]` is passed through verbatim, including
+/// transport type, args, env, url/headers. Davis does not special-case
+/// any server name — mempalace is just one user-declared entry among many.
+fn render_mcp_servers_config(_paths: &RuntimePaths, config: &LocalConfig) -> String {
+    let mut output = String::new();
+    for server in &config.mcp.servers {
+        output.push_str("\n[[mcp.servers]]\n");
+        output.push_str(&format!("name = \"{}\"\n", toml_escape(&server.name)));
+        output.push_str(&format!("transport = \"{}\"\n", mcp_transport_str(server.transport)));
+        match server.transport {
+            crate::app_config::McpTransport::Stdio => {
+                output.push_str(&format!(
+                    "command = \"{}\"\n",
+                    toml_escape(&server.command)
+                ));
+                if !server.args.is_empty() {
+                    let rendered_args = server
+                        .args
+                        .iter()
+                        .map(|arg| format!("\"{}\"", toml_escape(arg)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    output.push_str(&format!("args = [{rendered_args}]\n"));
+                }
+                if !server.env.is_empty() {
+                    output.push_str("\n[mcp.servers.env]\n");
+                    for (key, value) in &server.env {
+                        output.push_str(&format!(
+                            "{} = \"{}\"\n",
+                            toml_key_segment(key),
+                            toml_escape(value)
+                        ));
+                    }
+                }
+            }
+            crate::app_config::McpTransport::Sse | crate::app_config::McpTransport::Http => {
+                output.push_str(&format!("url = \"{}\"\n", toml_escape(&server.url)));
+                if !server.headers.is_empty() {
+                    output.push_str("\n[mcp.servers.headers]\n");
+                    for (key, value) in &server.headers {
+                        output.push_str(&format!(
+                            "{} = \"{}\"\n",
+                            toml_key_segment(key),
+                            toml_escape(value)
+                        ));
+                    }
+                }
+            }
+        }
+        output.push_str(&format!("tool_timeout_secs = {}\n", server.tool_timeout_secs));
     }
+    output
+}
 
-    let python = if mempalace.python.trim().is_empty() {
-        paths.mempalace_python_path()
-    } else {
-        std::path::PathBuf::from(mempalace.python.trim())
-    };
-    let palace_dir = if mempalace.palace_dir.trim().is_empty() {
-        paths.mempalace_palace_dir()
-    } else {
-        std::path::PathBuf::from(mempalace.palace_dir.trim())
-    };
-
-    format!(
-        r#"
-[[mcp.servers]]
-name = "mempalace"
-command = "{}"
-args = ["-m", "mempalace.mcp_server", "--palace", "{}"]
-tool_timeout_secs = {}
-"#,
-        toml_escape(&python.display().to_string()),
-        toml_escape(&palace_dir.display().to_string()),
-        mempalace.tool_timeout_secs
-    )
+fn mcp_transport_str(transport: crate::app_config::McpTransport) -> &'static str {
+    match transport {
+        crate::app_config::McpTransport::Stdio => "stdio",
+        crate::app_config::McpTransport::Sse => "sse",
+        crate::app_config::McpTransport::Http => "http",
+    }
 }
 
 // ── Utility ──────────────────────────────────────────────────────────
@@ -637,6 +669,112 @@ max_fallbacks = 1
             first_research.keywords.contains(&"为啥".to_string()),
             "on priority tie, user rule must come first"
         );
+    }
+
+    #[test]
+    fn render_mcp_servers_emits_empty_output_when_none_configured() {
+        let config = sample_config();
+        let paths = crate::RuntimePaths {
+            repo_root: std::path::PathBuf::from("/tmp/davis-test"),
+            runtime_dir: std::path::PathBuf::from("/tmp/davis-test/.runtime/davis"),
+        };
+        let rendered = render_mcp_servers_config(&paths, &config);
+        assert!(
+            rendered.trim().is_empty(),
+            "no servers configured must yield empty output, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn render_mcp_servers_emits_stdio_entry_with_args() {
+        let mut config = sample_config();
+        config.mcp.servers.push(crate::app_config::McpServerConfig {
+            name: "mempalace".to_string(),
+            transport: crate::app_config::McpTransport::Stdio,
+            command: "/p/bin/python".to_string(),
+            args: vec![
+                "-m".to_string(),
+                "mempalace.mcp_server".to_string(),
+                "--palace".to_string(),
+                "/p/palace".to_string(),
+            ],
+            env: Default::default(),
+            url: String::new(),
+            headers: Default::default(),
+            tool_timeout_secs: 45,
+        });
+        let paths = crate::RuntimePaths {
+            repo_root: std::path::PathBuf::from("/tmp/davis-test"),
+            runtime_dir: std::path::PathBuf::from("/tmp/davis-test/.runtime/davis"),
+        };
+        let rendered = render_mcp_servers_config(&paths, &config);
+        assert!(rendered.contains("name = \"mempalace\""), "{rendered}");
+        assert!(rendered.contains("transport = \"stdio\""), "{rendered}");
+        assert!(rendered.contains("command = \"/p/bin/python\""), "{rendered}");
+        assert!(
+            rendered.contains("args = [\"-m\", \"mempalace.mcp_server\", \"--palace\", \"/p/palace\"]"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("tool_timeout_secs = 45"), "{rendered}");
+    }
+
+    #[test]
+    fn render_mcp_servers_emits_http_entry_with_headers() {
+        let mut config = sample_config();
+        let mut headers = std::collections::BTreeMap::new();
+        headers.insert("X-Auth".to_string(), "placeholder-value".to_string());
+        config.mcp.servers.push(crate::app_config::McpServerConfig {
+            name: "remote".to_string(),
+            transport: crate::app_config::McpTransport::Http,
+            command: String::new(),
+            args: Vec::new(),
+            env: Default::default(),
+            url: "https://example.com/mcp".to_string(),
+            headers,
+            tool_timeout_secs: 30,
+        });
+        let paths = crate::RuntimePaths {
+            repo_root: std::path::PathBuf::from("/tmp/davis-test"),
+            runtime_dir: std::path::PathBuf::from("/tmp/davis-test/.runtime/davis"),
+        };
+        let rendered = render_mcp_servers_config(&paths, &config);
+        assert!(rendered.contains("transport = \"http\""), "{rendered}");
+        assert!(rendered.contains("url = \"https://example.com/mcp\""), "{rendered}");
+        assert!(rendered.contains("X-Auth = \"placeholder-value\""), "{rendered}");
+        assert!(!rendered.contains("command ="), "http entry must not emit command:\n{rendered}");
+    }
+
+    #[test]
+    fn render_mcp_servers_emits_multiple_entries_in_order() {
+        let mut config = sample_config();
+        config.mcp.servers.push(crate::app_config::McpServerConfig {
+            name: "first".to_string(),
+            transport: crate::app_config::McpTransport::Stdio,
+            command: "/a".to_string(),
+            args: Vec::new(),
+            env: Default::default(),
+            url: String::new(),
+            headers: Default::default(),
+            tool_timeout_secs: 30,
+        });
+        config.mcp.servers.push(crate::app_config::McpServerConfig {
+            name: "second".to_string(),
+            transport: crate::app_config::McpTransport::Stdio,
+            command: "/b".to_string(),
+            args: Vec::new(),
+            env: Default::default(),
+            url: String::new(),
+            headers: Default::default(),
+            tool_timeout_secs: 30,
+        });
+        let paths = crate::RuntimePaths {
+            repo_root: std::path::PathBuf::from("/tmp/davis-test"),
+            runtime_dir: std::path::PathBuf::from("/tmp/davis-test/.runtime/davis"),
+        };
+        let rendered = render_mcp_servers_config(&paths, &config);
+        let first_pos = rendered.find("name = \"first\"").expect("first missing");
+        let second_pos = rendered.find("name = \"second\"").expect("second missing");
+        assert!(first_pos < second_pos, "entries must render in config order");
     }
 
     #[test]

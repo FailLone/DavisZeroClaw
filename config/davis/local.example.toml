@@ -76,14 +76,27 @@ override_navigator = true
 remove_overlay_elements = true
 enable_stealth = true
 
-[memory_integrations.mempalace]
-enabled = false
-# Optional overrides. Empty values use .runtime/davis/mempalace-venv/bin/python
-# and .runtime/davis/mempalace.
-python = ""
-palace_dir = ""
-package = "mempalace"
-tool_timeout_secs = 30
+# MCP servers exposed to ZeroClaw. Every entry is passed through verbatim;
+# Davis does not special-case any name. Built-in helpers like
+# `daviszeroclaw memory mempalace enable` upsert their own entry here.
+#
+# Example — uncomment and adjust to add a filesystem MCP server:
+#
+# [[mcp.servers]]
+# name = "filesystem"
+# transport = "stdio"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+# tool_timeout_secs = 30
+#
+# Example — HTTP transport:
+#
+# [[mcp.servers]]
+# name = "remote-thing"
+# transport = "http"
+# url = "https://example.com/mcp"
+# headers = { X-Auth = "replace-with-your-credential" }
+# tool_timeout_secs = 30
 
 [article_memory.embedding]
 enabled = false

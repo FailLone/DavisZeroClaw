@@ -618,17 +618,13 @@ pub(super) fn report_mempalace_mcp_status(paths: &RuntimePaths) {
             return;
         }
     };
-    let mempalace = config.memory_integrations.mempalace;
-    let python = if mempalace.python.trim().is_empty() {
-        paths.mempalace_python_path()
-    } else {
-        PathBuf::from(mempalace.python.trim())
-    };
-
-    if !mempalace.enabled {
-        println!("MemPalace MCP: WARN disabled (run: daviszeroclaw memory mempalace enable)");
+    let Some(server) = super::mempalace::find_mempalace_server(&config.mcp.servers) else {
+        println!(
+            "MemPalace MCP: WARN not configured (run: daviszeroclaw memory mempalace enable)"
+        );
         return;
-    }
+    };
+    let python = PathBuf::from(&server.command);
     if !python.is_file() {
         println!(
             "MemPalace MCP: WARN Python missing at {} (run: daviszeroclaw memory mempalace install)",

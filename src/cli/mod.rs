@@ -635,30 +635,60 @@ mod tests {
     }
 
     #[test]
-    fn replace_toml_section_appends_missing_section() {
+    fn upsert_mcp_server_entry_appends_when_absent() {
         let raw = "[webhook]\nsecret = \"x\"\n";
-        let updated = replace_toml_section(
-            raw,
-            "[memory_integrations.mempalace]",
-            "[memory_integrations.mempalace]\nenabled = true\n",
-        );
+        let entry = "[[mcp.servers]]\nname = \"mempalace\"\ntransport = \"stdio\"\ncommand = \"/p/py\"\n";
+        let updated = super::mempalace::upsert_mcp_server_entry(raw, "mempalace", entry);
 
         assert!(updated.contains("[webhook]\nsecret = \"x\""));
-        assert!(updated.contains("[memory_integrations.mempalace]\nenabled = true"));
+        assert!(updated.contains("name = \"mempalace\""));
+        assert!(updated.contains("command = \"/p/py\""));
     }
 
     #[test]
-    fn replace_toml_section_replaces_existing_section() {
-        let raw = "[webhook]\nsecret = \"x\"\n\n[memory_integrations.mempalace]\nenabled = false\npython = \"old\"\n\n[crawl4ai]\nenabled = true\n";
-        let updated = replace_toml_section(
-            raw,
-            "[memory_integrations.mempalace]",
-            "[memory_integrations.mempalace]\nenabled = true\n",
-        );
+    fn upsert_mcp_server_entry_replaces_only_matching_block() {
+        let raw = "\
+[[mcp.servers]]
+name = \"filesystem\"
+transport = \"stdio\"
+command = \"/fs/bin\"
 
-        assert!(updated.contains("[memory_integrations.mempalace]\nenabled = true\n"));
-        assert!(!updated.contains("python = \"old\""));
+[[mcp.servers]]
+name = \"mempalace\"
+transport = \"stdio\"
+command = \"/old/py\"
+
+[crawl4ai]
+enabled = true
+";
+        let entry = "[[mcp.servers]]\nname = \"mempalace\"\ntransport = \"stdio\"\ncommand = \"/new/py\"\n";
+        let updated = super::mempalace::upsert_mcp_server_entry(raw, "mempalace", entry);
+
+        // The filesystem block is untouched.
+        assert!(updated.contains("name = \"filesystem\""));
+        assert!(updated.contains("command = \"/fs/bin\""));
+        // The mempalace block is replaced.
+        assert!(updated.contains("command = \"/new/py\""));
+        assert!(!updated.contains("command = \"/old/py\""));
+        // The following section survives.
         assert!(updated.contains("[crawl4ai]\nenabled = true"));
+    }
+
+    #[test]
+    fn upsert_mcp_server_entry_does_not_touch_other_servers_when_missing() {
+        let raw = "\
+[[mcp.servers]]
+name = \"filesystem\"
+transport = \"stdio\"
+command = \"/fs/bin\"
+";
+        let entry = "[[mcp.servers]]\nname = \"mempalace\"\ntransport = \"stdio\"\ncommand = \"/p/py\"\n";
+        let updated = super::mempalace::upsert_mcp_server_entry(raw, "mempalace", entry);
+
+        assert!(updated.contains("name = \"filesystem\""));
+        assert!(updated.contains("command = \"/fs/bin\""));
+        assert!(updated.contains("name = \"mempalace\""));
+        assert!(updated.contains("command = \"/p/py\""));
     }
 
     #[test]

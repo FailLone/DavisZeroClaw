@@ -14,7 +14,7 @@ pub struct LocalConfig {
     #[serde(default)]
     pub crawl4ai: Crawl4aiConfig,
     #[serde(default)]
-    pub memory_integrations: MemoryIntegrationsConfig,
+    pub mcp: McpConfig,
     #[serde(default)]
     pub article_memory: ArticleMemoryConfig,
     #[serde(default)]
@@ -125,10 +125,47 @@ pub enum Crawl4aiTransport {
     Python,
 }
 
+/// Flat passthrough for ZeroClaw's [[mcp.servers]] array. Each entry is
+/// rendered verbatim into the runtime config. Davis does not special-case
+/// any server (mempalace included) — if the user wants it, they declare it
+/// here. The `daviszeroclaw memory mempalace install/enable/check` helpers
+/// maintain their own entry in this list.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MemoryIntegrationsConfig {
+pub struct McpConfig {
     #[serde(default)]
-    pub mempalace: MempalaceConfig,
+    pub servers: Vec<McpServerConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub name: String,
+    #[serde(default)]
+    pub transport: McpTransport,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
+    #[serde(default = "default_mcp_tool_timeout_secs")]
+    pub tool_timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTransport {
+    #[default]
+    Stdio,
+    Sse,
+    Http,
+}
+
+fn default_mcp_tool_timeout_secs() -> u64 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -181,21 +218,6 @@ pub struct ArticleMemoryNormalizeConfig {
     pub fallback_min_ratio: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MempalaceConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub python: String,
-    #[serde(default)]
-    pub palace_dir: String,
-    #[serde(default = "default_mempalace_package")]
-    pub package: String,
-    #[serde(default = "default_mempalace_tool_timeout_secs")]
-    pub tool_timeout_secs: u64,
-}
-
-
 fn default_true() -> bool {
     true
 }
@@ -206,14 +228,6 @@ fn default_crawl4ai_base_url() -> String {
 
 fn default_crawl4ai_timeout_secs() -> u64 {
     90
-}
-
-fn default_mempalace_package() -> String {
-    "mempalace".to_string()
-}
-
-fn default_mempalace_tool_timeout_secs() -> u64 {
-    30
 }
 
 fn default_article_embedding_model() -> String {
@@ -258,18 +272,6 @@ impl Default for Crawl4aiConfig {
             override_navigator: default_true(),
             remove_overlay_elements: default_true(),
             enable_stealth: default_true(),
-        }
-    }
-}
-
-impl Default for MempalaceConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            python: String::new(),
-            palace_dir: String::new(),
-            package: default_mempalace_package(),
-            tool_timeout_secs: default_mempalace_tool_timeout_secs(),
         }
     }
 }
@@ -395,36 +397,57 @@ fn validate_local_config(mut config: LocalConfig) -> Result<LocalConfig> {
         config.crawl4ai.timeout_secs = default_crawl4ai_timeout_secs();
     }
 
-    config.memory_integrations.mempalace.python = config
-        .memory_integrations
-        .mempalace
-        .python
-        .trim()
-        .to_string();
-    config.memory_integrations.mempalace.palace_dir = config
-        .memory_integrations
-        .mempalace
-        .palace_dir
-        .trim()
-        .to_string();
-    config.memory_integrations.mempalace.package = config
-        .memory_integrations
-        .mempalace
-        .package
-        .trim()
-        .to_string();
-    if config.memory_integrations.mempalace.package.is_empty() {
-        config.memory_integrations.mempalace.package = default_mempalace_package();
-    }
-    if config.memory_integrations.mempalace.tool_timeout_secs == 0 {
-        config.memory_integrations.mempalace.tool_timeout_secs =
-            default_mempalace_tool_timeout_secs();
-    }
-
+    validate_mcp_servers(&mut config.mcp)?;
     validate_article_memory_config(&mut config)?;
     validate_query_classification_override(&mut config.query_classification)?;
 
     Ok(config)
+}
+
+fn validate_mcp_servers(mcp: &mut McpConfig) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for (index, server) in mcp.servers.iter_mut().enumerate() {
+        server.name = server.name.trim().to_string();
+        server.command = server.command.trim().to_string();
+        server.url = server.url.trim().to_string();
+        server.args = server
+            .args
+            .iter()
+            .map(|arg| arg.trim().to_string())
+            .collect();
+        if server.tool_timeout_secs == 0 {
+            server.tool_timeout_secs = default_mcp_tool_timeout_secs();
+        }
+
+        if server.name.is_empty() {
+            return Err(anyhow!("mcp.servers[{index}].name is required"));
+        }
+        if !seen.insert(server.name.clone()) {
+            return Err(anyhow!(
+                "mcp.servers has a duplicate name: {}",
+                server.name
+            ));
+        }
+        match server.transport {
+            McpTransport::Stdio => {
+                if server.command.is_empty() {
+                    return Err(anyhow!(
+                        "mcp.servers[{}].command is required for stdio transport",
+                        server.name
+                    ));
+                }
+            }
+            McpTransport::Sse | McpTransport::Http => {
+                if server.url.is_empty() {
+                    return Err(anyhow!(
+                        "mcp.servers[{}].url is required for sse/http transport",
+                        server.name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_query_classification_override(
