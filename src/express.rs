@@ -3,6 +3,7 @@ use crate::{
     Crawl4aiPageRequest, Crawl4aiProfileLocks, ExpressAuthStatusResponse, ExpressPackage,
     ExpressPackagesResponse, ExpressSourceSnapshot, ExpressSourceStatus, RuntimePaths,
 };
+use futures::future::join_all;
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -18,11 +19,19 @@ pub async fn express_auth_status(
     crawl4ai_config: Crawl4aiConfig,
     profile_locks: Crawl4aiProfileLocks,
 ) -> ExpressAuthStatusResponse {
-    let mut sources = Vec::new();
-    for source in EXPRESS_SOURCES {
-        let lock = acquire_profile_lock(&profile_locks, &express_profile_name(source)).await;
-        sources.push(fetch_source_status(&paths, &crawl4ai_config, lock, source).await);
-    }
+    // Fan out per-source fetches concurrently. Each future acquires its own
+    // per-profile lock *inside* the async block so contention is scoped to
+    // same-profile calls; different sources proceed in parallel.
+    let futures = EXPRESS_SOURCES.iter().map(|source| {
+        let paths = paths.clone();
+        let cfg = crawl4ai_config.clone();
+        let locks = profile_locks.clone();
+        async move {
+            let lock = acquire_profile_lock(&locks, &express_profile_name(source)).await;
+            fetch_source_status(&paths, &cfg, lock, source).await
+        }
+    });
+    let sources: Vec<_> = join_all(futures).await;
     ExpressAuthStatusResponse {
         status: aggregate_status_from_statuses(&sources),
         checked_at: isoformat(now_utc()),
@@ -38,21 +47,22 @@ pub async fn express_packages(
     query: Option<String>,
     force_refresh: bool,
 ) -> ExpressPackagesResponse {
-    let mut snapshots = Vec::new();
-    for selected_source in select_sources(source.as_deref()) {
-        let lock =
-            acquire_profile_lock(&profile_locks, &express_profile_name(selected_source)).await;
-        snapshots.push(
-            load_or_fetch_source(
-                &paths,
-                &crawl4ai_config,
-                lock,
-                selected_source,
-                force_refresh,
-            )
-            .await,
-        );
-    }
+    // Same fan-out pattern as express_auth_status: per-profile lock acquired
+    // inside each future so distinct sources don't serialize on the HashMap
+    // mutex for the full crawl duration.
+    let snapshot_futures = select_sources(source.as_deref())
+        .into_iter()
+        .map(|selected_source| {
+            let paths = paths.clone();
+            let cfg = crawl4ai_config.clone();
+            let locks = profile_locks.clone();
+            async move {
+                let lock =
+                    acquire_profile_lock(&locks, &express_profile_name(selected_source)).await;
+                load_or_fetch_source(&paths, &cfg, lock, selected_source, force_refresh).await
+            }
+        });
+    let snapshots: Vec<_> = join_all(snapshot_futures).await;
 
     let normalized_query = query
         .as_deref()
