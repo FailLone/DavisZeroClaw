@@ -9,10 +9,11 @@ use crate::{
     ROOM_LIGHT_KEYWORDS,
 };
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use toml::Value as TomlValue;
 
 static CONFIG_REPORT_TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -30,6 +31,34 @@ fn write_report_cache_atomic(path: &std::path::Path, report: &ConfigReport) -> R
         let _ = fs::remove_file(&temp_path);
     })?;
     Ok(())
+}
+
+fn build_entity_aliases_toml_snippet(entity_id: &str, aliases: &[String]) -> String {
+    let mut entity_table = toml::map::Map::new();
+    entity_table.insert(
+        entity_id.to_string(),
+        TomlValue::Array(aliases.iter().cloned().map(TomlValue::String).collect()),
+    );
+    let mut root = toml::map::Map::new();
+    root.insert("entity_aliases".to_string(), TomlValue::Table(entity_table));
+    toml::to_string_pretty(&TomlValue::Table(root)).unwrap_or_default()
+}
+
+fn build_group_toml_snippet(group_name: &str, entities: &[String], aliases: &[String]) -> String {
+    let mut inner = toml::map::Map::new();
+    inner.insert(
+        "entities".to_string(),
+        TomlValue::Array(entities.iter().cloned().map(TomlValue::String).collect()),
+    );
+    inner.insert(
+        "aliases".to_string(),
+        TomlValue::Array(aliases.iter().cloned().map(TomlValue::String).collect()),
+    );
+    let mut group_table = toml::map::Map::new();
+    group_table.insert(group_name.to_string(), TomlValue::Table(inner));
+    let mut root = toml::map::Map::new();
+    root.insert("groups".to_string(), TomlValue::Table(group_table));
+    toml::to_string_pretty(&TomlValue::Table(root)).unwrap_or_default()
 }
 
 fn infer_group_suggestions(states: &[HaState], config: &ControlConfig) -> Vec<GroupSuggestion> {
@@ -163,12 +192,10 @@ fn build_migration_suggestions(
                 target: replacement_state.entity_id.clone(),
                 current: old_aliases.clone(),
                 recommended: merged_aliases.clone(),
-                snippet: serde_json::to_string_pretty(&json!({
-                    "entity_aliases": {
-                        replacement_state.entity_id.clone(): merged_aliases
-                    }
-                }))
-                .unwrap_or_default(),
+                snippet: build_entity_aliases_toml_snippet(
+                    &replacement_state.entity_id,
+                    &merged_aliases,
+                ),
                 requires_confirmation: true,
             });
         }
@@ -197,15 +224,7 @@ fn build_migration_suggestions(
                 target: group_name.clone(),
                 current: group.entities.clone(),
                 recommended: entities.clone(),
-                snippet: serde_json::to_string_pretty(&json!({
-                    "groups": {
-                        group_name: {
-                            "entities": entities,
-                            "aliases": group.aliases
-                        }
-                    }
-                }))
-                .unwrap_or_default(),
+                snippet: build_group_toml_snippet(group_name, &entities, &group.aliases),
                 requires_confirmation: true,
             });
         }

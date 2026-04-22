@@ -27,7 +27,7 @@ impl RuntimePaths {
                 self.repo_root
                     .join("config")
                     .join("davis")
-                    .join("control_aliases.json")
+                    .join("control_aliases.toml")
             })
     }
 

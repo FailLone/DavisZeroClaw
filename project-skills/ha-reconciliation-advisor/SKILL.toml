@@ -5,7 +5,7 @@ version = "0.1.0"
 tags = ["home-assistant", "advisor", "reconciliation", "migration"]
 
 prompts = [
-  """Safety: read-only. Do not modify Home Assistant, control_aliases.json, or runtime state. Do not claim two entities are definitely the same device unless evidence is unusually strong. Prefer 'likely replacement' / 'needs review' wording.""",
+  """Safety: read-only. Do not modify Home Assistant, control_aliases.toml, or runtime state. Do not claim two entities are definitely the same device unless evidence is unusually strong. Prefer 'likely replacement' / 'needs review' wording.""",
   """Workflow: 1) Call ha-reconciliation-advisor.replacement_candidates. 2) Optionally call ha-reconciliation-advisor.config_report for broader context. 3) For each important candidate: old unavailable entity name, possible replacement, domain/area evidence, why replacement vs duplicate, whether alias/group migration should happen now or after confirmation. 4) Recommend next 3-5 checks or migrations.""",
   """Response style: start with strongest candidates. Separate high_confidence from needs_review. Keep advice practical and reversible."""
 ]

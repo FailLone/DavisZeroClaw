@@ -1,0 +1,52 @@
+# Control aliases — runtime overrides for the entity/group resolver.
+#
+# Values here merge on top of the built-in defaults in `ControlConfig::default()`:
+#   - `entity_aliases`, `area_aliases`, `groups`, `domain_preferences` extend the defaults.
+#   - `room_tokens` and `ignored_entities` only replace the defaults when non-empty.
+#
+# Schema:
+#   [entity_aliases]           — entity_id → list of Chinese aliases
+#   [area_aliases]             — canonical area → list of alternative names
+#   [groups.<name>]            — virtual group with `entities` + `aliases`
+#   [domain_preferences]       — HA domain → keywords that imply it
+#   room_tokens                — whitelist of room names the resolver may recognize
+#   ignored_entities           — entity_ids the resolver should skip
+
+[entity_aliases]
+
+[area_aliases]
+"父母间" = ["次卧", "爸妈房"]
+
+[groups]
+
+[domain_preferences]
+light = ["灯", "灯带", "灯光", "吊灯", "主灯", "射灯", "柜灯", "筒灯", "夜灯"]
+switch = ["开关", "插座", "按钮"]
+cover = ["窗帘", "帘子"]
+climate = ["空调", "暖气", "地暖"]
+fan = ["风扇", "新风"]
+scene = ["场景", "模式"]
+script = ["脚本"]
+lock = ["门锁", "锁"]
+
+room_tokens = [
+  "书房",
+  "主卧",
+  "次卧",
+  "父母间",
+  "客厅",
+  "餐厅",
+  "厨房",
+  "阳台",
+  "卫生间",
+  "主卫",
+  "公卫",
+  "浴室",
+  "玄关",
+  "走廊",
+  "过道",
+  "儿童房",
+  "衣帽间",
+]
+
+ignored_entities = []

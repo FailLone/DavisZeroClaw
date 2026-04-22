@@ -24,11 +24,27 @@ fn load_control_config_returns_error_for_missing_file() {
 }
 
 #[test]
-fn load_control_config_returns_error_for_invalid_json() {
+fn load_control_config_returns_error_for_invalid_toml() {
     let paths = sample_paths();
-    write_control_config(&paths, "{ invalid json");
+    write_control_config(&paths, "= not valid toml");
     let error = load_control_config(&paths).unwrap_err();
     assert!(error.to_string().contains("invalid control config"));
+}
+
+#[test]
+fn load_control_config_parses_shipped_toml_file() {
+    let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let paths = RuntimePaths {
+        runtime_dir: repo_root.join(".runtime").join("davis"),
+        repo_root,
+    };
+    let config = load_control_config(&paths).unwrap();
+    assert_eq!(
+        config.area_aliases.get("父母间").map(Vec::as_slice),
+        Some(["次卧".to_string(), "爸妈房".to_string()].as_slice())
+    );
+    assert!(config.domain_preferences.contains_key("light"));
+    assert!(config.room_tokens.contains(&"客厅".to_string()));
 }
 
 #[test]

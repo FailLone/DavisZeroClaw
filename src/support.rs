@@ -85,7 +85,7 @@ pub fn build_issue(issue_type: &str, query_entity: &str, suggestions: Vec<String
         "group_members_missing" => (
             "configuration",
             vec![
-                "Review the configured group members in control_aliases.json",
+                "Review the configured group members in control_aliases.toml",
                 "Remove stale entity_ids or rename the group to match current Home Assistant entities",
                 "Regenerate the config report and fix the affected group before retrying control",
             ],

@@ -34,4 +34,4 @@ Interpretation notes:
 
 - Treat `counts_by_reason.resolution_ambiguous` as a configuration-quality signal rather than a transient transport failure.
 - When `resolution_ambiguous` is present, correlate it with duplicate names, weak aliases, or missing room/group semantics in the config report.
-- `suggestions.migration_suggestions` contains read-only proposals for alias migration or group-member replacement. Review the `snippet` before applying anything to `control_aliases.json`.
+- `suggestions.migration_suggestions` contains read-only proposals for alias migration or group-member replacement. Review the `snippet` before applying anything to `control_aliases.toml`.

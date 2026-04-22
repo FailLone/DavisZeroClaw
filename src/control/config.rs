@@ -11,7 +11,7 @@ pub fn load_control_config(paths: &RuntimePaths) -> Result<ControlConfig> {
             anyhow!("failed to read control config {}: {err}", path.display())
         }
     })?;
-    let loaded = serde_json::from_str::<ControlConfig>(&raw)
+    let loaded = toml::from_str::<ControlConfig>(&raw)
         .map_err(|err| anyhow!("invalid control config {}: {err}", path.display()))?;
     let mut config = ControlConfig::default();
     merge_control_config(&mut config, loaded);
