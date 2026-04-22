@@ -1,6 +1,7 @@
 use crate::{
     build_app, build_shortcut_bridge_app, check_local_config, load_control_config,
-    zeroclaw_env_vars, AppState, HaClient, HaMcpClient, HaState, ModelRoutingManager, RuntimePaths,
+    render_runtime_config, zeroclaw_env_vars, AppState, HaClient, HaMcpClient, HaState,
+    RuntimePaths,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -88,7 +89,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         &local_config.home_assistant.token,
     )
     .map_err(|err| anyhow::anyhow!("{err:?}"))?;
-    let routing = ModelRoutingManager::spawn(paths.clone(), local_config.clone())?;
+    render_runtime_config(&paths, &local_config)?;
     let state = AppState::new(
         client,
         mcp_client,
@@ -97,7 +98,6 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         Arc::new(local_config.crawl4ai.clone()),
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
-        routing,
         local_config.webhook.secret.clone(),
     );
     let app = build_app(state.clone());

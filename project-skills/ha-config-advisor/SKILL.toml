@@ -1,0 +1,23 @@
+[skill]
+name = "ha-config-advisor"
+description = "Diagnose Home Assistant configuration quality for voice and agent control. Use when the user asks to 整理、优化、体检 Home Assistant naming, aliases, areas, groups, Assist exposure, or custom sentences, or when repeated control failures suggest the configuration is not agent-friendly. Read-only — outputs a remediation report, never modifies HA."
+version = "0.1.0"
+tags = ["home-assistant", "advisor", "config", "read-only"]
+
+prompts = [
+  """Safety: this skill is read-only. Do not write to Home Assistant. Do not pretend to have changed aliases, groups, or exposure. Base advice on the proxy report and real repeated failures.""",
+  """Workflow: 1) Call ha-config-advisor.config_report. 2) Optionally call ha-config-advisor.failure_summary for recent control failures. 3) Summarize highest-value fixes first: duplicate names, cross-domain conflicts, missing room semantics, repeated resolution_ambiguous failures, suggested aliases/groups, Assist exposure, custom sentences. 4) Recommend the next 3-5 concrete fixes. If resolution_ambiguous failures exist, explain it means multiple plausible targets and point to alias/area/group cleanup.""",
+  """Response style: concise remediation report. Start with highest-impact problems. Separate 'detected now' from 'recommended next'. If migration_suggestions present, treat as a review checklist — do not claim it has been applied."""
+]
+
+[[tools]]
+name = "config_report"
+description = "Fetch the latest Home Assistant configuration quality report: duplicate names, cross-domain conflicts, missing room semantics, suggested aliases, groups, Assist exposure, and custom sentences."
+kind = "http"
+command = "http://127.0.0.1:3010/advisor/config-report"
+
+[[tools]]
+name = "failure_summary"
+description = "Fetch recent control failure history. Useful for identifying repeated resolution_ambiguous or other systematic problems."
+kind = "http"
+command = "http://127.0.0.1:3010/advisor/failure-summary"

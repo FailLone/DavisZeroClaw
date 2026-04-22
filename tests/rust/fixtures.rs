@@ -62,27 +62,25 @@ base_url = ""
 allowed_models = ["openai/gpt-4o"]
 
 [routing]
-recompute_interval_minutes = 30
-restart_debounce_minutes = 10
 
 [routing.profiles.home_control]
-weights = { task_success = 0.45, safety = 0.30, stability = 0.15, latency = 0.08, cost = 0.02 }
-minimums = { task_success = 80, safety = 90 }
+provider = "openrouter"
+model = "openai/gpt-4o"
 max_fallbacks = 1
 
 [routing.profiles.general_qa]
-weights = { task_success = 0.42, latency = 0.28, stability = 0.15, safety = 0.10, cost = 0.05 }
-minimums = { task_success = 60, safety = 40 }
+provider = "openrouter"
+model = "openai/gpt-4o"
 max_fallbacks = 1
 
 [routing.profiles.research]
-weights = { task_success = 0.50, stability = 0.20, latency = 0.15, safety = 0.10, cost = 0.05 }
-minimums = { task_success = 70, safety = 50 }
+provider = "openrouter"
+model = "openai/gpt-4o"
 max_fallbacks = 1
 
 [routing.profiles.structured_lookup]
-weights = { task_success = 0.40, latency = 0.25, stability = 0.20, safety = 0.10, cost = 0.05 }
-minimums = { task_success = 75, safety = 60 }
+provider = "openrouter"
+model = "openai/gpt-4o"
 max_fallbacks = 1
 "#,
     )

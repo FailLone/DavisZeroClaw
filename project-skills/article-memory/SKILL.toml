@@ -1,0 +1,38 @@
+[skill]
+name = "article-memory"
+description = "Store, search, and report on the user's curated article knowledge base through the Davis local article memory API. Use when the user asks to remember articles, search saved articles, build a learning library, translate or summarize saved articles, evaluate article quality, or produce article collection reports. Do not use for personal preferences; use mempalace-memory for that."
+version = "0.1.0"
+tags = ["articles", "knowledge-base", "research", "learning"]
+
+prompts = [
+  """Boundary: use article-memory for article records, URLs, summaries, translations, value scores, tags, and research reports. Use mempalace-memory for durable personal facts, preferences, corrections, and conversation continuity. Never store secrets, API keys, passwords, or tokens.""",
+  """Quality gate: before saving, evaluate whether the article has clear authorship, durable insight, original analysis, useful detail, strong references, or practical workflow worth revisiting. Reject promotional, copied, thin, misleading, unverifiable, or momentarily interesting material.""",
+  """Workflow: 1) Search before adding — call article-memory.search to check duplicates. 2) Save deliberately — use http_request POST http://127.0.0.1:3010/article-memory/articles with JSON body {title, content, url, source, language, tags, summary, translation, status, value_score, notes} only after quality gate passes. 3) To ingest browser page — use http_request POST http://127.0.0.1:3010/article-memory/ingest with JSON body {url, profile, tab_id, new_tab, source, language, tags, status, value_score, notes}. 4) Answer from stored material only after searching.""",
+  """Status values: candidate (not yet evaluated), saved (accepted), rejected (intentionally not kept), archived (old but retained). Ingest defaults to candidate.""",
+  """Strategy review: when user asks to improve article cleaning or value judging, run 'daviszeroclaw articles strategy review-input --recent 20' first. Edit only config/davis/article_memory.toml. If config cannot express the needed behavior, write implementation request under .runtime/davis/article-memory/reports/implementation-requests/."""
+]
+
+[[tools]]
+name = "status"
+description = "Get article memory status: root paths, counts, tags, languages, and index status."
+kind = "http"
+command = "http://127.0.0.1:3010/article-memory/status"
+
+[[tools]]
+name = "list"
+description = "List recent article records. Use for reports or quick inventory."
+kind = "http"
+command = "http://127.0.0.1:3010/article-memory/articles?limit={{limit}}"
+
+[tools.args]
+limit = "Maximum number of articles to return. Default 20."
+
+[[tools]]
+name = "search"
+description = "Search articles by title, URL, source, tags, notes, content, summary, and translation. Uses hybrid keyword + semantic search when embedding index is configured."
+kind = "http"
+command = "http://127.0.0.1:3010/article-memory/search?q={{q}}&limit={{limit}}"
+
+[tools.args]
+q = "Search query: article title, topic keyword, URL fragment, tag, or any text."
+limit = "Maximum number of results. Default 10."

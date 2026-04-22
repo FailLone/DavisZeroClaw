@@ -1,0 +1,42 @@
+[skill]
+name = "ha-audit"
+description = "Investigate Home Assistant history in a strict read-only way. Use when the user asks about a past time window such as last night, earlier today, between specific times, who changed an entity, why it toggled before, or to audit without performing any write operation. Do NOT use for present-tense live status."
+version = "0.1.0"
+tags = ["home-assistant", "audit", "history", "read-only"]
+
+prompts = [
+  """Safety: treat all audit requests as read-only. Never call any homeassistant__* write tool during audit. Use only the callable tools below. If the user is asking about current live state, do NOT use this skill.""",
+  """Trigger hints: prefer ha-audit immediately when the request includes cues like 昨晚, 之前, earlier today, 某个时间段, 几点到几点, 谁关的, 谁开的, 为什么反复开关, 调查, 审计, 只允许读取.""",
+  """Workflow: 1) Confirm the request is historical. 2) Call ha-audit.resolve_entity with the user's entity hint to get the real entity_id. 3) Call ha-audit.audit with the resolved entity_id and appropriate time window (default 60 minutes). 4) Interpret the result type: evidence → synthesize from findings/actor/source/confidence. config_issue → explain using issue_type/recommended_actions/suggestions. no_evidence → state that no sufficient evidence was found, explain using missing_evidence_types/possible_reasons.""",
+  """Response style: concise and factual. Separate 'what we know' from 'what we cannot prove'. If proxy returns config_issue, prefer actionable guidance. If no_evidence, do not frame it as a config failure unless the issue payload says so."""
+]
+
+[[tools]]
+name = "resolve_entity"
+description = "Resolve a natural-language entity hint (full entity_id, suffix like main_bedroom_on_off, or friendly name like 主卧空调) to the actual Home Assistant entity_id."
+kind = "http"
+command = "http://127.0.0.1:3010/resolve-entity?entity_id={{entity_hint}}"
+
+[tools.args]
+entity_hint = "Entity hint: a full entity_id, a suffix like main_bedroom_on_off, or a friendly name like 主卧空调."
+
+[[tools]]
+name = "audit"
+description = "Query Home Assistant logbook and history for a specific entity within a time window. Returns evidence, config_issue, or no_evidence."
+kind = "http"
+command = "http://127.0.0.1:3010/audit?entity_id={{entity_id}}&window_minutes={{window_minutes}}"
+
+[tools.args]
+entity_id = "Full entity_id or resolvable hint. Prefer the resolved entity_id from resolve_entity."
+window_minutes = "Audit window in minutes. Default 60. Use 480 for 'last night', 1440 for 'last 24h'."
+
+[[tools]]
+name = "audit_range"
+description = "Query Home Assistant logbook and history for a specific entity within an explicit ISO 8601 time range."
+kind = "http"
+command = "http://127.0.0.1:3010/audit?entity_id={{entity_id}}&start={{start}}&end={{end}}"
+
+[tools.args]
+entity_id = "Full entity_id or resolvable hint."
+start = "Start of audit window in ISO 8601 format, e.g. 2026-04-21T22:00:00+08:00."
+end = "End of audit window in ISO 8601 format, e.g. 2026-04-22T06:00:00+08:00."

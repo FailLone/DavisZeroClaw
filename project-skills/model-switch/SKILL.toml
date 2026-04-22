@@ -1,0 +1,15 @@
+[skill]
+name = "model-switch"
+description = "Switch the active AI model, check current model config, or set up scenario-based routing. Use when the user says 切换模型, 换模型, switch model, use sonnet, use opus, 用什么模型, 当前模型, model status, or similar."
+version = "0.1.0"
+tags = ["model", "routing", "config"]
+
+prompts = [
+  """IMPORTANT: Do NOT use the built-in model_switch shortcut. Always use the model_routing_config tool instead — it validates provider keys and avoids mismatches. Workflow: 1) If user asks current model → call model_routing_config with action=get. 2) If user wants to switch default → call model_routing_config with action=set_default, provider=<provider>, model=<model>. The provider must be one of the configured provider IDs, not a raw vendor name. 3) If user wants scenario routing → call model_routing_config with action=upsert_scenario. 4) To list available hints → call model_routing_config with action=list_hints.""",
+  """Provider and model mapping for this deployment. All providers use the 'custom:URL' format as provider ID:
+- Provider 'custom:https://openrouter.ai/api/v1': opus → 'anthropic/claude-opus-4.6', sonnet → 'anthropic/claude-sonnet-4.6', gpt-4.1 → 'openai/gpt-4.1'
+- Provider 'custom:https://api.deepseek.com/v1': deepseek-chat
+- Provider 'custom:https://api.siliconflow.cn/v1': Qwen/Qwen3.5-397B-A17B
+When user says 'opus', use provider='custom:https://openrouter.ai/api/v1' model='anthropic/claude-opus-4.6'. When user says 'sonnet', use provider='custom:https://openrouter.ai/api/v1' model='anthropic/claude-sonnet-4.6'.""",
+  """Safety: always confirm with user before switching. Show what will change and what it was before. Use model_routing_config action=get first to show current state."""
+]

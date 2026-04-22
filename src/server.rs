@@ -8,7 +8,7 @@ use crate::{
     resolve_entity_payload, search_article_memory, upsert_article_memory_embedding,
     ArticleMemoryAddRequest, ArticleMemoryConfig, ControlAction, ControlConfig, Crawl4aiConfig,
     ExecuteControlRequest, FailureReason, HaClient, HaMcpClient, ModelProviderConfig,
-    ModelRoutingManager, ProxyError, RuntimePaths,
+    ProxyError, RuntimePaths,
 };
 use axum::body::Bytes;
 use axum::extract::{Query, State};
@@ -55,7 +55,6 @@ pub struct AppState {
     pub crawl4ai_config: Arc<Crawl4aiConfig>,
     pub article_memory_config: Arc<ArticleMemoryConfig>,
     pub providers: Arc<Vec<ModelProviderConfig>>,
-    pub routing: Arc<ModelRoutingManager>,
     pub shortcut_secret: String,
 }
 
@@ -68,7 +67,6 @@ impl AppState {
         crawl4ai_config: Arc<Crawl4aiConfig>,
         article_memory_config: Arc<ArticleMemoryConfig>,
         providers: Arc<Vec<ModelProviderConfig>>,
-        routing: Arc<ModelRoutingManager>,
         shortcut_secret: String,
     ) -> Self {
         Self {
@@ -79,7 +77,6 @@ impl AppState {
             crawl4ai_config,
             article_memory_config,
             providers,
-            routing,
             shortcut_secret,
         }
     }
@@ -97,13 +94,6 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/advisor/replacement-candidates",
             get(replacement_candidates),
-        )
-        .route("/model-routing/status", get(model_routing_status))
-        .route("/model-routing/plan", get(model_routing_plan))
-        .route("/model-routing/scorecard", get(model_routing_scorecard))
-        .route(
-            "/model-routing/observations",
-            get(model_routing_observations),
         )
         .route("/zeroclaw/runtime-traces", get(zeroclaw_runtime_traces))
         .route("/express/auth-status", get(express_auth_status_handler))
@@ -183,10 +173,6 @@ async fn health() -> Json<Value> {
                 "control_execution",
                 "advisor_reports",
                 "replacement_candidates",
-                "model_routing_status",
-                "model_routing_plan",
-                "model_routing_scorecard",
-                "model_routing_observations",
                 "zeroclaw_runtime_traces",
                 "express_auth_status",
                 "express_packages",
@@ -446,34 +432,6 @@ async fn execute_control_handler(
     let response =
         execute_control(&state.client, &state.paths, &state.control_config, payload).await;
     json_response(StatusCode::OK, response)
-}
-
-async fn model_routing_status(State(state): State<AppState>) -> Json<Value> {
-    Json(
-        serde_json::to_value(state.routing.status().await)
-            .unwrap_or_else(|_| json!({"status":"error","route_ready":false})),
-    )
-}
-
-async fn model_routing_plan(State(state): State<AppState>) -> Json<Value> {
-    Json(
-        serde_json::to_value(state.routing.plan().await)
-            .unwrap_or_else(|_| json!({"status":"error"})),
-    )
-}
-
-async fn model_routing_scorecard(State(state): State<AppState>) -> Json<Value> {
-    Json(
-        serde_json::to_value(state.routing.scorecard().await)
-            .unwrap_or_else(|_| json!({"status":"error"})),
-    )
-}
-
-async fn model_routing_observations(State(state): State<AppState>) -> Json<Value> {
-    Json(
-        serde_json::to_value(state.routing.observations().await)
-            .unwrap_or_else(|_| json!({"status":"error"})),
-    )
 }
 
 async fn zeroclaw_runtime_traces(

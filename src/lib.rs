@@ -24,7 +24,7 @@ pub use advisor::{
 pub use app_config::{
     ArticleMemoryConfig, ArticleMemoryEmbeddingConfig, ArticleMemoryNormalizeConfig,
     Crawl4aiConfig, Crawl4aiTransport, HomeAssistantConfig, ImessageConfig, LocalConfig,
-    MemoryIntegrationsConfig, MempalaceConfig, MetricWeights, ModelProviderConfig, ProfileMinimums,
+    MemoryIntegrationsConfig, MempalaceConfig, ModelProviderConfig,
     RoutingConfig, RoutingProfileConfig, RoutingProfilesConfig, WebhookConfig,
 };
 pub use article_memory::{
@@ -71,10 +71,7 @@ pub use ha_mcp::{
 };
 pub use local_proxy::run_local_proxy;
 pub use model_routing::{
-    check_local_config, zeroclaw_env_vars, ModelCostObservation, ModelRoutePlan,
-    ModelRoutingManager, ModelScoreEntry, PlannedModel, PlannedProfileRoute,
-    ProfileRuntimeObservation, RoutingProfile, RoutingStatus, RuntimeObservations,
-    RuntimeScoreSignals,
+    check_local_config, render_runtime_config, zeroclaw_env_vars, RoutingProfile,
 };
 pub use models::{
     AdvancedOpportunity, AdvisorSuggestion, AssistEntitySuggestion, AuditActor,

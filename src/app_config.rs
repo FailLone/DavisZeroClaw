@@ -48,8 +48,8 @@ pub struct ModelProviderConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingConfig {
-    pub recompute_interval_minutes: u64,
-    pub restart_debounce_minutes: u64,
+    #[serde(default)]
+    pub default_profile: Option<String>,
     pub profiles: RoutingProfilesConfig,
 }
 
@@ -63,9 +63,14 @@ pub struct RoutingProfilesConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingProfileConfig {
-    pub weights: MetricWeights,
-    pub minimums: ProfileMinimums,
+    pub provider: String,
+    pub model: String,
+    #[serde(default = "default_max_fallbacks")]
     pub max_fallbacks: usize,
+}
+
+fn default_max_fallbacks() -> usize {
+    2
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,20 +177,6 @@ pub struct MempalaceConfig {
     pub tool_timeout_secs: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricWeights {
-    pub task_success: f64,
-    pub safety: f64,
-    pub latency: f64,
-    pub stability: f64,
-    pub cost: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProfileMinimums {
-    pub task_success: u8,
-    pub safety: u8,
-}
 
 fn default_true() -> bool {
     true
@@ -362,20 +353,14 @@ fn validate_local_config(mut config: LocalConfig) -> Result<LocalConfig> {
         }
     }
 
-    validate_profile("home_control", &config.routing.profiles.home_control)?;
-    validate_profile("general_qa", &config.routing.profiles.general_qa)?;
-    validate_profile("research", &config.routing.profiles.research)?;
+    validate_profile("home_control", &config.routing.profiles.home_control, &config.providers)?;
+    validate_profile("general_qa", &config.routing.profiles.general_qa, &config.providers)?;
+    validate_profile("research", &config.routing.profiles.research, &config.providers)?;
     validate_profile(
         "structured_lookup",
         &config.routing.profiles.structured_lookup,
+        &config.providers,
     )?;
-
-    if config.routing.recompute_interval_minutes == 0 {
-        return Err(anyhow!("routing.recompute_interval_minutes must be > 0"));
-    }
-    if config.routing.restart_debounce_minutes == 0 {
-        return Err(anyhow!("routing.restart_debounce_minutes must be > 0"));
-    }
 
     config.crawl4ai.base_url = config
         .crawl4ai
@@ -499,26 +484,26 @@ fn validate_article_memory_config(config: &mut LocalConfig) -> Result<()> {
     Ok(())
 }
 
-fn validate_profile(name: &str, profile: &RoutingProfileConfig) -> Result<()> {
-    let weights = [
-        profile.weights.task_success,
-        profile.weights.safety,
-        profile.weights.latency,
-        profile.weights.stability,
-        profile.weights.cost,
-    ];
-    if weights.iter().any(|value| *value < 0.0) {
-        return Err(anyhow!(
-            "routing.profiles.{name}.weights must not contain negative values"
-        ));
+fn validate_profile(
+    name: &str,
+    profile: &RoutingProfileConfig,
+    providers: &[ModelProviderConfig],
+) -> Result<()> {
+    if profile.provider.trim().is_empty() {
+        return Err(anyhow!("routing.profiles.{name}.provider is required"));
     }
-    let sum: f64 = weights.iter().sum();
-    if (sum - 1.0).abs() > 0.001 {
-        return Err(anyhow!("routing.profiles.{name}.weights must sum to 1.0"));
+    if profile.model.trim().is_empty() {
+        return Err(anyhow!("routing.profiles.{name}.model is required"));
+    }
+    if !providers.iter().any(|p| p.name == profile.provider) {
+        return Err(anyhow!(
+            "routing.profiles.{name}.provider '{}' does not match any configured provider",
+            profile.provider
+        ));
     }
     if profile.max_fallbacks > 3 {
         return Err(anyhow!(
-            "routing.profiles.{name}.max_fallbacks must be <= 3 in V1"
+            "routing.profiles.{name}.max_fallbacks must be <= 3"
         ));
     }
     Ok(())

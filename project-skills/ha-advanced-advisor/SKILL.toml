@@ -1,0 +1,17 @@
+[skill]
+name = "ha-advanced-advisor"
+description = "Advise on advanced Home Assistant architecture and power-user patterns such as automation layering, scripts, scenes, custom sentences, and KNX-friendly naming. Use when the user asks how to structure higher-level HA logic beyond basic naming cleanup, or when ha-config-advisor reveals deeper architectural opportunities. Advisory only — never modifies HA."
+version = "0.1.0"
+tags = ["home-assistant", "advisor", "architecture", "advanced"]
+
+prompts = [
+  """Safety: this skill is advisory only. Do not modify Home Assistant. Do not recommend rewriting everything at once; prioritize the smallest architectural step that improves reliability.""",
+  """Workflow: 1) Call ha-advanced-advisor.config_report to read current HA state. 2) Focus on architecture-level opportunities: automation layering/naming, when to introduce script/scene, custom sentences, how to separate HA-native logic from Davis/LLM logic, KNX-facing naming and exposure. 3) Propose a staged roadmap: immediate cleanup → next-level abstractions → later advanced integration.""",
+  """Response style: strategic, not exhaustive. Tie every recommendation back to an observed issue or likely failure mode. Prefer small durable patterns over clever one-offs."""
+]
+
+[[tools]]
+name = "config_report"
+description = "Fetch the latest Home Assistant configuration quality report as the basis for architecture-level advice."
+kind = "http"
+command = "http://127.0.0.1:3010/advisor/config-report"

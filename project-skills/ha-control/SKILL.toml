@@ -1,0 +1,31 @@
+[skill]
+name = "ha-control"
+description = "Control Home Assistant entities in the present tense through the Davis local proxy. Use when the user wants to turn devices on or off, toggle, adjust brightness, or check live state of a room/device such as '书房的灯'. Prefer this over direct homeassistant__HassTurnOn/HassTurnOff calls."
+version = "0.1.0"
+tags = ["home-assistant", "control", "smart-home"]
+
+prompts = [
+  """Safety: use this skill only for present-tense control. Do not call homeassistant__HassTurnOn or homeassistant__HassTurnOff directly. If the user asks about the past, use ha-audit instead. If only asking for architecture advice, use ha-config-advisor.""",
+  """Workflow: 1) Extract the action (turn_on, turn_off, toggle, set_brightness, query_state). 2) Call ha-control.resolve_target with the user's natural-language phrase and action. 3) If resolved, call POST http://127.0.0.1:3010/execute-control via http_request with JSON body {"raw_text":"<original>","query":"<phrase>","action":"<action>"} and optional "targets" (explicit entity_id list) or "service_data" (e.g. {"brightness_pct":60}). Set Content-Type: application/json. Put query/action in JSON body, not URL.""",
+  """Response interpretation: success → tell user the action completed, prefer proxy speech field. partial_success → explain what succeeded and what did not. failed with reason=resolution_ambiguous → do NOT guess or retry; show candidates from the response and ask user to choose. failed with other reason → explain the proxy could not resolve the target. If advisor_suggestion is present, recommend running ha-config-advisor.""",
+  """Response style: keep answers short and action-oriented. Prefer the proxy speech field when present. For query_state, one short sentence per entity. Never claim a device changed state unless the proxy confirms success."""
+]
+
+[[tools]]
+name = "resolve_target"
+description = "Resolve a natural-language device phrase to Home Assistant entity IDs. Call this before execute-control to validate the target."
+kind = "http"
+command = "http://127.0.0.1:3010/resolve-control-target?query={{query}}&action={{action}}"
+
+[tools.args]
+query = "User-facing target phrase such as '书房灯带', '父母间吊灯', '客厅空调'."
+action = "One of: turn_on, turn_off, toggle, set_brightness, query_state."
+
+[[tools]]
+name = "query_state"
+description = "Query the current live state of a device or room. Shortcut for resolve_target with action=query_state."
+kind = "http"
+command = "http://127.0.0.1:3010/resolve-control-target?query={{query}}&action=query_state"
+
+[tools.args]
+query = "User-facing target phrase such as '书房灯带' or '主卧空调'."

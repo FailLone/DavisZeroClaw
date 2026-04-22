@@ -7,7 +7,7 @@ use crate::{
     resolve_article_embedding_config, resolve_article_normalize_config,
     resolve_article_value_config, run_builtin_crawl_source, search_article_memory,
     upsert_article_memory_embedding, zeroclaw_env_vars, ArticleMemoryAddRequest,
-    ArticleMemoryRecordStatus, HaClient, HaMcpClient, HaState, ModelRoutingManager, RuntimePaths,
+    ArticleMemoryRecordStatus, HaClient, HaMcpClient, HaState, RuntimePaths,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -1034,11 +1034,12 @@ async fn start(paths: &RuntimePaths) -> Result<()> {
     println!("Config OK: {}", paths.local_config_path().display());
     println!("Provider environment prepared for ZeroClaw.");
 
-    print_start_step(4, "Prepare runtime skills and SOPs");
+    print_start_step(4, "Prepare runtime skills, SOPs, and workspace files");
     report_agent_browser_status();
     report_skill_inventory(paths);
     sync_runtime_skills(paths)?;
     sync_runtime_sops(paths)?;
+    sync_workspace_files(paths)?;
 
     let proxy_bin = release_bin_path(paths, "davis-local-proxy");
     let local_proxy_log = paths.local_proxy_log_path();
@@ -1063,27 +1064,18 @@ async fn start(paths: &RuntimePaths) -> Result<()> {
     )
     .await?;
 
-    print_start_step(6, "Wait for model routing");
-    if !wait_for_model_routing_ready(60, Duration::from_secs(2)).await {
-        println!("Model routing did not become ready. Recent proxy log:");
-        print_tail(&local_proxy_log, 120);
-        bail!("model routing did not become ready");
-    }
-    println!("Model routing OK.");
-
     if !paths.config_report_cache_path().is_file() {
         println!("Generating the initial Home Assistant advisor report...");
         let _ = http_get_text("http://127.0.0.1:3010/advisor/config-report").await;
     }
 
-    print_start_step(7, "Start ZeroClaw daemon");
+    print_start_step(6, "Start ZeroClaw daemon");
     start_runtime_daemon(paths, &zeroclaw, &provider_env).await?;
 
     println!();
     println!("Startup complete.");
     println!("Local status:");
     println!("- Davis local proxy: http://127.0.0.1:3010/health");
-    println!("- Model routing: http://127.0.0.1:3010/model-routing/status");
     println!("- Runtime traces: http://127.0.0.1:3010/zeroclaw/runtime-traces");
     println!("- HA advisor report: http://127.0.0.1:3010/advisor/config-report");
     println!();
@@ -1100,7 +1092,7 @@ async fn start(paths: &RuntimePaths) -> Result<()> {
 
 fn print_start_step(index: usize, title: &str) {
     println!();
-    println!("[{index}/7] {title}");
+    println!("[{index}/6] {title}");
 }
 
 fn stop(paths: &RuntimePaths) -> Result<()> {
@@ -1318,7 +1310,7 @@ struct DavisServiceSpec {
 
 fn render_current_runtime_config(paths: &RuntimePaths) -> Result<()> {
     let config = check_local_config(paths)?;
-    let _manager = ModelRoutingManager::spawn(paths.clone(), config)?;
+    crate::render_runtime_config(paths, &config)?;
     Ok(())
 }
 
@@ -1905,6 +1897,37 @@ pub fn sync_runtime_sops(paths: &RuntimePaths) -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| paths.repo_root.join("project-sops"));
     sync_runtime_sops_with_sources(paths, &project_sops_dir)
+}
+
+/// Copy personality files (TOOLS.md, SOUL.md, etc.) from `project-workspace/`
+/// into the runtime workspace root so ZeroClaw loads them at startup.
+pub fn sync_workspace_files(paths: &RuntimePaths) -> Result<()> {
+    let project_workspace_dir = std::env::var_os("DAVIS_PROJECT_WORKSPACE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| paths.repo_root.join("project-workspace"));
+    if !project_workspace_dir.is_dir() {
+        return Ok(());
+    }
+    let workspace_dir = paths.workspace_dir();
+    fs::create_dir_all(&workspace_dir)?;
+    let mut count = 0u32;
+    for entry in fs::read_dir(&project_workspace_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            let dest = workspace_dir.join(entry.file_name());
+            fs::copy(&path, &dest)?;
+            count += 1;
+        }
+    }
+    if count > 0 {
+        println!(
+            "Workspace files synced: {} file(s) from {}",
+            count,
+            project_workspace_dir.display()
+        );
+    }
+    Ok(())
 }
 
 fn sync_runtime_skills_with_sources(
@@ -3615,23 +3638,6 @@ async fn wait_for_probe(probe: &Probe, attempts: usize, delay: Duration) -> bool
     false
 }
 
-async fn wait_for_model_routing_ready(attempts: usize, delay: Duration) -> bool {
-    for _ in 0..attempts {
-        let payload = http_get_text("http://127.0.0.1:3010/model-routing/status")
-            .await
-            .unwrap_or_default();
-        if payload.contains("\"route_ready\":true") {
-            return true;
-        }
-        if payload.contains("\"status\":\"error\"") {
-            println!("Model routing initialization failed: {payload}");
-            return false;
-        }
-        tokio::time::sleep(delay).await;
-    }
-    false
-}
-
 async fn http_get_text(url: &str) -> Result<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
@@ -3872,7 +3878,7 @@ fn command_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-fn tool_path_env() -> OsString {
+pub(crate) fn tool_path_env() -> OsString {
     let mut paths = vec![
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),

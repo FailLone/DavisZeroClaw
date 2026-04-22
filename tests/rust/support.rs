@@ -105,7 +105,6 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
     control_config: ControlConfig,
     local_config: LocalConfig,
 ) -> String {
-    let routing = ModelRoutingManager::for_tests(paths.clone(), local_config.clone());
     let app = build_app(AppState::new(
         client,
         mcp_client,
@@ -114,7 +113,6 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
         Arc::new(local_config.crawl4ai.clone()),
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
-        routing,
         local_config.webhook.secret,
     ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -1,0 +1,23 @@
+[skill]
+name = "ha-reconciliation-advisor"
+description = "Review likely Home Assistant entity replacements after gateway refreshes or sync churn. Use when entities become unavailable, new similarly named entities appear, or when the user asks whether old and new HA devices should be mapped together. Advisory only — produces migration suggestions, never modifies aliases or groups."
+version = "0.1.0"
+tags = ["home-assistant", "advisor", "reconciliation", "migration"]
+
+prompts = [
+  """Safety: read-only. Do not modify Home Assistant, control_aliases.json, or runtime state. Do not claim two entities are definitely the same device unless evidence is unusually strong. Prefer 'likely replacement' / 'needs review' wording.""",
+  """Workflow: 1) Call ha-reconciliation-advisor.replacement_candidates. 2) Optionally call ha-reconciliation-advisor.config_report for broader context. 3) For each important candidate: old unavailable entity name, possible replacement, domain/area evidence, why replacement vs duplicate, whether alias/group migration should happen now or after confirmation. 4) Recommend next 3-5 checks or migrations.""",
+  """Response style: start with strongest candidates. Separate high_confidence from needs_review. Keep advice practical and reversible."""
+]
+
+[[tools]]
+name = "replacement_candidates"
+description = "Fetch candidate entity replacements: old unavailable entities paired with likely new replacements based on name, domain, and area similarity."
+kind = "http"
+command = "http://127.0.0.1:3010/advisor/replacement-candidates"
+
+[[tools]]
+name = "config_report"
+description = "Fetch the broader HA configuration report for additional reconciliation context."
+kind = "http"
+command = "http://127.0.0.1:3010/advisor/config-report"
