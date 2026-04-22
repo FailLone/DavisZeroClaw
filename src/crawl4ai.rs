@@ -7,6 +7,10 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+/// Extra wall-clock grace on top of config.timeout_secs, buying time for
+/// Chromium launch + profile unlock before the inner page_timeout fires.
+const CRAWL4AI_SUBPROCESS_GUARD_SECS: u64 = 30;
+
 #[derive(Debug, Clone)]
 pub struct Crawl4aiPageRequest {
     pub profile_name: String,
@@ -153,6 +157,19 @@ async fn crawl_via_python(
     config: &Crawl4aiConfig,
     request: Crawl4aiPageRequest,
 ) -> Result<Crawl4aiPageResult, String> {
+    crawl_via_python_with_guard(paths, config, request, CRAWL4AI_SUBPROCESS_GUARD_SECS).await
+}
+
+/// Same as `crawl_via_python`, but the wall-clock guard (seconds added on top
+/// of `config.timeout_secs`) is caller-provided. Production code goes through
+/// the wrapper with `CRAWL4AI_SUBPROCESS_GUARD_SECS`; tests pass a small value
+/// so the suite doesn't pay the full 30s on every run.
+pub(crate) async fn crawl_via_python_with_guard(
+    paths: &RuntimePaths,
+    config: &Crawl4aiConfig,
+    request: Crawl4aiPageRequest,
+    guard_secs: u64,
+) -> Result<Crawl4aiPageResult, String> {
     let python = resolve_python(paths, config);
     let profile_dir = paths.crawl4ai_profiles_root().join(&request.profile_name);
     let payload = json!({
@@ -194,7 +211,7 @@ async fn crawl_via_python(
         drop(stdin);
     }
 
-    let budget = Duration::from_secs(config.timeout_secs.saturating_add(30));
+    let budget = Duration::from_secs(config.timeout_secs.saturating_add(guard_secs));
     let output = match timeout(budget, child.wait_with_output()).await {
         Ok(Ok(output)) => output,
         Ok(Err(err)) => return Err(format!("wait for crawl4ai_adapter crawl: {err}")),

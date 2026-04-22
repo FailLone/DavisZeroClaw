@@ -1,4 +1,4 @@
-use crate::{crawl4ai_crawl, Crawl4aiConfig, Crawl4aiPageRequest, Crawl4aiTransport, RuntimePaths};
+use crate::{Crawl4aiConfig, Crawl4aiPageRequest, Crawl4aiTransport, RuntimePaths};
 
 fn fake_paths(tmp: &std::path::Path) -> RuntimePaths {
     RuntimePaths {
@@ -7,6 +7,8 @@ fn fake_paths(tmp: &std::path::Path) -> RuntimePaths {
     }
 }
 
+// Multi-thread flavor so timeout() + child reaper run concurrently; single-threaded can deadlock waiting for subprocess output while the timeout task sleeps.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn python_transport_honors_wall_clock_timeout() {
     let tmp = tempfile::tempdir().unwrap();
@@ -27,8 +29,10 @@ async fn python_transport_honors_wall_clock_timeout() {
         ..Crawl4aiConfig::default()
     };
 
+    // Call the internal helper directly with a 2s guard (total budget = 3s)
+    // so `cargo test` doesn't pay the full 30s production guard on every run.
     let start = std::time::Instant::now();
-    let result = crawl4ai_crawl(
+    let result = crate::crawl4ai::crawl_via_python_with_guard(
         &paths,
         &config,
         Crawl4aiPageRequest {
@@ -37,6 +41,7 @@ async fn python_transport_honors_wall_clock_timeout() {
             wait_for: None,
             js_code: None,
         },
+        2,
     )
     .await;
     let elapsed = start.elapsed();
@@ -47,9 +52,9 @@ async fn python_transport_honors_wall_clock_timeout() {
         err.contains("timed out"),
         "error should mention timeout, got: {err}"
     );
-    // allow generous slack for CI: hard upper bound of 40s even though timeout_secs=1+30s guard
+    // Budget is timeout_secs(1) + guard(2) = 3s; 10s gives generous CI slack.
     assert!(
-        elapsed < std::time::Duration::from_secs(40),
+        elapsed < std::time::Duration::from_secs(10),
         "did not kill child promptly: {elapsed:?}"
     );
 }
