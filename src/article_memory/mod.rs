@@ -1,0 +1,652 @@
+use crate::support::{isoformat, now_utc};
+use crate::RuntimePaths;
+use anyhow::{bail, Context, Result};
+use std::collections::BTreeSet;
+use std::fs;
+
+const ARTICLE_MEMORY_INDEX_VERSION: u32 = 1;
+const ARTICLE_MEMORY_EMBEDDINGS_VERSION: u32 = 1;
+const BUILTIN_ARTICLE_MEMORY_POLICY_CONFIG: &str =
+    include_str!("../../config/davis/article_memory.toml");
+
+mod types;
+pub use types::*;
+
+mod config;
+pub use config::*;
+
+pub fn init_article_memory(paths: &RuntimePaths) -> Result<ArticleMemoryStatusResponse> {
+    ensure_article_memory_dirs(paths)?;
+    if !paths.article_memory_index_path().is_file() {
+        write_index(paths, &ArticleMemoryIndex::new())?;
+    }
+    check_article_memory(paths)
+}
+
+pub fn article_memory_status(paths: &RuntimePaths) -> ArticleMemoryStatusResponse {
+    match load_index(paths) {
+        Ok(index) => build_status_response(paths, "ok", &index, None),
+        Err(_) if !paths.article_memory_index_path().exists() => build_missing_status(paths),
+        Err(error) => build_error_status(paths, error.to_string()),
+    }
+}
+
+pub fn check_article_memory(paths: &RuntimePaths) -> Result<ArticleMemoryStatusResponse> {
+    if !paths.article_memory_index_path().is_file() {
+        bail!(
+            "article memory index was not found: {}\nRun: daviszeroclaw articles init",
+            paths.article_memory_index_path().display()
+        );
+    }
+    let index = load_index(paths)?;
+    Ok(build_status_response(paths, "ok", &index, None))
+}
+
+pub fn check_article_cleaning(paths: &RuntimePaths) -> Result<ArticleCleaningCheckResponse> {
+    let config = load_article_cleaning_config(paths)?;
+    let mut warnings = Vec::new();
+    let mut seen = BTreeSet::new();
+    for site in &config.sites {
+        if !seen.insert(site.name.clone()) {
+            warnings.push(format!("duplicate site strategy: {}", site.name));
+        }
+        if site.url_patterns.is_empty() && site.source_patterns.is_empty() {
+            warnings.push(format!(
+                "site strategy has no url_patterns/source_patterns: {}",
+                site.name
+            ));
+        }
+        if site.preferred_selectors.is_empty() {
+            warnings.push(format!(
+                "site strategy has no preferred_selectors: {}",
+                site.name
+            ));
+        }
+    }
+    Ok(ArticleCleaningCheckResponse {
+        status: if warnings.is_empty() { "ok" } else { "warn" }.to_string(),
+        config_path: paths.article_cleaning_config_path().display().to_string(),
+        sites: config.sites.into_iter().map(|site| site.name).collect(),
+        warnings,
+    })
+}
+
+pub fn article_cleaning_preferred_selectors(paths: &RuntimePaths) -> Result<Vec<String>> {
+    let config = load_article_cleaning_config(paths)?;
+    let mut seen = BTreeSet::new();
+    let mut selectors = Vec::new();
+    for site in config.sites {
+        for selector in site.preferred_selectors {
+            if seen.insert(selector.clone()) {
+                selectors.push(selector);
+            }
+        }
+    }
+    selectors.extend(
+        [
+            "article",
+            "main",
+            "[role=main]",
+            ".article",
+            ".post",
+            ".post-content",
+            ".entry-content",
+            ".content",
+            "#content",
+            "body",
+        ]
+        .into_iter()
+        .filter(|selector| seen.insert((*selector).to_string()))
+        .map(str::to_string),
+    );
+    Ok(selectors)
+}
+
+pub fn add_article_memory(
+    paths: &RuntimePaths,
+    request: ArticleMemoryAddRequest,
+) -> Result<ArticleMemoryRecord> {
+    ensure_article_memory_dirs(paths)?;
+    if !paths.article_memory_index_path().is_file() {
+        write_index(paths, &ArticleMemoryIndex::new())?;
+    }
+
+    let title = clean_required("title", &request.title)?;
+    let content = clean_required("content", &request.content)?;
+    let source = clean_optional(&request.source).unwrap_or_else(|| "manual".to_string());
+    let now = isoformat(now_utc());
+    let id = article_id(&title, request.url.as_deref(), &now);
+
+    let content_path = format!("articles/{id}.md");
+    let raw_path = format!("articles/{id}.raw.txt");
+    let normalized_path = format!("articles/{id}.normalized.md");
+    let summary_path = request
+        .summary
+        .as_deref()
+        .and_then(clean_optional)
+        .map(|_| format!("articles/{id}.summary.md"));
+    let translation_path = request
+        .translation
+        .as_deref()
+        .and_then(clean_optional)
+        .map(|_| format!("articles/{id}.translation.md"));
+
+    fs::write(resolve_article_path(paths, &raw_path), &content)
+        .with_context(|| format!("failed to write article raw content for {id}"))?;
+    fs::write(resolve_article_path(paths, &normalized_path), &content)
+        .with_context(|| format!("failed to write article normalized content for {id}"))?;
+    fs::write(resolve_article_path(paths, &content_path), &content)
+        .with_context(|| format!("failed to write article content for {id}"))?;
+    if let (Some(summary), Some(path)) = (request.summary.as_deref(), summary_path.as_deref()) {
+        fs::write(resolve_article_path(paths, path), summary.trim())
+            .with_context(|| format!("failed to write article summary for {id}"))?;
+    }
+    if let (Some(translation), Some(path)) =
+        (request.translation.as_deref(), translation_path.as_deref())
+    {
+        fs::write(resolve_article_path(paths, path), translation.trim())
+            .with_context(|| format!("failed to write article translation for {id}"))?;
+    }
+
+    let mut index = load_index(paths)?;
+    let record = ArticleMemoryRecord {
+        id,
+        title,
+        url: request.url.and_then(|value| clean_optional(&value)),
+        source,
+        language: request.language.and_then(|value| clean_optional(&value)),
+        tags: normalize_tags(request.tags),
+        status: request.status,
+        value_score: normalize_score(request.value_score)?,
+        captured_at: now.clone(),
+        updated_at: now,
+        content_path,
+        raw_path: Some(raw_path),
+        normalized_path: Some(normalized_path),
+        summary_path,
+        translation_path,
+        notes: request.notes.and_then(|value| clean_optional(&value)),
+        clean_status: Some("raw".to_string()),
+        clean_profile: None,
+    };
+    index.articles.push(record.clone());
+    index.updated_at = isoformat(now_utc());
+    write_index(paths, &index)?;
+    Ok(record)
+}
+
+pub fn list_article_memory(paths: &RuntimePaths, limit: usize) -> ArticleMemoryListResponse {
+    match load_index(paths) {
+        Ok(mut index) => {
+            index.articles.sort_by(|a, b| {
+                b.captured_at
+                    .cmp(&a.captured_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+            let limit = normalize_limit(limit);
+            let total_articles = index.articles.len();
+            let articles = index.articles.into_iter().take(limit).collect::<Vec<_>>();
+            ArticleMemoryListResponse {
+                status: "ok".to_string(),
+                returned: articles.len(),
+                total_articles,
+                articles,
+                message: None,
+            }
+        }
+        Err(_) if !paths.article_memory_index_path().exists() => ArticleMemoryListResponse {
+            status: "missing".to_string(),
+            returned: 0,
+            total_articles: 0,
+            articles: Vec::new(),
+            message: Some("article memory is not initialized".to_string()),
+        },
+        Err(error) => ArticleMemoryListResponse {
+            status: "error".to_string(),
+            returned: 0,
+            total_articles: 0,
+            articles: Vec::new(),
+            message: Some(error.to_string()),
+        },
+    }
+}
+
+pub fn search_article_memory(
+    paths: &RuntimePaths,
+    query: &str,
+    limit: usize,
+) -> ArticleMemorySearchResponse {
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return ArticleMemorySearchResponse {
+            status: "bad_request".to_string(),
+            query,
+            search_mode: "keyword".to_string(),
+            returned: 0,
+            total_hits: 0,
+            hits: Vec::new(),
+            semantic_status: None,
+            message: Some("query is required".to_string()),
+        };
+    }
+
+    let index = match load_index(paths) {
+        Ok(index) => index,
+        Err(_) if !paths.article_memory_index_path().exists() => {
+            return ArticleMemorySearchResponse {
+                status: "missing".to_string(),
+                query,
+                search_mode: "keyword".to_string(),
+                returned: 0,
+                total_hits: 0,
+                hits: Vec::new(),
+                semantic_status: None,
+                message: Some("article memory is not initialized".to_string()),
+            }
+        }
+        Err(error) => {
+            return ArticleMemorySearchResponse {
+                status: "error".to_string(),
+                query,
+                search_mode: "keyword".to_string(),
+                returned: 0,
+                total_hits: 0,
+                hits: Vec::new(),
+                semantic_status: None,
+                message: Some(error.to_string()),
+            }
+        }
+    };
+
+    let mut hits = index
+        .articles
+        .iter()
+        .filter_map(|record| score_record(paths, record, &query))
+        .collect::<Vec<_>>();
+    hits.sort_by(compare_hits);
+    let total_hits = hits.len();
+    let limit = normalize_limit(limit);
+    hits.truncate(limit);
+
+    ArticleMemorySearchResponse {
+        status: if total_hits == 0 { "empty" } else { "ok" }.to_string(),
+        query,
+        search_mode: "keyword".to_string(),
+        returned: hits.len(),
+        total_hits,
+        hits,
+        semantic_status: None,
+        message: None,
+    }
+}
+
+mod reports;
+pub use reports::*;
+
+mod pipeline;
+pub use pipeline::*;
+
+mod embedding;
+pub use embedding::*;
+
+mod internals;
+use internals::*;
+
+mod cleaning_internals;
+use cleaning_internals::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_config::{ArticleMemoryEmbeddingConfig, ModelProviderConfig};
+
+    #[test]
+    fn init_add_and_search_article_memory() {
+        let paths = test_paths("init_add_and_search_article_memory");
+        let status = init_article_memory(&paths).unwrap();
+        assert_eq!(status.status, "ok");
+        assert_eq!(status.total_articles, 0);
+
+        let record = add_article_memory(
+            &paths,
+            ArticleMemoryAddRequest {
+                title: "A useful agent memory article".to_string(),
+                url: Some("https://example.com/agent-memory".to_string()),
+                source: "manual".to_string(),
+                language: Some("en".to_string()),
+                tags: vec!["agent".to_string(), "memory".to_string()],
+                content: "This article explains durable memory for agents.".to_string(),
+                summary: Some("Durable agent memory patterns.".to_string()),
+                translation: None,
+                status: ArticleMemoryRecordStatus::Saved,
+                value_score: Some(0.9),
+                notes: Some("Keep for Davis article memory tests.".to_string()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(record.title, "A useful agent memory article");
+        assert!(paths
+            .article_memory_dir()
+            .join(&record.content_path)
+            .is_file());
+
+        let search = search_article_memory(&paths, "durable", 10);
+        assert_eq!(search.status, "ok");
+        assert_eq!(search.total_hits, 1);
+        assert_eq!(search.hits[0].title, "A useful agent memory article");
+        assert!(search.hits[0]
+            .matched_fields
+            .iter()
+            .any(|field| field == "content" || field == "summary"));
+
+        let _ = fs::remove_dir_all(paths.repo_root);
+    }
+
+    #[tokio::test]
+    async fn normalize_article_memory_writes_raw_normalized_and_final_files() {
+        let paths = test_paths("normalize_article_memory_writes_files");
+        init_article_memory(&paths).unwrap();
+
+        let record = add_article_memory(
+            &paths,
+            ArticleMemoryAddRequest {
+                title: "知乎 Claude Code 入门".to_string(),
+                url: Some("https://www.zhihu.com/question/1/answer/2".to_string()),
+                source: "browser".to_string(),
+                language: Some("zh-CN".to_string()),
+                tags: vec!["agent".to_string()],
+                content: "知乎\n登录\n\nClaude Code 可以通过反复实践学习。\nClaude Code 可以通过反复实践学习。\n\n保留这一段重要内容。".to_string(),
+                summary: None,
+                translation: None,
+                status: ArticleMemoryRecordStatus::Candidate,
+                value_score: None,
+                notes: None,
+            },
+        )
+        .unwrap();
+
+        let response = normalize_article_memory(&paths, None, None, &record.id)
+            .await
+            .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.clean_profile, "zhihu");
+        assert_eq!(response.clean_status, "ok");
+        assert!(std::path::Path::new(&response.raw_path).is_file());
+        assert!(std::path::Path::new(&response.normalized_path).is_file());
+        assert!(std::path::Path::new(&response.content_path).is_file());
+        assert!(std::path::Path::new(&response.clean_report_path).is_file());
+
+        let normalized = fs::read_to_string(&response.normalized_path).unwrap();
+        assert!(normalized.contains("title: \"知乎 Claude Code 入门\""));
+        assert!(normalized.contains("# 知乎 Claude Code 入门"));
+        assert!(normalized.contains("Claude Code 可以通过反复实践学习。"));
+        assert!(normalized.contains("保留这一段重要内容。"));
+        assert!(!normalized.contains("\n登录\n"));
+
+        let index = load_index(&paths).unwrap();
+        let updated = index
+            .articles
+            .iter()
+            .find(|article| article.id == record.id)
+            .unwrap();
+        let expected_raw_path = format!("articles/{}.raw.txt", record.id);
+        let expected_normalized_path = format!("articles/{}.normalized.md", record.id);
+        assert_eq!(
+            updated.raw_path.as_deref(),
+            Some(expected_raw_path.as_str())
+        );
+        assert_eq!(
+            updated.normalized_path.as_deref(),
+            Some(expected_normalized_path.as_str())
+        );
+        assert_eq!(updated.clean_status.as_deref(), Some("ok"));
+        assert_eq!(updated.clean_profile.as_deref(), Some("zhihu"));
+
+        let report: ArticleCleanReport =
+            serde_json::from_str(&fs::read_to_string(&response.clean_report_path).unwrap())
+                .unwrap();
+        assert_eq!(report.article_id, record.id);
+        assert_eq!(report.strategy_name, "zhihu");
+        assert_eq!(report.noise_lines_removed, 2);
+
+        let _ = fs::remove_dir_all(paths.repo_root);
+    }
+
+    #[tokio::test]
+    async fn normalize_article_memory_splits_long_single_line_browser_text() {
+        let paths = test_paths("normalize_article_memory_splits_long_line");
+        init_article_memory(&paths).unwrap();
+        let repeated_body = (0..40)
+            .map(|index| {
+                format!(
+                    "Claude Code 的第 {index} 个学习要点是让 agent 能直接理解项目、修改文件并运行验证。"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        let content = format!(
+            "知乎 登录 分享 初学者如何快速入门学会Claude Code ？ 关注问题 45 人赞同了该回答 目录 收起 {repeated_body} 所属专栏 AI大模型实用手册 更多回答 这不是当前回答"
+        );
+
+        let record = add_article_memory(
+            &paths,
+            ArticleMemoryAddRequest {
+                title: "初学者如何快速入门学会Claude Code ？".to_string(),
+                url: Some("https://www.zhihu.com/question/1/answer/2".to_string()),
+                source: "知乎回答".to_string(),
+                language: Some("zh".to_string()),
+                tags: Vec::new(),
+                content,
+                summary: None,
+                translation: None,
+                status: ArticleMemoryRecordStatus::Candidate,
+                value_score: None,
+                notes: None,
+            },
+        )
+        .unwrap();
+
+        let response = normalize_article_memory(&paths, None, None, &record.id)
+            .await
+            .unwrap();
+
+        assert_ne!(response.clean_status, "fallback_raw");
+        assert!(response.normalized_chars > 1_000);
+        assert!(std::path::Path::new(&response.clean_report_path).is_file());
+        let normalized = fs::read_to_string(&response.normalized_path).unwrap();
+        assert!(normalized.contains("Claude Code 的第 0 个学习要点"));
+        assert!(!normalized.contains("关注问题"));
+        assert!(!normalized.contains("所属专栏"));
+        assert!(!normalized.contains("这不是当前回答"));
+
+        let _ = fs::remove_dir_all(paths.repo_root);
+    }
+
+    #[tokio::test]
+    async fn value_judge_rejects_off_topic_articles_before_polish() {
+        let paths = test_paths("value_judge_rejects_off_topic_articles");
+        init_article_memory(&paths).unwrap();
+        let record = add_article_memory(
+            &paths,
+            ArticleMemoryAddRequest {
+                title: "一篇厨房收纳技巧".to_string(),
+                url: Some("https://example.com/kitchen".to_string()),
+                source: "manual".to_string(),
+                language: Some("zh".to_string()),
+                tags: Vec::new(),
+                content:
+                    "这篇文章讨论厨房抽屉收纳、标签分类和餐具摆放。内容很完整，但和智能体学习无关。"
+                        .repeat(20),
+                summary: None,
+                translation: None,
+                status: ArticleMemoryRecordStatus::Candidate,
+                value_score: None,
+                notes: None,
+            },
+        )
+        .unwrap();
+        let value_config = ResolvedArticleValueConfig {
+            provider: "test".to_string(),
+            api_key: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+            llm_judge: false,
+            max_input_chars: 2000,
+            min_normalized_chars: 20,
+            save_threshold: 0.75,
+            candidate_threshold: 0.45,
+            target_topics: vec!["AI agent".to_string(), "MCP".to_string()],
+        };
+
+        let response = normalize_article_memory(&paths, None, Some(&value_config), &record.id)
+            .await
+            .unwrap();
+
+        assert_eq!(response.value_decision.as_deref(), Some("reject"));
+        assert_eq!(response.clean_status, "rejected");
+        assert!(response
+            .value_report_path
+            .as_deref()
+            .is_some_and(|path| { std::path::Path::new(path).is_file() }));
+        let index = load_index(&paths).unwrap();
+        let updated = index
+            .articles
+            .iter()
+            .find(|article| article.id == record.id)
+            .unwrap();
+        assert_eq!(updated.status, ArticleMemoryRecordStatus::Rejected);
+
+        let _ = fs::remove_dir_all(paths.repo_root);
+    }
+
+    #[tokio::test]
+    async fn strategy_review_input_writes_bounded_agent_context() {
+        let paths = test_paths("strategy_review_input_writes_context");
+        init_article_memory(&paths).unwrap();
+        let record = add_article_memory(
+            &paths,
+            ArticleMemoryAddRequest {
+                title: "Claude Code agent workflow".to_string(),
+                url: Some("https://example.com/agent-workflow".to_string()),
+                source: "manual".to_string(),
+                language: Some("en".to_string()),
+                tags: vec!["agent".to_string()],
+                content: "Claude Code agent workflow with memory and tool use. ".repeat(30),
+                summary: None,
+                translation: None,
+                status: ArticleMemoryRecordStatus::Candidate,
+                value_score: None,
+                notes: None,
+            },
+        )
+        .unwrap();
+        let value_config = ResolvedArticleValueConfig {
+            provider: "test".to_string(),
+            api_key: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+            llm_judge: false,
+            max_input_chars: 2000,
+            min_normalized_chars: 20,
+            save_threshold: 0.75,
+            candidate_threshold: 0.45,
+            target_topics: vec!["agent".to_string(), "memory".to_string()],
+        };
+        normalize_article_memory(&paths, None, Some(&value_config), &record.id)
+            .await
+            .unwrap();
+
+        let response = build_article_strategy_review_input(&paths, 5).unwrap();
+
+        assert!(std::path::Path::new(&response.report_path).is_file());
+        assert!(paths.article_memory_implementation_requests_dir().is_dir());
+        assert!(response.markdown.contains("You may edit only"));
+        assert!(response.markdown.contains("Do not edit Rust source"));
+        assert!(response.markdown.contains(&record.id));
+        assert!(response
+            .markdown
+            .contains("Article Memory Strategy Review Input"));
+
+        let _ = fs::remove_dir_all(paths.repo_root);
+    }
+
+    #[test]
+    fn check_article_cleaning_loads_builtin_strategy_when_config_is_missing() {
+        let paths = test_paths("check_article_cleaning_loads_builtin_strategy");
+        let response = check_article_cleaning(&paths).unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert!(response.sites.iter().any(|site| site == "zhihu"));
+
+        let _ = fs::remove_dir_all(paths.repo_root);
+    }
+
+    #[test]
+    fn rejects_invalid_value_score() {
+        let paths = test_paths("rejects_invalid_value_score");
+        init_article_memory(&paths).unwrap();
+        let error = add_article_memory(
+            &paths,
+            ArticleMemoryAddRequest {
+                title: "Bad score".to_string(),
+                url: None,
+                source: "manual".to_string(),
+                language: None,
+                tags: Vec::new(),
+                content: "content".to_string(),
+                summary: None,
+                translation: None,
+                status: ArticleMemoryRecordStatus::Saved,
+                value_score: Some(1.5),
+                notes: None,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("value_score"));
+
+        let _ = fs::remove_dir_all(paths.repo_root);
+    }
+
+    #[test]
+    fn resolves_embedding_config_from_provider() {
+        let embedding = ArticleMemoryEmbeddingConfig {
+            enabled: true,
+            provider: "siliconflow".to_string(),
+            api_key: String::new(),
+            base_url: String::new(),
+            model: "Qwen/Qwen3-Embedding-8B".to_string(),
+            dimensions: 1024,
+            max_input_chars: 12000,
+        };
+        let providers = vec![ModelProviderConfig {
+            name: "siliconflow".to_string(),
+            api_key: "test-key".to_string(),
+            base_url: "https://api.siliconflow.cn/v1".to_string(),
+            allowed_models: vec!["some-chat-model".to_string()],
+        }];
+
+        let resolved = resolve_article_embedding_config(&embedding, &providers)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(resolved.provider, "siliconflow");
+        assert_eq!(resolved.api_key, "test-key");
+        assert_eq!(resolved.base_url, "https://api.siliconflow.cn/v1");
+        assert_eq!(resolved.model, "Qwen/Qwen3-Embedding-8B");
+    }
+
+    fn test_paths(name: &str) -> RuntimePaths {
+        let root = std::env::temp_dir().join(format!(
+            "daviszeroclaw-article-memory-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        RuntimePaths {
+            repo_root: root.clone(),
+            runtime_dir: root.join("runtime"),
+        }
+    }
+}
