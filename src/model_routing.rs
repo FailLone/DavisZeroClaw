@@ -453,7 +453,7 @@ fn merge_classification_rules(
     // keep the lead on ties.
     let mut merged: Vec<QueryClassificationRule> =
         user_rules.iter().cloned().chain(builtin).collect();
-    merged.sort_by(|a, b| b.priority.cmp(&a.priority));
+    merged.sort_by_key(|rule| std::cmp::Reverse(rule.priority));
     merged
 }
 
@@ -475,25 +475,45 @@ fn zeroclaw_provider_id(provider: &ModelProviderConfig) -> String {
     }
 }
 
+/// Known provider aliases and the env-var names ZeroClaw's provider layer
+/// reads for each. When none of the aliases match, we fall back to
+/// `UPPER_SNAKE(provider_name)_API_KEY` (see `provider_api_key_env_names`).
+///
+/// Every row maps one or more user-facing names (the `name` field in
+/// local.toml's `[[providers]]`) to the env-var names those providers'
+/// Rust crates probe in priority order.
+const PROVIDER_ENV_ALIASES: &[(&[&str], &[&str])] = &[
+    (
+        &["qwen", "dashscope"],
+        &["DASHSCOPE_API_KEY", "QWEN_API_KEY"],
+    ),
+    (&["moonshot", "kimi"], &["MOONSHOT_API_KEY", "KIMI_API_KEY"]),
+    (&["glm", "zhipu"], &["GLM_API_KEY", "ZHIPU_API_KEY"]),
+    (
+        &["doubao", "ark", "volcengine"],
+        &["DOUBAO_API_KEY", "ARK_API_KEY", "VOLCENGINE_API_KEY"],
+    ),
+];
+
 fn provider_api_key_env_names(provider_name: &str) -> Vec<String> {
+    let lowered = provider_name.trim().to_ascii_lowercase();
+    if let Some((_, envs)) = PROVIDER_ENV_ALIASES
+        .iter()
+        .find(|(aliases, _)| aliases.contains(&lowered.as_str()))
+    {
+        return envs.iter().map(|s| s.to_string()).collect();
+    }
+
     let normalized = provider_name
         .trim()
         .to_ascii_uppercase()
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect::<String>();
-
-    match provider_name.trim().to_ascii_lowercase().as_str() {
-        "qwen" | "dashscope" => vec!["DASHSCOPE_API_KEY".to_string(), "QWEN_API_KEY".to_string()],
-        "moonshot" | "kimi" => vec!["MOONSHOT_API_KEY".to_string(), "KIMI_API_KEY".to_string()],
-        "glm" | "zhipu" => vec!["GLM_API_KEY".to_string(), "ZHIPU_API_KEY".to_string()],
-        "doubao" | "ark" | "volcengine" => vec![
-            "DOUBAO_API_KEY".to_string(),
-            "ARK_API_KEY".to_string(),
-            "VOLCENGINE_API_KEY".to_string(),
-        ],
-        _ if normalized.is_empty() => Vec::new(),
-        _ => vec![format!("{normalized}_API_KEY")],
+    if normalized.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!("{normalized}_API_KEY")]
     }
 }
 

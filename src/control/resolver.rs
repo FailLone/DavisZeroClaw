@@ -268,9 +268,7 @@ fn score_entity_candidate(
             break;
         }
     }
-    let Some((mut score, matched_by)) = matched else {
-        return None;
-    };
+    let (mut score, matched_by) = matched?;
     let mut reasons = vec![matched_by.clone()];
     let preferred = preferred_domains(query_entity, action, config);
     if let Some(rank) = preferred.iter().position(|item| item == &domain) {

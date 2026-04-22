@@ -2,7 +2,7 @@ use super::*;
 use crate::{check_local_config, McpServerConfig, McpTransport, RuntimePaths};
 use anyhow::{bail, Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const MEMPALACE_SERVER_NAME: &str = "mempalace";
@@ -127,8 +127,8 @@ pub(super) fn check_mempalace(paths: &RuntimePaths) -> Result<()> {
 
 fn run_mempalace_health_checks(
     paths: &RuntimePaths,
-    python: &PathBuf,
-    palace_dir: &PathBuf,
+    python: &Path,
+    palace_dir: &Path,
 ) -> Result<()> {
     let import_check = command_output(
         Command::new(python)
@@ -186,7 +186,7 @@ fn mempalace_palace_from_args(args: &[String]) -> Option<String> {
     None
 }
 
-fn format_mempalace_mcp_entry(python: &PathBuf, palace_dir: &PathBuf) -> String {
+fn format_mempalace_mcp_entry(python: &Path, palace_dir: &Path) -> String {
     format!(
         r#"[[mcp.servers]]
 name = "{name}"

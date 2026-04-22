@@ -344,6 +344,11 @@ pub(super) fn split_long_raw_line(line: &str) -> Vec<String> {
     for character in normalized.chars() {
         current.push(character);
         let current_len = current.chars().count();
+        // Two independent business rules happen to share the same "flush"
+        // action: short Chinese/English sentence boundaries, and a hard
+        // soft-cap for runaway whitespace-heavy lines. Keep them separate
+        // so the thresholds stay legible.
+        #[allow(clippy::if_same_then_else)]
         if is_sentence_boundary(character) && current_len >= 24 {
             units.push(current.trim().to_string());
             current.clear();

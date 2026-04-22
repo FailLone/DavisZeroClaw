@@ -368,7 +368,7 @@ fn generate_config_report_with_typed_states(
             entities,
         })
         .collect();
-    duplicate_rows.sort_by(|left, right| right.entities.len().cmp(&left.entities.len()));
+    duplicate_rows.sort_by_key(|row| std::cmp::Reverse(row.entities.len()));
     let cross_domain_conflicts = detect_cross_domain_conflicts(&duplicate_rows);
     let group_suggestions = infer_group_suggestions(&control_states, config);
     if let Some(report) = ha_mcp_live_context.as_mut() {

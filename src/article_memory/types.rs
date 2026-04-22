@@ -56,19 +56,14 @@ pub struct ArticleMemoryRecord {
     pub clean_profile: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ArticleMemoryRecordStatus {
     Candidate,
+    #[default]
     Saved,
     Rejected,
     Archived,
-}
-
-impl Default for ArticleMemoryRecordStatus {
-    fn default() -> Self {
-        Self::Saved
-    }
 }
 
 impl std::fmt::Display for ArticleMemoryRecordStatus {

@@ -36,8 +36,10 @@ pub fn replay_article_cleaning(
             normalized_chars,
         ));
     }
-    if article_id.is_some() && reports.is_empty() {
-        bail!("article not found: {}", article_id.unwrap());
+    if let Some(article_id) = article_id {
+        if reports.is_empty() {
+            bail!("article not found: {article_id}");
+        }
     }
     Ok(ArticleCleaningReplayResponse {
         status: if reports.is_empty() { "empty" } else { "ok" }.to_string(),

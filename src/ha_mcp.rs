@@ -1114,8 +1114,7 @@ fn trim_numeric_suffix(value: &str) -> String {
 fn name_tokens(value: &str) -> BTreeSet<String> {
     let mut tokens = BTreeSet::new();
     for segment in value
-        .replace('_', " ")
-        .replace('-', " ")
+        .replace(['_', '-'], " ")
         .split_whitespace()
         .map(|segment| segment.trim_matches(|ch: char| !ch.is_alphanumeric() && !is_cjk(ch)))
         .filter(|segment| !segment.is_empty())

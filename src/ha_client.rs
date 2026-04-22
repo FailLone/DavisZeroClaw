@@ -27,7 +27,7 @@ impl HaClient {
     }
 
     pub fn from_credentials(ha_url: &str, token: &str) -> std::result::Result<Self, ProxyError> {
-        let origin = derive_ha_origin(&ha_url).map_err(ProxyError::Invalid)?;
+        let origin = derive_ha_origin(ha_url).map_err(ProxyError::Invalid)?;
         let client = Client::builder()
             .user_agent(USER_AGENT)
             .build()

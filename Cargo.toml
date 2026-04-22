@@ -39,3 +39,9 @@ urlencoding = "2"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Treat clippy warnings as errors on any `cargo clippy` invocation so CI and
+# local runs both enforce the lint floor. Downgrade specific lints here if
+# they start biting real work.
+[lints.clippy]
+all = { level = "deny", priority = -1 }
