@@ -258,6 +258,34 @@ fn sync_runtime_skills_rejects_duplicate_names() {
 }
 
 #[test]
+fn sync_runtime_sops_accepts_empty_project_dir() {
+    // project-sops/ ships empty by default. Sync must succeed and leave the
+    // runtime directory in a consistent (empty) state without tripping on
+    // the non-SOP README.md we place in the project root.
+    let root = unique_test_dir("sync_runtime_sops_empty");
+    let paths = RuntimePaths {
+        repo_root: root.join("repo"),
+        runtime_dir: root.join("runtime"),
+    };
+    let project = root.join("project-sops");
+    fs::create_dir_all(&project).unwrap();
+    // README.md at the top level must be ignored (not mistaken for a SOP).
+    fs::write(project.join("README.md"), "# project-sops/\n").unwrap();
+
+    sync_runtime_sops_with_sources(&paths, &project).unwrap();
+
+    let runtime_sops = paths.workspace_sops_dir();
+    assert!(runtime_sops.is_dir(), "runtime sops dir must be created");
+    let entries: Vec<_> = fs::read_dir(&runtime_sops).unwrap().collect();
+    assert!(
+        entries.is_empty(),
+        "empty project-sops must produce empty runtime sops: {entries:?}"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn sync_runtime_sops_copies_and_marks_sources() {
     let root = unique_test_dir("sync_runtime_sops_copies");
     let paths = RuntimePaths {

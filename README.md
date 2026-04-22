@@ -224,7 +224,7 @@ daviszeroclaw memory mempalace check
 - `skills/mempalace` 负责告诉 agent 如何操作 MemPalace
 - `project-skills/mempalace-memory` 负责告诉 agent 什么时候应优先把 MemPalace 当作长期 memory
 - `project-skills/my-parcels` 负责告诉 agent 如何通过本地 Davis proxy 安全查询快递，不直接去外部购物网站抓取
-- `project-sops/my-parcels` 负责定义一个可被 ZeroClaw 手动触发的 parcel SOP；它是 runbook，不是自然语言路由器
+- `project-sops/` 是用户自定义 ZeroClaw runbook（SOP）的目录，默认为空；要新增 SOP 请看 `project-sops/README.md`
 
 ## 常用命令
 

@@ -145,7 +145,21 @@ pub(super) fn sync_runtime_sops_with_sources(
     }
     fs::rename(&staging_dir, &runtime_sops_dir)?;
 
-    println!("Runtime SOPs synced: {}", runtime_sops_dir.display());
+    let synced_count = sop_name_set(&runtime_sops_dir).len();
+    if synced_count == 0 {
+        println!("Runtime SOPs: 0 synced to {}", runtime_sops_dir.display());
+        println!(
+            "  hint: add a SOP directory under {} containing a SOP.toml to activate it",
+            project_sops_dir.display()
+        );
+    } else {
+        println!(
+            "Runtime SOPs synced: {} ({} {})",
+            runtime_sops_dir.display(),
+            synced_count,
+            if synced_count == 1 { "SOP" } else { "SOPs" }
+        );
+    }
     Ok(())
 }
 
@@ -456,6 +470,15 @@ pub(super) fn check_sops(paths: &RuntimePaths) -> Result<()> {
         "Runtime SOPs: {}",
         runtime_sop_status(&project_names, &runtime_names)
     );
+
+    if project_names.is_empty() && runtime_names.is_empty() {
+        println!(
+            "  hint: project-sops/ is empty. ZeroClaw will run without any runbooks — \
+that's fine for most setups. To add one, create project-sops/<name>/SOP.toml \
+and run `daviszeroclaw sops sync`."
+        );
+        return Ok(());
+    }
 
     let zeroclaw = require_command("zeroclaw")
         .context("zeroclaw was not found. Install it first: brew install zeroclaw")?;
