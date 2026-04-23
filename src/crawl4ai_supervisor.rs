@@ -269,7 +269,12 @@ impl Crawl4aiSupervisor {
                         break;
                     }
                 };
-                tracing::warn!(?status, "crawl4ai adapter exited; restarting");
+                tracing::warn!(
+                    ?status,
+                    consecutive_failures,
+                    backoff_ms = backoff.as_millis() as u64,
+                    "crawl4ai adapter exited; restarting"
+                );
                 sleep(backoff).await;
                 match self.spawn_child().await {
                     Ok(()) => match self.wait_until_healthy().await {

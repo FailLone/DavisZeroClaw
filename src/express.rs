@@ -152,6 +152,11 @@ async fn load_or_fetch_source(
     snapshot
 }
 
+#[tracing::instrument(
+    name = "express.fetch_source_status",
+    skip(paths, crawl4ai_config, supervisor, profile_lock),
+    fields(source = %source),
+)]
 async fn fetch_source_status(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
@@ -179,6 +184,11 @@ async fn fetch_source_status(
     }
 }
 
+#[tracing::instrument(
+    name = "express.fetch_source_snapshot",
+    skip(paths, crawl4ai_config, supervisor, profile_lock),
+    fields(source = %source),
+)]
 async fn fetch_source_snapshot(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
@@ -236,6 +246,12 @@ fn packages_script(source: &str) -> String {
     })
 }
 
+#[tracing::instrument(
+    name = "express.crawl_source_payload",
+    skip(paths, crawl4ai_config, supervisor, profile_lock, script),
+    fields(source = %source, profile = %express_profile_name(source), script_len = script.len()),
+    err,
+)]
 async fn crawl_source_payload(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
