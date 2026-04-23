@@ -119,6 +119,14 @@ impl RuntimePaths {
         self.repo_root.join("crawl4ai_adapter")
     }
 
+    pub fn crawl4ai_pid_path(&self) -> PathBuf {
+        self.runtime_dir.join("crawl4ai.pid")
+    }
+
+    pub fn crawl4ai_log_path(&self) -> PathBuf {
+        self.runtime_dir.join("crawl4ai.log")
+    }
+
     pub fn express_cache_path(&self, source: &str) -> PathBuf {
         self.state_dir()
             .join(format!("express_{source}_cache.json"))
