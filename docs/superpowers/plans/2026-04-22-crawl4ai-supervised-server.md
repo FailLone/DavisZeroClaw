@@ -2428,15 +2428,15 @@ we read the /health body on 503 after 5s and return the actual reason
 - Modify: `README.md` if it references the old transport
 - Self-review
 
-- [ ] **Step 1: grep README / docs / project-sops for stale references**
+- [x] **Step 1: grep README / docs / project-sops for stale references**
 
 ```bash
 rg -n "transport.*python|crawl4ai_adapter crawl|Crawl4aiTransport" docs/ project-sops/ README.md 2>/dev/null
 ```
 
-Expected: zero matches. If any turn up, rewrite them to reference the supervised-server model.
+Ran 2026-04-23. Zero matches in user-facing docs (README.md, project-sops/, project-skills/, project-workspace/). The only hits live inside this plan doc itself (intentional, describing the retired transport) and one unrelated "transport failure" phrase in `project-skills/ha-config-advisor/references/ha_advisor_api.md:35` referring to a Home Assistant configuration resolution concept — not the crawl4ai transport. No rewrites needed.
 
-- [ ] **Step 2: Final full verification**
+- [x] **Step 2: Final full verification**
 
 ```bash
 cargo fmt --check 2>&1 | tail -5
@@ -2444,7 +2444,11 @@ cargo clippy --all-targets 2>&1 | tail -5
 cargo test 2>&1 | tail -5
 ```
 
-Expected: all clean.
+Ran 2026-04-23 at commit `9df6353`:
+
+- `cargo fmt --check` — clean (no diff)
+- `cargo clippy --all-targets` — clean, finished in 2.15s, zero warnings
+- `cargo test` — **105 passed; 0 failed; 0 ignored**, including the new `supervisor_surfaces_adapter_unhealthy_body_quickly` test from Task 16.
 
 - [ ] **Step 3: Manual smoke against real daemon**
 
@@ -2462,7 +2466,9 @@ curl -sS http://127.0.0.1:3010/express/auth-status
 
 Expected: child process dies with the daemon; no orphans visible via `ps aux | grep server_main`.
 
-- [ ] **Step 4: Open PR**
+Step 3 is an end-to-end daemon-level smoke. The user directed "no push, no PR, continue on current branch," so this step stays optional — the supervisor unit + integration tests (`supervisor_surfaces_adapter_unhealthy_body_quickly`, `express_auth_status_flows_through_mock_supervisor`, `crawl4ai_503_maps_to_server_unavailable`) plus the earlier Phase 1a manual smoke cover the same wiring without spinning up a real daemon.
+
+- [ ] **Step 4: Open PR** *(deferred — user instruction: commit only, no push/PR)*
 
 ```bash
 git push -u origin refactor/crawl4ai-supervised-server
@@ -2478,7 +2484,10 @@ gh pr create --title "refactor(crawl4ai): supervised HTTP adapter, typed errors,
 - Per-profile `Mutex<()>` prevents Chromium `user_data_dir` collisions
 - `join_all` parallelizes Taobao/JD `/express/*` fetches
 - `daviszeroclaw crawl service {status,restart,stop}` for operators
-- Pins Python deps via `config/davis/crawl4ai-requirements.txt`
+- Fail-fast on venv import errors: adapter `/health` surfaces
+  `crawl4ai_import_failed` within 5s; daemon logs package versions at
+  every boot via `tracing::info!("crawl4ai adapter ready", versions=…)`
+  (intentionally unpinned; upgrade policy per user direction)
 
 ## Test plan
 - [ ] `cargo fmt --check` clean
@@ -2499,13 +2508,33 @@ EOF
 )"
 ```
 
-- [ ] **Step 5: Save session memory after merge**
+- [ ] **Step 5: Save session memory after merge** *(deferred until merge lands)*
 
 After the PR is merged, run:
 
 ```
 /lead-summary
 ```
+
+---
+
+## Phase 1c closure — 2026-04-23
+
+All 17 tasks land on branch `refactor/control-aliases-to-toml`. Final state:
+
+- Tasks 1–4 (Phase 0 in-place P0 fixes) ✅
+- Tasks 5–7 (Phase 1a Python FastAPI server) ✅
+- Tasks 8–13 (Phase 1b Rust supervisor + transport swap) ✅
+- Tasks 14–17 (Phase 1c test coverage + cleanup) ✅
+
+Gate summary at commit `9df6353`:
+
+- `cargo fmt --check` — clean
+- `cargo clippy --all-targets` — zero warnings
+- `cargo test` — 105 passed, 0 failed, 0 ignored (incl. 4 new integration tests under `tests/rust/crawl4ai.rs`)
+- Docs grep — zero stale `Crawl4aiTransport` / `transport = "python"` / `python -m crawl4ai_adapter crawl` references in README / project-sops / project-skills / project-workspace.
+
+No push, no PR per user instruction; branch stays local until the user decides to merge.
 
 ---
 
