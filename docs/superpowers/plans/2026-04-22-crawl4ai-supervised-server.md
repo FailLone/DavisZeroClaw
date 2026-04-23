@@ -611,134 +611,100 @@ EOF
 
 ## Phase 1a — Long-lived HTTP server on the Python side
 
-### Task 5: Pin Python dependencies
+### Task 5: Adapter install + runtime version logging (fail-fast, not pinned)
+
+**Rationale:** We deliberately do NOT pin Python deps. crawl4ai iterates fast and benefits from staying current; pinning would freeze us out of upstream fixes. Instead we make version info visible at runtime so when a breakage happens, we know immediately which version regressed and upgrade our code to match. "Fail fast + upgrade-driven" beats "pin and rot".
 
 **Files:**
-- Create: `config/davis/crawl4ai-requirements.txt`
-- Modify: `src/cli/crawl.rs:47-85` (swap unpinned `pip install` for `-r requirements.txt`)
-- Modify: `src/runtime_paths.rs` (add `crawl4ai_requirements_path`)
+- Modify: `src/cli/crawl.rs:47-85` (add fastapi/uvicorn/pydantic to the `pip install --upgrade` line)
+- Modify: `src/runtime_paths.rs` (delete dead `crawl4ai_setup_path` + `crawl4ai_doctor_path`)
+- Modify: `crawl4ai_adapter/__main__.py` AND will also feed Task 6's `server.py` (import-time version capture)
+- Modify: `src/crawl4ai_supervisor.rs` (will exist after Task 9 — startup log emits adapter version info)
 
-- [ ] **Step 1: Create the requirements file**
+- [ ] **Step 1: Extend `daviszeroclaw crawl install` to include fastapi + uvicorn + pydantic**
 
-Write `config/davis/crawl4ai-requirements.txt`:
-
-```
-# Crawl4AI adapter Python dependencies.
-# Pinned so daemon upgrades don't silently pull in a breaking crawl4ai release.
-# Refresh with: `uv pip compile --upgrade crawl4ai-requirements.in -o crawl4ai-requirements.txt`
-# (or manually bump + smoke-test `daviszeroclaw crawl check`).
-
-crawl4ai==0.4.248
-playwright==1.47.0
-patchright==1.47.4
-fastapi==0.115.4
-uvicorn[standard]==0.32.0
-pydantic==2.9.2
-```
-
-(Adjust versions to whatever the current working set is on your dev machine; capture via `pip freeze | grep -iE 'crawl4ai|playwright|patchright|fastapi|uvicorn|pydantic'` from the existing venv before writing.)
-
-- [ ] **Step 2: Add path helper**
-
-In `src/runtime_paths.rs`, next to the other crawl4ai paths (~line 151):
+In `src/cli/crawl.rs:47-59` (the `pip install --upgrade crawl4ai` block), change the arg list to install all five at once:
 
 ```rust
-pub fn crawl4ai_requirements_path(&self) -> PathBuf {
-    self.repo_root
-        .join("config")
-        .join("davis")
-        .join("crawl4ai-requirements.txt")
-}
-```
-
-Also delete the two unused path helpers at `src/runtime_paths.rs:159-165`:
-
-```rust
-// DELETE: crawl4ai_setup_path
-// DELETE: crawl4ai_doctor_path
-```
-
-- [ ] **Step 3: Swap the `pip install` call to use `-r requirements.txt`**
-
-In `src/cli/crawl.rs`, replace the block at lines 47-85 (four `pip install` / `playwright install` / `patchright install` runs) with:
-
-```rust
-    println!("Installing Crawl4AI dependencies from requirements.txt.");
+    println!("Installing Crawl4AI and HTTP server deps.");
     run_status(
         Command::new(&python)
             .arg("-m")
             .arg("pip")
             .arg("install")
-            .arg("-r")
-            .arg(paths.crawl4ai_requirements_path())
+            .arg("--upgrade")
+            .arg("crawl4ai")
+            .arg("fastapi")
+            .arg("uvicorn[standard]")
+            .arg("pydantic")
             .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
             .env("PATH", tool_path_env())
             .current_dir(&paths.repo_root),
-        "pip install -r crawl4ai-requirements.txt",
-    )?;
-
-    println!("Installing Playwright Chromium.");
-    run_status(
-        Command::new(&python)
-            .arg("-m")
-            .arg("playwright")
-            .arg("install")
-            .arg("chromium")
-            .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
-            .env("PATH", tool_path_env())
-            .current_dir(&paths.repo_root),
-        "python -m playwright install chromium",
-    )?;
-
-    println!("Installing Patchright Chromium.");
-    run_status(
-        Command::new(&python)
-            .arg("-m")
-            .arg("patchright")
-            .arg("install")
-            .arg("chromium")
-            .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
-            .env("PATH", tool_path_env())
-            .current_dir(&paths.repo_root),
-        "python -m patchright install chromium",
+        "pip install --upgrade crawl4ai fastapi uvicorn pydantic",
     )?;
 ```
 
-- [ ] **Step 4: Verify build**
+The existing `playwright install chromium` and `patchright install chromium` blocks stay untouched.
+
+Also update the success message at `src/cli/crawl.rs:87-91`:
+
+```rust
+    println!("Crawl4AI + HTTP server deps installed.");
+    println!("Python: {}", python.display());
+    println!("Adapter: {}", paths.crawl4ai_adapter_dir().display());
+    println!("Next: daviszeroclaw crawl check");
+```
+
+- [ ] **Step 2: Delete dead path helpers**
+
+In `src/runtime_paths.rs`, delete these two helpers (they're defined but never referenced anywhere):
+
+```rust
+pub fn crawl4ai_setup_path(&self) -> PathBuf { ... }
+pub fn crawl4ai_doctor_path(&self) -> PathBuf { ... }
+```
+
+Also grep to confirm nothing in `src/` or `tests/` still references them (should already be dead):
+
+```bash
+rg -n 'crawl4ai_setup_path|crawl4ai_doctor_path' --no-heading
+```
+
+Expected: zero matches after deletion.
+
+- [ ] **Step 3: Verify build**
 
 ```bash
 cargo build 2>&1 | tail -5
+cargo clippy --all-targets 2>&1 | tail -5
+cargo test 2>&1 | tail -3
 ```
 
-Expected: clean.
+Expected: all clean, 101 tests still pass.
 
-- [ ] **Step 5: Verify `daviszeroclaw crawl install` works**
-
-Manual (optional, if you want to validate locally before committing):
+- [ ] **Step 4: Commit**
 
 ```bash
-rm -rf .runtime/davis/crawl4ai-venv
-./target/debug/daviszeroclaw crawl install
-./target/debug/daviszeroclaw crawl check
+git add src/cli/crawl.rs src/runtime_paths.rs
+git commit -m "chore(crawl4ai): include server deps in install, drop dead path helpers
+
+- daviszeroclaw crawl install now --upgrades fastapi, uvicorn[standard],
+  and pydantic alongside crawl4ai. Phase 1a needs them for the long-lived
+  HTTP adapter.
+- Intentionally NOT pinning versions. crawl4ai iterates fast; staying
+  current is a feature. Breakages surface via runtime version logging
+  (added in Task 6's server.py / Task 9's supervisor startup log), not
+  frozen by a requirements.txt.
+- Delete runtime_paths::crawl4ai_setup_path and ::crawl4ai_doctor_path.
+  Both were defined but never read — dead since the module was written."
 ```
 
-Expected: install succeeds; `crawl check` reports all deps importable.
+**Note on version logging:** The "make version info visible at runtime" part of this task's rationale is implemented in:
+- **Task 6** — `server.py` reads `importlib.metadata.version()` for crawl4ai/playwright/patchright/fastapi/pydantic at startup, stores them in `app.state`, and echoes them in the `/health` response.
+- **Task 9** — `Crawl4aiSupervisor::wait_until_healthy` reads those versions from `/health` and emits a single `tracing::info!` line on first successful probe so `daemon.log` records which versions the adapter booted with.
+- **Task 16** — 503 startup responses surface the raw import exception + Python path so you can tell a venv corruption apart from a real API break.
 
-- [ ] **Step 6: Commit**
-
-```bash
-git add config/davis/crawl4ai-requirements.txt src/runtime_paths.rs src/cli/crawl.rs
-git commit -m "chore(crawl4ai): pin Python deps via requirements.txt
-
-- New config/davis/crawl4ai-requirements.txt as the single source of truth
-  for crawl4ai/playwright/patchright versions. Adds fastapi+uvicorn+pydantic
-  for the upcoming HTTP server.
-- daviszeroclaw crawl install now runs pip install -r. Unpinned upgrades are
-  gone — daemon releases no longer roll forward on crawl4ai's release
-  schedule.
-- Remove dead runtime_paths helpers crawl4ai_setup_path / crawl4ai_doctor_path
-  (never read)."
-```
+These are already in the plan for those tasks; Task 5 just enables them by installing the deps.
 
 ### Task 6: Write the FastAPI server (`crawl4ai_adapter/server.py`)
 
@@ -800,12 +766,36 @@ class CrawlResponse(BaseModel):
     error_message: Optional[str] = None
 
 
+def _collect_versions() -> dict[str, str]:
+    """Best-effort version capture for the packages we care about.
+
+    Unpinned by design — we want breakages to fail loudly rather than be
+    hidden by a frozen requirements.txt. Surfacing versions at runtime
+    means 'which version regressed?' is answerable from daemon.log.
+    """
+    import importlib.metadata as md
+    versions: dict[str, str] = {}
+    for pkg in ("crawl4ai", "playwright", "patchright", "fastapi", "pydantic", "uvicorn"):
+        try:
+            versions[pkg] = md.version(pkg)
+        except md.PackageNotFoundError:
+            versions[pkg] = "missing"
+    import sys
+    versions["python"] = sys.version.split()[0]
+    return versions
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     runtime_dir = Path(os.environ.get("CRAWL4_AI_BASE_DIRECTORY", ".")).resolve()
     runtime_dir.mkdir(parents=True, exist_ok=True)
     os.environ["CRAWL4_AI_BASE_DIRECTORY"] = str(runtime_dir)
-    logger.info("crawl4ai_adapter.server starting, base_dir=%s", runtime_dir)
+    app.state.versions = _collect_versions()
+    logger.info(
+        "crawl4ai_adapter.server starting base_dir=%s versions=%s",
+        runtime_dir,
+        app.state.versions,
+    )
     # Lazy-import crawl4ai so startup failures surface in /health rather than
     # at import time (daemon can report a typed error to the user).
     try:
@@ -824,6 +814,7 @@ app = FastAPI(title="crawl4ai_adapter", lifespan=lifespan)
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    versions = getattr(app.state, "versions", {})
     if not getattr(app.state, "crawl4ai_ok", False):
         return JSONResponse(
             status_code=503,
@@ -831,9 +822,10 @@ async def health() -> dict[str, Any]:
                 "status": "unhealthy",
                 "reason": "crawl4ai_import_failed",
                 "details": getattr(app.state, "crawl4ai_import_error", "unknown"),
+                "versions": versions,
             },
         )
-    return {"status": "ok"}
+    return {"status": "ok", "versions": versions}
 
 
 @app.post("/crawl", response_model=CrawlResponse)
@@ -1214,6 +1206,7 @@ Create `src/crawl4ai_supervisor.rs`:
 
 use crate::{Crawl4aiConfig, Crawl4aiError, RuntimePaths};
 use reqwest::Client;
+use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -1221,6 +1214,10 @@ use std::time::Duration;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+
+fn compact_json(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "<unserializable>".to_string())
+}
 
 const HEALTH_PATH: &str = "/health";
 const STARTUP_PROBE_INTERVAL: Duration = Duration::from_millis(200);
@@ -1289,11 +1286,9 @@ impl Crawl4aiSupervisor {
         self.http.clone()
     }
 
-    pub async fn is_healthy(&self) -> bool {
-        self.probe_health().await.is_ok()
-    }
-
-    async fn probe_health(&self) -> Result<(), Crawl4aiError> {
+    /// Probes /health and, on success, returns the body JSON so callers can
+    /// inspect the `versions` map the adapter publishes.
+    async fn probe_health(&self) -> Result<Value, Crawl4aiError> {
         let resp = self
             .http
             .get(&self.health_url)
@@ -1303,13 +1298,23 @@ impl Crawl4aiSupervisor {
             .map_err(|err| Crawl4aiError::ServerUnavailable {
                 details: err.to_string(),
             })?;
-        if resp.status().is_success() {
-            Ok(())
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        if status.is_success() {
+            Ok(body)
         } else {
             Err(Crawl4aiError::ServerUnavailable {
-                details: format!("health returned {}", resp.status()),
+                details: format!(
+                    "health returned {}: {}",
+                    status,
+                    compact_json(&body)
+                ),
             })
         }
+    }
+
+    pub async fn is_healthy(&self) -> bool {
+        self.probe_health().await.is_ok()
     }
 
     async fn spawn_child(&self) -> Result<(), Crawl4aiError> {
@@ -1365,7 +1370,16 @@ impl Crawl4aiSupervisor {
     async fn wait_until_healthy(&self) -> Result<(), Crawl4aiError> {
         let start = std::time::Instant::now();
         loop {
-            if self.probe_health().await.is_ok() {
+            if let Ok(body) = self.probe_health().await {
+                // Emit a single-line summary with the adapter's package versions.
+                // Unpinned-by-design (see Task 5 rationale): if a crawl breaks
+                // next week, `grep 'crawl4ai adapter ready' daemon.log` tells
+                // you which versions the daemon booted with.
+                let versions = body.get("versions").cloned().unwrap_or(Value::Null);
+                tracing::info!(
+                    versions = %compact_json(&versions),
+                    "crawl4ai adapter ready",
+                );
                 return Ok(());
             }
             if start.elapsed() > STARTUP_TIMEOUT {
@@ -2344,11 +2358,14 @@ git commit -m "observability(crawl4ai): add source field to spans, restart conte
 
 - [ ] **Step 1: When `/health` returns 503, surface it loudly**
 
-Currently `wait_until_healthy` treats 503 like any other non-200 and retries. Add explicit handling:
+Task 9's `wait_until_healthy` retries on any non-200 until STARTUP_TIMEOUT (30s) fires. That means a broken venv manifests as a 30s silent timeout instead of the real reason. We can do better: after a short grace window (5s), if /health keeps returning 503 with a `crawl4ai_import_failed` body, stop retrying and surface the body verbatim.
+
+Replace `wait_until_healthy` with:
 
 ```rust
 async fn wait_until_healthy(&self) -> Result<(), Crawl4aiError> {
     let start = std::time::Instant::now();
+    let mut last_unhealthy_body: Option<Value> = None;
     loop {
         match self
             .http
@@ -2359,23 +2376,31 @@ async fn wait_until_healthy(&self) -> Result<(), Crawl4aiError> {
         {
             Ok(resp) => {
                 let status = resp.status();
+                let body: Value = resp.json().await.unwrap_or(Value::Null);
                 if status.is_success() {
+                    let versions = body.get("versions").cloned().unwrap_or(Value::Null);
+                    tracing::info!(
+                        versions = %compact_json(&versions),
+                        "crawl4ai adapter ready",
+                    );
                     return Ok(());
                 }
                 if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-                    // Read body to surface import error from the adapter.
-                    let body: Value = resp.json().await.unwrap_or(json!({}));
+                    last_unhealthy_body = Some(body);
+                    // Give the adapter 5s to finish its import; after that
+                    // treat a persistent 503 as a configuration bug rather
+                    // than waiting out the full STARTUP_TIMEOUT.
                     if start.elapsed() > Duration::from_secs(5) {
                         return Err(Crawl4aiError::ServerUnavailable {
                             details: format!(
                                 "adapter reports unhealthy: {}",
-                                compact_json(&body)
+                                compact_json(last_unhealthy_body.as_ref().unwrap())
                             ),
                         });
                     }
                 }
             }
-            Err(_) => {}
+            Err(_) => { /* connection refused while uvicorn is still booting — keep polling */ }
         }
         if start.elapsed() > STARTUP_TIMEOUT {
             return Err(Crawl4aiError::ServerUnavailable {
@@ -2389,12 +2414,9 @@ async fn wait_until_healthy(&self) -> Result<(), Crawl4aiError> {
     }
 }
 
-fn compact_json(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "<unserializable>".to_string())
-}
 ```
 
-Add `use serde_json::{json, Value};` at the top of `src/crawl4ai_supervisor.rs`.
+(`compact_json` and `use serde_json::Value;` were already added in Task 9 — keep them. If Task 16 needs the `json!` macro specifically, widen the import to `use serde_json::{json, Value};`.)
 
 - [ ] **Step 2: Verify & commit**
 
@@ -2511,7 +2533,7 @@ Before handing off:
 - ✅ P1-7 (default transport untested) — Task 14
 - ✅ P1-8 (reqwest::Client per-request) — Task 10 uses `supervisor.http_client()` (shared)
 - ✅ P2-9 (dead path helpers) — Task 5
-- ✅ P2-10 (no pinning) — Task 5
+- ✅ P2-10 (no pinning) — Task 5 intentionally does NOT pin; instead Task 5 + Task 6 + Task 9 expose versions at runtime (adapter startup log + /health JSON + daemon "crawl4ai adapter ready" info line) so breakages are diagnosable. User policy: stay current with crawl4ai releases, fail fast, upgrade code when upstream changes.
 - ✅ P2-11 (sources serial) — Task 3
 - ✅ P2-12 (observability gaps) — Task 15
 - ✅ P2-13 (storage_state written not read) — *Not addressed.* Adds no bug; deferred. Noted for a separate janitor task.
