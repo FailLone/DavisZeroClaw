@@ -94,10 +94,15 @@ impl Crawl4aiSupervisor {
     /// `crawl4ai_crawl` and surfaces `Crawl4aiError::Disabled`. The
     /// `base_url` / `http_client` accessors remain callable so calling
     /// code does not need to branch, but the stub never hits the network.
-    pub fn disabled() -> Self {
+    ///
+    /// Takes `paths` explicitly rather than calling `RuntimePaths::from_env()`
+    /// so every supervisor instance shares the daemon's single source of
+    /// truth for filesystem layout (guards against env/cwd drift between
+    /// construction points).
+    pub fn disabled(paths: RuntimePaths) -> Self {
         let inner = SupervisorInner {
             child: None,
-            paths: RuntimePaths::from_env(),
+            paths,
             config: Crawl4aiConfig {
                 enabled: false,
                 ..Crawl4aiConfig::default()

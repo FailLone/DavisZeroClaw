@@ -111,13 +111,14 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
     // Disabled`. Express-specific tests that need crawl4ai to respond will
     // have to stand up a `for_test(base_url)` constructor (Task 14), which
     // is out of scope for Task 11.
+    let supervisor = Arc::new(Crawl4aiSupervisor::disabled(paths.clone()));
     let app = build_app(AppState::new(
         client,
         mcp_client,
         paths,
         Arc::new(control_config),
         Arc::new(local_config.crawl4ai.clone()),
-        Arc::new(Crawl4aiSupervisor::disabled()),
+        supervisor,
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
         local_config.webhook.secret,

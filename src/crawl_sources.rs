@@ -86,7 +86,7 @@ pub async fn run_builtin_crawl_source(
             Err(err) => return Err(format!("failed to start crawl4ai supervisor: {err}")),
         }
     } else {
-        Arc::new(Crawl4aiSupervisor::disabled())
+        Arc::new(Crawl4aiSupervisor::disabled(paths.clone()))
     };
     match source_id {
         "express-auth" => serialize_response(

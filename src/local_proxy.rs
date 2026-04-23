@@ -112,12 +112,12 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                     error = %err,
                     "crawl4ai supervisor failed to start; continuing without crawl support",
                 );
-                Arc::new(Crawl4aiSupervisor::disabled())
+                Arc::new(Crawl4aiSupervisor::disabled(paths.clone()))
             }
         }
     } else {
         tracing::info!("crawl4ai disabled in local config");
-        Arc::new(Crawl4aiSupervisor::disabled())
+        Arc::new(Crawl4aiSupervisor::disabled(paths.clone()))
     };
 
     let state = AppState::new(
