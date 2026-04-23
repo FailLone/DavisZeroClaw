@@ -58,7 +58,7 @@ pub(super) fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
             .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
             .env("PATH", tool_path_env())
             .current_dir(&paths.repo_root),
-        "pip install --upgrade crawl4ai fastapi uvicorn pydantic",
+        "pip install --upgrade crawl4ai fastapi uvicorn[standard] pydantic",
     )?;
 
     println!("Installing Playwright Chromium.");
