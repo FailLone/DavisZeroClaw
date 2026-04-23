@@ -25,6 +25,12 @@ fn compact_json(value: &Value) -> String {
 const HEALTH_PATH: &str = "/health";
 const STARTUP_PROBE_INTERVAL: Duration = Duration::from_millis(200);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Grace window before a structured 503 from `/health` short-circuits the
+/// startup probe. Uvicorn can respond with 503 while the FastAPI app is
+/// still wiring up its lifespan; waiting ~5s is enough to rule out
+/// transient boot noise. Anything past this window is almost always a
+/// broken venv / ImportError that no amount of waiting will fix.
+const STARTUP_UNHEALTHY_GRACE: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const RESTART_BUDGET: u32 = 5;
 
@@ -224,26 +230,82 @@ impl Crawl4aiSupervisor {
     }
 
     async fn wait_until_healthy(&self) -> Result<(), Crawl4aiError> {
+        self.wait_until_healthy_with(STARTUP_TIMEOUT, STARTUP_UNHEALTHY_GRACE)
+            .await
+    }
+
+    /// Probe `/health` on a loop with injectable budgets. Broken out of
+    /// `wait_until_healthy` so tests can drive the three-way branch logic
+    /// (connection refused → keep polling, 503 past grace → bail verbatim,
+    /// outer timeout → generic error) in ~300 ms instead of 30 s.
+    ///
+    /// Reasoning for the three-case split:
+    /// 1. `Err(_)` from reqwest = uvicorn hasn't bound the port yet. Normal
+    ///    during boot; keep polling until `startup_timeout`.
+    /// 2. 503 with a structured body = uvicorn is up (it responded) but the
+    ///    app's lifespan reports it cannot serve (typically
+    ///    `crawl4ai_import_failed`). After `unhealthy_grace`, return the
+    ///    body verbatim so operators see the real reason in daemon.log
+    ///    instead of a generic 30s timeout.
+    /// 3. Other non-2xx (e.g. a transient 500 from FastAPI mid-boot) = keep
+    ///    polling; those genuinely can clear on their own.
+    ///
+    /// `pub(crate)` so in-crate integration tests under `tests/rust/` can
+    /// pin down the 503 short-circuit contract without waiting out the
+    /// production 30 s `STARTUP_TIMEOUT`.
+    pub(crate) async fn wait_until_healthy_with(
+        &self,
+        startup_timeout: Duration,
+        unhealthy_grace: Duration,
+    ) -> Result<(), Crawl4aiError> {
         let start = std::time::Instant::now();
         loop {
-            if let Ok(body) = self.probe_health().await {
-                // Emit a single-line summary with the adapter's package versions.
-                // Unpinned-by-design (see Task 5 rationale): if a crawl breaks
-                // next week, `grep 'crawl4ai adapter ready' daemon.log` tells
-                // you which versions the daemon booted with.
-                let versions = body.get("versions").cloned().unwrap_or(Value::Null);
-                tracing::info!(
-                    versions = %compact_json(&versions),
-                    "crawl4ai adapter ready",
-                );
-                return Ok(());
+            match self
+                .http
+                .get(&self.health_url)
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body: Value = resp.json().await.unwrap_or(Value::Null);
+                    if status.is_success() {
+                        // Emit a single-line summary with the adapter's package versions.
+                        // Unpinned-by-design (see Task 5 rationale): if a crawl breaks
+                        // next week, `grep 'crawl4ai adapter ready' daemon.log` tells
+                        // you which versions the daemon booted with.
+                        let versions = body.get("versions").cloned().unwrap_or(Value::Null);
+                        tracing::info!(
+                            versions = %compact_json(&versions),
+                            "crawl4ai adapter ready",
+                        );
+                        return Ok(());
+                    }
+                    if status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+                        && start.elapsed() > unhealthy_grace
+                    {
+                        // uvicorn is up (it responded with a structured 503)
+                        // but the app's lifespan reports it cannot serve.
+                        // Bail verbatim with the body so operators see
+                        // "crawl4ai_import_failed: ModuleNotFoundError..."
+                        // in daemon.log instead of a generic 30s timeout.
+                        return Err(Crawl4aiError::ServerUnavailable {
+                            details: format!("adapter reports unhealthy: {}", compact_json(&body)),
+                        });
+                    }
+                    // 503 inside the grace window, or any other non-2xx
+                    // (e.g. a transient 500 mid-boot) — fall through to
+                    // the poll/sleep path and retry.
+                }
+                Err(_) => {
+                    // Connection refused / reqwest timeout — uvicorn is
+                    // still binding its listener. Keep polling.
+                }
             }
-            if start.elapsed() > STARTUP_TIMEOUT {
+            if start.elapsed() > startup_timeout {
                 return Err(Crawl4aiError::ServerUnavailable {
-                    details: format!(
-                        "adapter did not become healthy within {:?}",
-                        STARTUP_TIMEOUT
-                    ),
+                    details: format!("adapter did not become healthy within {startup_timeout:?}"),
                 });
             }
             sleep(STARTUP_PROBE_INTERVAL).await;

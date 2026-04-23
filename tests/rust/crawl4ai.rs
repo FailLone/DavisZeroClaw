@@ -9,6 +9,7 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 /// Concurrency smoke test for the per-profile lock map owned by `AppState`.
@@ -218,4 +219,73 @@ async fn crawl4ai_503_maps_to_server_unavailable() {
         "expected ServerUnavailable, got {err:?}"
     );
     assert_eq!(err.issue_type(), "crawl4ai_unavailable");
+}
+
+/// Adapter up but `/health` returns 503 with a structured
+/// `crawl4ai_import_failed` body. The supervisor's probe loop should bail
+/// within the grace window with the body verbatim, *not* wait out the full
+/// `STARTUP_TIMEOUT`. This pins down Task 16's contract: broken venvs fail
+/// loudly and fast rather than silently timing out after 30 s.
+///
+/// Drives the `pub(crate)` `wait_until_healthy_with` helper with a 2 s
+/// startup cap and a 200 ms grace so the test finishes in well under a
+/// second even on slow CI. If the supervisor regressed to "poll until
+/// timeout regardless of body," this test would run for ~2 s and assert on
+/// the wrong error shape.
+#[tokio::test]
+async fn supervisor_surfaces_adapter_unhealthy_body_quickly() {
+    async fn mock_unhealthy() -> axum::response::Response {
+        (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "unhealthy",
+                "reason": "crawl4ai_import_failed",
+                "details": "ModuleNotFoundError: No module named 'crawl4ai'",
+            })),
+        )
+            .into_response()
+    }
+
+    let app = Router::new().route("/health", get(mock_unhealthy));
+    let base_url = spawn_json_router(app).await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = fake_paths(tmp.path());
+    let supervisor = Crawl4aiSupervisor::for_test(paths, base_url);
+
+    let started = Instant::now();
+    let err = supervisor
+        .wait_until_healthy_with(Duration::from_secs(2), Duration::from_millis(200))
+        .await
+        .expect_err("persistent 503 must surface as Err, not succeed");
+    let elapsed = started.elapsed();
+
+    // Must bail well inside the outer 2 s startup cap — otherwise the
+    // short-circuit branch regressed to "poll until timeout."
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "expected fast bail (<1.5s), actually took {elapsed:?}"
+    );
+
+    match err {
+        Crawl4aiError::ServerUnavailable { details } => {
+            assert!(
+                details.contains("adapter reports unhealthy"),
+                "expected the unhealthy-branch prefix, got: {details}"
+            );
+            assert!(
+                details.contains("crawl4ai_import_failed"),
+                "expected the adapter's reason verbatim, got: {details}"
+            );
+            assert!(
+                details.contains("ModuleNotFoundError"),
+                "expected the adapter's details verbatim, got: {details}"
+            );
+            assert!(
+                !details.contains("did not become healthy"),
+                "should NOT be the generic startup-timeout branch, got: {details}"
+            );
+        }
+        other => panic!("expected ServerUnavailable, got {other:?}"),
+    }
 }
