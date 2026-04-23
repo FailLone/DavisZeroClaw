@@ -446,3 +446,163 @@ pub(super) fn migrate_legacy_crawl4ai_profiles(paths: &RuntimePaths) -> Result<(
     fs::rename(legacy, current)?;
     Ok(())
 }
+
+/// Operator-facing: inspect the supervised crawl4ai adapter's pid file,
+/// process liveness, and `/health` response.
+///
+/// Reads `.runtime/davis/crawl4ai.pid` (written by `Crawl4aiSupervisor::
+/// spawn_child`), sanity-checks the pid with `kill(pid, 0)` (standard
+/// "does this process exist?" probe — returns `ESRCH` if not, `0` if
+/// yes), then probes the adapter's own `/health`. Stale pid files
+/// (pid written but process gone — e.g. after a `kill -9 daviszeroclaw`)
+/// are surfaced loudly instead of showing a silent "not alive".
+pub(super) async fn crawl_service_status(paths: &RuntimePaths) -> Result<()> {
+    let pid_path = paths.crawl4ai_pid_path();
+    let log_path = paths.crawl4ai_log_path();
+    println!("pid file : {}", pid_path.display());
+    println!("log file : {}", log_path.display());
+
+    let pid_state = match fs::read_to_string(&pid_path) {
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            match trimmed.parse::<i32>() {
+                Ok(pid) => {
+                    println!("pid      : {pid}");
+                    if is_process_alive(pid) {
+                        PidState::Alive
+                    } else {
+                        // Pid recorded but the process is gone. Almost
+                        // always means daviszeroclaw was force-killed and
+                        // didn't get a chance to tear down its child.
+                        println!("note     : pid file exists but process is gone (stale)");
+                        PidState::Stale
+                    }
+                }
+                Err(_) => {
+                    println!("pid      : <malformed: {trimmed:?}>");
+                    PidState::Malformed
+                }
+            }
+        }
+        Err(_) => {
+            println!("pid      : <no pid file; daemon may not have started crawl4ai>");
+            PidState::Missing
+        }
+    };
+
+    // Health probe — best effort. A 200 means the adapter is answering
+    // even if the pid file is stale (unlikely but possible if something
+    // respawned it). A timeout / connection refused is the common case
+    // when the daemon is not running.
+    let config = check_local_config(paths)?;
+    let url = format!("{}/health", config.crawl4ai.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .context("build crawl4ai health probe client")?;
+    match client.get(&url).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let first_line = body.lines().next().unwrap_or("");
+            let excerpt = if first_line.len() > 200 {
+                &first_line[..200]
+            } else {
+                first_line
+            };
+            println!("health   : {status} ({url})");
+            if !excerpt.is_empty() {
+                println!("           {excerpt}");
+            }
+        }
+        Err(err) => println!("health   : unreachable ({err})"),
+    }
+
+    if matches!(pid_state, PidState::Stale) {
+        println!();
+        println!(
+            "Stale pid file. Either daviszeroclaw was kill -9'd, or the daemon is not running."
+        );
+        println!(
+            "Safe to remove: `trash {}` or `rm {}`",
+            pid_path.display(),
+            pid_path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Operator-facing: SIGTERM the adapter. The daemon's supervisor loop
+/// will notice the child exited and respawn it on the next tick (see
+/// `Crawl4aiSupervisor::spawn_restart_loop`). No-op if the pid file is
+/// missing or points at a dead process.
+pub(super) async fn crawl_service_restart(paths: &RuntimePaths) -> Result<()> {
+    crawl_service_stop_inner(paths, /* remove_pid = */ false)?;
+    println!("Daemon supervisor will respawn the adapter on its next restart loop tick.");
+    Ok(())
+}
+
+/// Operator-facing: SIGTERM the adapter and clear the pid file so the
+/// next `crawl service status` reports "no pid file" rather than stale
+/// liveness. Use this when shutting down the daemon is inconvenient but
+/// you want the adapter stopped.
+pub(super) async fn crawl_service_stop(paths: &RuntimePaths) -> Result<()> {
+    crawl_service_stop_inner(paths, /* remove_pid = */ true)
+}
+
+fn crawl_service_stop_inner(paths: &RuntimePaths, remove_pid: bool) -> Result<()> {
+    let pid_path = paths.crawl4ai_pid_path();
+    let raw = match fs::read_to_string(&pid_path) {
+        Ok(raw) => raw,
+        Err(_) => {
+            println!("No pid file at {}; nothing to stop.", pid_path.display());
+            return Ok(());
+        }
+    };
+    let pid: i32 = raw.trim().parse().context("parse crawl4ai.pid")?;
+    // Detect stale pid before signaling — avoids racing another process
+    // that happens to have been assigned the same pid after ours exited.
+    if !is_process_alive(pid) {
+        println!("pid {pid} is already gone (stale pid file).");
+        if remove_pid {
+            let _ = fs::remove_file(&pid_path);
+            println!("Removed stale pid file.");
+        }
+        return Ok(());
+    }
+    // SAFETY: kill(2) is async-signal-safe and does not alter the caller's
+    // process state. We're passing SIGTERM to a pid we wrote ourselves and
+    // just verified is alive; worst case the process has already exited in
+    // the last few microseconds and libc::kill returns ESRCH, which we
+    // surface via std::io::Error below.
+    unsafe {
+        if libc::kill(pid, libc::SIGTERM) != 0 {
+            let err = std::io::Error::last_os_error();
+            bail!("kill({pid}, SIGTERM): {err}");
+        }
+    }
+    println!("Sent SIGTERM to {pid}.");
+    if remove_pid {
+        let _ = fs::remove_file(&pid_path);
+        println!("Removed pid file.");
+    }
+    Ok(())
+}
+
+enum PidState {
+    Alive,
+    Stale,
+    Malformed,
+    Missing,
+}
+
+/// `kill(pid, 0)` is the standard POSIX way to test process existence
+/// without actually signaling. Returns 0 if the process exists (even as
+/// a zombie or owned by another user), `ESRCH` otherwise. We deliberately
+/// do not distinguish "no permission" (`EPERM`) from "exists" — either
+/// way the process is still around.
+fn is_process_alive(pid: i32) -> bool {
+    // SAFETY: kill(pid, 0) with signal 0 performs only the error check
+    // and does not alter any process state.
+    unsafe { libc::kill(pid, 0) == 0 }
+}

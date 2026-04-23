@@ -38,6 +38,12 @@ struct HealthResponse {
     status: &'static str,
     service: &'static str,
     features: Vec<&'static str>,
+    /// Supervisor view of the long-lived crawl4ai adapter:
+    /// `healthy` — /health probe last succeeded
+    /// `disabled` — `[crawl4ai].enabled = false` in local.toml
+    /// `starting` — enabled, not abandoned, but not healthy yet (boot or restart)
+    /// `abandoned` — supervisor exhausted its retry budget; no further respawns
+    crawl4ai: &'static str,
 }
 
 #[derive(Serialize)]
@@ -194,7 +200,23 @@ fn proxy_issue_response(err: ProxyError, query_entity: &str) -> (StatusCode, Jso
     )
 }
 
-async fn health() -> Json<Value> {
+async fn health(State(state): State<AppState>) -> Json<Value> {
+    // Supervisor state summary. Order matters:
+    // 1. `abandoned` wins over everything — we've explicitly given up, so
+    //    reporting "healthy" because a probe coincidentally succeeds would
+    //    mislead operators.
+    // 2. `disabled` before `healthy` because a probe against an
+    //    unconfigured supervisor is meaningless.
+    // 3. `healthy` vs `starting` is the live probe vs. not-ready distinction.
+    let crawl4ai_state = if state.crawl4ai_supervisor.is_abandoned().await {
+        "abandoned"
+    } else if !state.crawl4ai_config.enabled {
+        "disabled"
+    } else if state.crawl4ai_supervisor.is_healthy().await {
+        "healthy"
+    } else {
+        "starting"
+    };
     Json(
         serde_json::to_value(HealthResponse {
             status: "ok",
@@ -216,6 +238,7 @@ async fn health() -> Json<Value> {
                 "ha_mcp_live_context",
                 "shortcut_bridge",
             ],
+            crawl4ai: crawl4ai_state,
         })
         .unwrap_or_else(|_| json!({"status":"ok"})),
     )

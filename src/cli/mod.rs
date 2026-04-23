@@ -161,6 +161,21 @@ enum CrawlCommand {
         #[command(subcommand)]
         command: CrawlProfileCommand,
     },
+    /// Inspect or poke the long-lived crawl4ai adapter supervised by the daemon.
+    Service {
+        #[command(subcommand)]
+        command: CrawlServiceCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CrawlServiceCommand {
+    /// Show pid, liveness, health probe, and supervisor state.
+    Status,
+    /// SIGTERM the adapter; supervisor respawns on the next health tick.
+    Restart,
+    /// SIGTERM the adapter and remove the pid file.
+    Stop,
 }
 
 #[derive(Debug, Subcommand)]
@@ -432,6 +447,11 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
                 CrawlProfileCommand::Login { profile } => {
                     crawl_profile_login(&paths, profile).await
                 }
+            },
+            CrawlCommand::Service { command } => match command {
+                CrawlServiceCommand::Status => crawl_service_status(&paths).await,
+                CrawlServiceCommand::Restart => crawl_service_restart(&paths).await,
+                CrawlServiceCommand::Stop => crawl_service_stop(&paths).await,
             },
         },
         Commands::Config { command } => match command {

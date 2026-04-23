@@ -304,6 +304,7 @@ dependencies = [
  "clap",
  "futures",
  "hmac",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

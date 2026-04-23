@@ -123,18 +123,52 @@ pub async fn crawl4ai_crawl(
                 })
             }
         }
-        StatusCode::GATEWAY_TIMEOUT => Err(Crawl4aiError::Timeout {
-            budget_secs: config.timeout_secs,
-        }),
-        StatusCode::SERVICE_UNAVAILABLE => Err(Crawl4aiError::ServerUnavailable {
-            details: compact_json(&payload),
-        }),
-        StatusCode::INTERNAL_SERVER_ERROR => Err(Crawl4aiError::AdapterCrashed {
-            details: compact_json(&payload),
-        }),
-        other => Err(Crawl4aiError::AdapterCrashed {
-            details: format!("unexpected status {other}: {}", compact_json(&payload)),
-        }),
+        StatusCode::GATEWAY_TIMEOUT => {
+            // 504 = adapter's own wall-clock fired (asyncio.wait_for in
+            // server.py). Happy path stays silent; this is the first
+            // place the failure becomes visible, so leave a trail.
+            tracing::warn!(
+                status = %status,
+                body = %compact_json(&payload),
+                "crawl4ai /crawl returned 504 gateway timeout",
+            );
+            Err(Crawl4aiError::Timeout {
+                budget_secs: config.timeout_secs,
+            })
+        }
+        StatusCode::SERVICE_UNAVAILABLE => {
+            // 503 is usually the adapter reporting a failed import
+            // (broken venv) via its lifespan check — worth warning on
+            // because the operator needs to re-run `crawl install`.
+            tracing::warn!(
+                status = %status,
+                body = %compact_json(&payload),
+                "crawl4ai /crawl returned 503 service unavailable",
+            );
+            Err(Crawl4aiError::ServerUnavailable {
+                details: compact_json(&payload),
+            })
+        }
+        StatusCode::INTERNAL_SERVER_ERROR => {
+            tracing::warn!(
+                status = %status,
+                body = %compact_json(&payload),
+                "crawl4ai /crawl returned 500 internal server error",
+            );
+            Err(Crawl4aiError::AdapterCrashed {
+                details: compact_json(&payload),
+            })
+        }
+        other => {
+            tracing::warn!(
+                status = %other,
+                body = %compact_json(&payload),
+                "crawl4ai /crawl returned unexpected status",
+            );
+            Err(Crawl4aiError::AdapterCrashed {
+                details: format!("unexpected status {other}: {}", compact_json(&payload)),
+            })
+        }
     }
 }
 
