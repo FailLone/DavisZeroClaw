@@ -2569,6 +2569,7 @@ Before handing off:
 - Span-event metrics (Prometheus-style counters) — would require `metrics` crate addition
 - Article-memory crawl4ai usage (doesn't exist yet; will need profile-lock plumbing when added)
 - `storage_state.json` consolidation with `user_data_dir` (cosmetic; defer)
+- **Graceful shutdown of supervised adapter on daemon SIGTERM** — discovered during Task 17 smoke test 2026-04-23: `daviszeroclaw stop` kills the daemon, but the adapter child (pid in `crawl4ai.pid`) survives as an orphan still bound to :11235. `tokio::process::Command::kill_on_drop(true)` only fires when `Child` is dropped, which doesn't happen reliably under external SIGTERM — the runtime can exit before drop handlers run. Fix: daemon shutdown path should explicitly `supervisor.shutdown().await` which SIGTERMs the child from `SupervisorInner.child` and `wait()`s it, with a short timeout fallback to SIGKILL. Operator-visible symptom today: re-starting the daemon hits `Address already in use` on 11235 until the operator `kill`s the orphan manually, or the supervisor bypasses the bind error because reqwest probes succeed against the survivor (subtle — wrong adapter version may end up serving requests after an in-place binary upgrade). Not blocking for Phase 1 — single-user dev box, manual `kill <pid>` workaround documented in `.runtime/davis/crawl4ai.pid`.
 
 ---
 
