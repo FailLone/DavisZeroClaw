@@ -1,7 +1,7 @@
 use crate::{
     build_app, build_shortcut_bridge_app, check_local_config, load_control_config,
-    render_runtime_config, zeroclaw_env_vars, AppState, HaClient, HaMcpClient, HaState,
-    RuntimePaths,
+    render_runtime_config, zeroclaw_env_vars, AppState, Crawl4aiSupervisor, HaClient, HaMcpClient,
+    HaState, RuntimePaths,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -96,12 +96,37 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
     )
     .map_err(|err| anyhow::anyhow!("{err:?}"))?;
     render_runtime_config(&paths, &local_config)?;
+
+    // Bring the crawl4ai adapter up alongside the daemon. A start failure
+    // (broken venv, port conflict, missing Python) drops us into a disabled
+    // stub so unrelated routes (HA, article memory, advisor) still serve;
+    // any `/express/*` request will surface `Crawl4aiError::Disabled`.
+    let crawl4ai_supervisor = if local_config.crawl4ai.enabled {
+        match Crawl4aiSupervisor::start(paths.clone(), local_config.crawl4ai.clone()).await {
+            Ok(sup) => {
+                tracing::info!("crawl4ai supervisor ready");
+                Arc::new(sup)
+            }
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    "crawl4ai supervisor failed to start; continuing without crawl support",
+                );
+                Arc::new(Crawl4aiSupervisor::disabled())
+            }
+        }
+    } else {
+        tracing::info!("crawl4ai disabled in local config");
+        Arc::new(Crawl4aiSupervisor::disabled())
+    };
+
     let state = AppState::new(
         client,
         mcp_client,
         paths,
         control_config,
         Arc::new(local_config.crawl4ai.clone()),
+        crawl4ai_supervisor,
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
         local_config.webhook.secret.clone(),

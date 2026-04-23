@@ -105,12 +105,19 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
     control_config: ControlConfig,
     local_config: LocalConfig,
 ) -> String {
+    // Tests never want to spawn the real Python child. The `disabled()` stub
+    // is the honest surrogate: `crawl4ai_crawl` sees `config.enabled=false`
+    // via the stub's own config and short-circuits with `Crawl4aiError::
+    // Disabled`. Express-specific tests that need crawl4ai to respond will
+    // have to stand up a `for_test(base_url)` constructor (Task 14), which
+    // is out of scope for Task 11.
     let app = build_app(AppState::new(
         client,
         mcp_client,
         paths,
         Arc::new(control_config),
         Arc::new(local_config.crawl4ai.clone()),
+        Arc::new(Crawl4aiSupervisor::disabled()),
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
         local_config.webhook.secret,
@@ -123,6 +130,11 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
     format!("http://{addr}")
 }
 
+// Reserved for Task 14: the `Crawl4aiSupervisor::for_test(base_url)` work
+// will stand up mock /health + /crawl endpoints on this router. Task 11's
+// typed-error tests (tests/rust/express.rs) don't need it because they
+// exercise the `Crawl4aiError::Disabled` short-circuit, not the HTTP path.
+#[allow(dead_code)]
 pub(super) async fn spawn_json_router(router: Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

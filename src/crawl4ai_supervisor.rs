@@ -38,12 +38,21 @@ pub struct Crawl4aiSupervisor {
 struct SupervisorInner {
     child: Option<Child>,
     paths: RuntimePaths,
-    // Retained for Task 10 (per-request crawl options) and Task 14
-    // (for_test constructor). Not read by Task 9 itself.
+    // Retained for Task 14's `for_test` constructor (which clones the
+    // config off an existing instance). Not read by any other code path
+    // today; Task 9's supervisor.start reads the `config` function
+    // argument, not this field.
     #[allow(dead_code)]
     config: Crawl4aiConfig,
     python: PathBuf,
     port: u16,
+    /// Flips to `true` once the restart loop has exhausted its budget. A
+    /// future `/health` endpoint (or CLI subcommand) can consume this via
+    /// `Crawl4aiSupervisor::is_abandoned()` to distinguish "currently
+    /// restarting" from "gave up, will never retry." Plain `bool` because
+    /// the surrounding Mutex already serializes every read/write; adding
+    /// `AtomicBool` here would just be noise.
+    gave_up: bool,
 }
 
 impl Crawl4aiSupervisor {
@@ -66,6 +75,7 @@ impl Crawl4aiSupervisor {
             config,
             python,
             port,
+            gave_up: false,
         };
         let supervisor = Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -76,6 +86,40 @@ impl Crawl4aiSupervisor {
         supervisor.wait_until_healthy().await?;
         supervisor.clone().spawn_restart_loop();
         Ok(supervisor)
+    }
+
+    /// Placeholder used when `[crawl4ai].enabled = false` or the supervisor
+    /// failed to start at daemon boot. Any `crawl4ai_crawl` call routed
+    /// through this instance trips the `config.enabled` check in
+    /// `crawl4ai_crawl` and surfaces `Crawl4aiError::Disabled`. The
+    /// `base_url` / `http_client` accessors remain callable so calling
+    /// code does not need to branch, but the stub never hits the network.
+    pub fn disabled() -> Self {
+        let inner = SupervisorInner {
+            child: None,
+            paths: RuntimePaths::from_env(),
+            config: Crawl4aiConfig {
+                enabled: false,
+                ..Crawl4aiConfig::default()
+            },
+            python: PathBuf::new(),
+            port: 0,
+            gave_up: false,
+        };
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+            health_url: String::new(),
+            http: Client::new(),
+        }
+    }
+
+    /// `true` once `spawn_restart_loop` has exhausted `RESTART_BUDGET`.
+    /// Intended for future `/health` / CLI surface; no downstream consumer
+    /// wired yet. See SupervisorInner::gave_up for the rationale on using
+    /// plain `bool` rather than `AtomicBool`.
+    pub async fn is_abandoned(&self) -> bool {
+        let guard = self.inner.lock().await;
+        guard.gave_up
     }
 
     /// Returns the URL callers should POST /crawl to (e.g. http://127.0.0.1:11235).
@@ -233,6 +277,11 @@ impl Crawl4aiSupervisor {
                     tracing::error!(
                         "crawl4ai adapter failed to stay up after {RESTART_BUDGET} attempts; giving up"
                     );
+                    // Flip the abandoned flag so callers (CLI / future
+                    // /health surface) can tell this apart from a normal
+                    // restart in progress.
+                    let mut guard = self.inner.lock().await;
+                    guard.gave_up = true;
                     break;
                 }
             }

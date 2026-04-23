@@ -1,7 +1,8 @@
 use crate::{
-    build_issue, crawl4ai_crawl, isoformat, normalize_text, now_utc, Crawl4aiConfig,
-    Crawl4aiPageRequest, Crawl4aiProfileLocks, ExpressAuthStatusResponse, ExpressPackage,
-    ExpressPackagesResponse, ExpressSourceSnapshot, ExpressSourceStatus, RuntimePaths,
+    build_issue, crawl4ai_crawl, isoformat, normalize_text, now_utc, Crawl4aiConfig, Crawl4aiError,
+    Crawl4aiPageRequest, Crawl4aiProfileLocks, Crawl4aiSupervisor, ExpressAuthStatusResponse,
+    ExpressPackage, ExpressPackagesResponse, ExpressSourceSnapshot, ExpressSourceStatus,
+    RuntimePaths,
 };
 use futures::future::join_all;
 use serde_json::Value;
@@ -21,6 +22,7 @@ pub async fn express_auth_status(
     paths: RuntimePaths,
     crawl4ai_config: Crawl4aiConfig,
     profile_locks: Crawl4aiProfileLocks,
+    supervisor: Arc<Crawl4aiSupervisor>,
 ) -> ExpressAuthStatusResponse {
     // Fan out per-source fetches concurrently. Each future acquires its own
     // per-profile lock *inside* the async block so contention is scoped to
@@ -29,9 +31,10 @@ pub async fn express_auth_status(
         let paths = paths.clone();
         let cfg = crawl4ai_config.clone();
         let locks = profile_locks.clone();
+        let supervisor = supervisor.clone();
         async move {
             let lock = acquire_profile_lock(&locks, &express_profile_name(source)).await;
-            fetch_source_status(&paths, &cfg, lock, source).await
+            fetch_source_status(&paths, &cfg, &supervisor, lock, source).await
         }
     });
     let sources: Vec<_> = join_all(source_futures).await;
@@ -46,6 +49,7 @@ pub async fn express_packages(
     paths: RuntimePaths,
     crawl4ai_config: Crawl4aiConfig,
     profile_locks: Crawl4aiProfileLocks,
+    supervisor: Arc<Crawl4aiSupervisor>,
     source: Option<String>,
     query: Option<String>,
     force_refresh: bool,
@@ -59,10 +63,19 @@ pub async fn express_packages(
             let paths = paths.clone();
             let cfg = crawl4ai_config.clone();
             let locks = profile_locks.clone();
+            let supervisor = supervisor.clone();
             async move {
                 let lock =
                     acquire_profile_lock(&locks, &express_profile_name(selected_source)).await;
-                load_or_fetch_source(&paths, &cfg, lock, selected_source, force_refresh).await
+                load_or_fetch_source(
+                    &paths,
+                    &cfg,
+                    &supervisor,
+                    lock,
+                    selected_source,
+                    force_refresh,
+                )
+                .await
             }
         });
     let snapshots: Vec<_> = join_all(snapshot_futures).await;
@@ -119,6 +132,7 @@ fn select_sources(source: Option<&str>) -> Vec<&'static str> {
 async fn load_or_fetch_source(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
+    supervisor: &Crawl4aiSupervisor,
     profile_lock: Arc<Mutex<()>>,
     source: &str,
     force_refresh: bool,
@@ -132,7 +146,8 @@ async fn load_or_fetch_source(
             }
         }
     }
-    let snapshot = fetch_source_snapshot(paths, crawl4ai_config, profile_lock, source).await;
+    let snapshot =
+        fetch_source_snapshot(paths, crawl4ai_config, supervisor, profile_lock, source).await;
     let _ = write_cache(paths.express_cache_path(source), &snapshot);
     snapshot
 }
@@ -140,12 +155,14 @@ async fn load_or_fetch_source(
 async fn fetch_source_status(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
+    supervisor: &Crawl4aiSupervisor,
     profile_lock: Arc<Mutex<()>>,
     source: &str,
 ) -> ExpressSourceStatus {
     match crawl_source_payload(
         paths,
         crawl4ai_config,
+        supervisor,
         profile_lock,
         source,
         auth_script(source),
@@ -153,8 +170,10 @@ async fn fetch_source_status(
     .await
     {
         Ok(payload) => parse_source_status(source, &payload, None, None),
-        Err(message) => {
-            source_error_snapshot(source, "upstream_error", "crawl4ai_unavailable", message)
+        Err(err) => {
+            // Typed error → stable issue_type string. No substring matching.
+            let issue_type = err.issue_type();
+            source_error_snapshot(source, "upstream_error", issue_type, err.to_string())
                 .source_status
         }
     }
@@ -163,12 +182,14 @@ async fn fetch_source_status(
 async fn fetch_source_snapshot(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
+    supervisor: &Crawl4aiSupervisor,
     profile_lock: Arc<Mutex<()>>,
     source: &str,
 ) -> ExpressSourceSnapshot {
     match crawl_source_payload(
         paths,
         crawl4ai_config,
+        supervisor,
         profile_lock,
         source,
         packages_script(source),
@@ -176,12 +197,17 @@ async fn fetch_source_snapshot(
     .await
     {
         Ok(payload) => {
+            // A successful fetch can still fail to parse; surface that as
+            // `site_changed` since the page structure (not the adapter)
+            // drifted. PayloadMalformed errors from crawl_source_payload
+            // already carry the `site_changed` issue type via issue_type().
             parse_snapshot_payload(source, &payload, None, None).unwrap_or_else(|message| {
                 source_error_snapshot(source, "upstream_error", "site_changed", message)
             })
         }
-        Err(message) => {
-            source_error_snapshot(source, "upstream_error", "crawl4ai_unavailable", message)
+        Err(err) => {
+            let issue_type = err.issue_type();
+            source_error_snapshot(source, "upstream_error", issue_type, err.to_string())
         }
     }
 }
@@ -191,14 +217,6 @@ fn source_order_url(source: &str) -> &'static str {
         "ali" => "https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm",
         "jd" => "https://order.jd.com/center/list.action",
         _ => "",
-    }
-}
-
-fn source_login_message(source: &str) -> String {
-    match source {
-        "ali" => "请先在 Crawl4AI 托管 profile 中登录淘宝订单页".to_string(),
-        "jd" => "请先在 Crawl4AI 托管 profile 中登录京东订单页".to_string(),
-        _ => "请先在 Crawl4AI 托管 profile 中登录对应站点页面".to_string(),
     }
 }
 
@@ -221,17 +239,25 @@ fn packages_script(source: &str) -> String {
 async fn crawl_source_payload(
     paths: &RuntimePaths,
     crawl4ai_config: &Crawl4aiConfig,
+    supervisor: &Crawl4aiSupervisor,
     profile_lock: Arc<Mutex<()>>,
     source: &str,
     script: String,
-) -> Result<Value, String> {
+) -> Result<Value, Crawl4aiError> {
     // Serialize concurrent fetches against the same Chromium user_data_dir;
     // two attaches on one profile race on `SingletonLock` and the second
     // fails opaquely. Guard is released when this function returns.
     let _guard = profile_lock.lock().await;
+    // crawl4ai_crawl now returns Crawl4aiError on failure:
+    //   - success=false → CrawlFailed (mapped to "site_changed")
+    //   - adapter 503 → ServerUnavailable (mapped to "crawl4ai_unavailable")
+    //   - adapter 504 or reqwest timeout → Timeout
+    // Callers above consume err.issue_type() so every branch maps to a
+    // stable string without substring matching.
     let response = crawl4ai_crawl(
         paths,
         crawl4ai_config,
+        supervisor,
         Crawl4aiPageRequest {
             profile_name: express_profile_name(source),
             url: source_order_url(source).to_string(),
@@ -240,18 +266,14 @@ async fn crawl_source_payload(
         },
     )
     .await?;
-    if !response.success {
-        return Err(response.error_message.unwrap_or_else(|| {
-            format!(
-                "{}。请先运行 `daviszeroclaw crawl profile login express-{source}` 完成登录。",
-                source_login_message(source)
-            )
-        }));
-    }
-    extract_payload_value(&response).map_err(|message| {
-        format!(
+    // `crawl4ai_crawl` already returns `CrawlFailed` when `response.success`
+    // is false (see src/crawl4ai.rs). We only reach this point on a
+    // successful HTTP 200 crawl4ai response, so the `if !response.success`
+    // branch is unreachable here — extract the payload directly.
+    extract_payload_value(&response).map_err(|message| Crawl4aiError::PayloadMalformed {
+        details: format!(
             "failed to parse crawl4ai payload for {source}: {message}. 请确认 `daviszeroclaw crawl profile login express-{source}` 已完成并且订单页结构未变化。"
-        )
+        ),
     })
 }
 

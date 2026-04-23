@@ -7,8 +7,8 @@ use crate::{
     resolve_article_normalize_config, resolve_article_value_config, resolve_control_target,
     resolve_entity_payload, search_article_memory, upsert_article_memory_embedding,
     ArticleMemoryAddRequest, ArticleMemoryConfig, ControlAction, ControlConfig, Crawl4aiConfig,
-    ExecuteControlRequest, FailureReason, HaClient, HaMcpClient, ModelProviderConfig, ProxyError,
-    RuntimePaths,
+    Crawl4aiSupervisor, ExecuteControlRequest, FailureReason, HaClient, HaMcpClient,
+    ModelProviderConfig, ProxyError, RuntimePaths,
 };
 use axum::body::Bytes;
 use axum::extract::{Query, State};
@@ -62,18 +62,26 @@ pub struct AppState {
     pub control_config: Arc<ControlConfig>,
     pub crawl4ai_config: Arc<Crawl4aiConfig>,
     pub crawl4ai_profile_locks: Crawl4aiProfileLocks,
+    /// Shared handle to the long-lived crawl4ai HTTP adapter. When crawl4ai
+    /// is disabled in `local.toml` or the supervisor fails at boot, this
+    /// holds a `Crawl4aiSupervisor::disabled()` stub — every
+    /// `crawl4ai_crawl` call through it returns `Crawl4aiError::Disabled`
+    /// instead of touching the network.
+    pub crawl4ai_supervisor: Arc<Crawl4aiSupervisor>,
     pub article_memory_config: Arc<ArticleMemoryConfig>,
     pub providers: Arc<Vec<ModelProviderConfig>>,
     pub shortcut_secret: String,
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         client: HaClient,
         mcp_client: HaMcpClient,
         paths: RuntimePaths,
         control_config: Arc<ControlConfig>,
         crawl4ai_config: Arc<Crawl4aiConfig>,
+        crawl4ai_supervisor: Arc<Crawl4aiSupervisor>,
         article_memory_config: Arc<ArticleMemoryConfig>,
         providers: Arc<Vec<ModelProviderConfig>>,
         shortcut_secret: String,
@@ -85,6 +93,7 @@ impl AppState {
             control_config,
             crawl4ai_config,
             crawl4ai_profile_locks: Arc::new(Mutex::new(HashMap::new())),
+            crawl4ai_supervisor,
             article_memory_config,
             providers,
             shortcut_secret,
@@ -517,6 +526,7 @@ async fn express_auth_status_handler(State(state): State<AppState>) -> Json<Valu
                 state.paths.clone(),
                 (*state.crawl4ai_config).clone(),
                 state.crawl4ai_profile_locks.clone(),
+                state.crawl4ai_supervisor.clone(),
             )
             .await,
         )
@@ -540,6 +550,7 @@ async fn express_packages_handler(
                 state.paths.clone(),
                 (*state.crawl4ai_config).clone(),
                 state.crawl4ai_profile_locks.clone(),
+                state.crawl4ai_supervisor.clone(),
                 source,
                 query,
                 force_refresh,
@@ -565,6 +576,7 @@ async fn express_search_handler(
                 state.paths.clone(),
                 (*state.crawl4ai_config).clone(),
                 state.crawl4ai_profile_locks.clone(),
+                state.crawl4ai_supervisor.clone(),
                 source,
                 query,
                 false,

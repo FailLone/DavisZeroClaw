@@ -1,4 +1,6 @@
-use crate::{express_auth_status, express_packages, Crawl4aiConfig, RuntimePaths};
+use crate::{
+    express_auth_status, express_packages, Crawl4aiConfig, Crawl4aiSupervisor, RuntimePaths,
+};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -74,18 +76,40 @@ pub async fn run_builtin_crawl_source(
     // CLI path: each invocation is single-shot, so a fresh per-invocation
     // lock map is fine. Daemon path threads the AppState-owned map instead.
     let profile_locks = Arc::new(Mutex::new(HashMap::new()));
-    match source_id {
-        "express-auth" => {
-            serialize_response(express_auth_status(paths, crawl4ai_config, profile_locks).await)
+    // CLI invocation has no long-lived daemon to supervise a child; spin up
+    // a one-shot supervisor if crawl4ai is enabled, otherwise use the
+    // disabled stub so `crawl4ai_crawl` returns `Crawl4aiError::Disabled`
+    // with a clean error message instead of crashing on a null pointer.
+    let supervisor = if crawl4ai_config.enabled {
+        match Crawl4aiSupervisor::start(paths.clone(), crawl4ai_config.clone()).await {
+            Ok(sup) => Arc::new(sup),
+            Err(err) => return Err(format!("failed to start crawl4ai supervisor: {err}")),
         }
+    } else {
+        Arc::new(Crawl4aiSupervisor::disabled())
+    };
+    match source_id {
+        "express-auth" => serialize_response(
+            express_auth_status(paths, crawl4ai_config, profile_locks, supervisor).await,
+        ),
         "express-packages" => serialize_response(
-            express_packages(paths, crawl4ai_config, profile_locks, None, query, refresh).await,
+            express_packages(
+                paths,
+                crawl4ai_config,
+                profile_locks,
+                supervisor,
+                None,
+                query,
+                refresh,
+            )
+            .await,
         ),
         "express-ali-packages" => serialize_response(
             express_packages(
                 paths,
                 crawl4ai_config,
                 profile_locks,
+                supervisor,
                 Some("ali".to_string()),
                 query,
                 refresh,
@@ -97,6 +121,7 @@ pub async fn run_builtin_crawl_source(
                 paths,
                 crawl4ai_config,
                 profile_locks,
+                supervisor,
                 Some("jd".to_string()),
                 query,
                 refresh,

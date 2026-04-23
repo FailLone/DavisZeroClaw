@@ -1,72 +1,32 @@
+//! Integration coverage for `/express/*` routes.
+//!
+//! Task 11 rewired these routes through the `Crawl4aiSupervisor` and replaced
+//! `Result<_, String>` with `Result<_, Crawl4aiError>` end-to-end. These tests
+//! cover the typed-error surface — both the `Disabled` short-circuit (when
+//! `[crawl4ai].enabled = false`) and the `ServerUnavailable` fallback (when
+//! the supervisor stub cannot reach a real adapter).
+//!
+//! The full "mock crawl4ai → express parses payload" happy-path integration
+//! lands in Task 14 alongside the `Crawl4aiSupervisor::for_test(base_url)`
+//! constructor, which is the only ergonomic way to point a supervisor at an
+//! in-test axum router without spawning a Python child.
+
 use super::fixtures::{
     sample_config, sample_local_config_with_crawl4ai_base_url, sample_paths, sample_states,
 };
 use super::support::{
-    sample_mcp_client, spawn_json_router, spawn_proxy_base_url_with_local_config, spawn_test_client,
+    sample_mcp_client, spawn_proxy_base_url_with_local_config, spawn_test_client,
 };
-use axum::routing::post;
-use axum::{Json, Router};
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::Value;
 
+/// When `[crawl4ai].enabled = false`, express must fail both sources with the
+/// stable `crawl4ai_unavailable` issue type (via `Crawl4aiError::Disabled
+/// ::issue_type()`). No substring matching, no stringly-typed fallbacks.
 #[tokio::test]
-async fn express_auth_status_route_reports_per_source_state() {
-    let crawl4ai_router = Router::new()
-        .route(
-            "/crawl",
-            post(|Json(payload): Json<Value>| async move {
-                let url = payload
-                    .get("urls")
-                    .and_then(Value::as_array)
-                    .and_then(|items| items.first())
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let body = if url.contains("taobao.com") {
-                    json!({
-                        "results": [{
-                            "url":"https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm",
-                            "success":true,
-                            "status_code":200,
-                            "html":"<html></html>",
-                            "js_execution_result":{
-                                "source":"ali",
-                                "status":"ok",
-                                "checked_at":"2026-04-08T12:00:00Z",
-                                "logged_in":true,
-                                "package_count":0,
-                                "current_url":"https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm",
-                                "title":"已买到的宝贝",
-                                "message":"ok",
-                                "packages":[]
-                            }
-                        }]
-                    })
-                } else {
-                    json!({
-                        "results": [{
-                            "url":"https://order.jd.com/center/list.action",
-                            "success":true,
-                            "status_code":200,
-                            "html":"<html></html>",
-                            "js_execution_result":{
-                                "source":"jd",
-                                "status":"needs_reauth",
-                                "checked_at":"2026-04-08T12:00:00Z",
-                                "logged_in":false,
-                                "package_count":0,
-                                "title":"京东-欢迎登录",
-                                "message":"login required",
-                                "issue_type":"auth_required",
-                                "packages":[]
-                            }
-                        }]
-                    })
-                };
-                Json(body)
-            }),
-        );
-    let crawl4ai_base_url = spawn_json_router(crawl4ai_router).await;
-    let local_config = sample_local_config_with_crawl4ai_base_url(&crawl4ai_base_url);
+async fn express_auth_status_reports_upstream_error_when_crawl4ai_disabled() {
+    let mut local_config = sample_local_config_with_crawl4ai_base_url("http://127.0.0.1:0");
+    local_config.crawl4ai.enabled = false;
     let paths = sample_paths();
     let (upstream, _service_calls) = spawn_test_client(sample_states()).await;
     let base_url = spawn_proxy_base_url_with_local_config(
@@ -85,67 +45,41 @@ async fn express_auth_status_route_reports_per_source_state() {
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let body: Value = response.json().await.unwrap();
-    assert_eq!(body.get("status").and_then(Value::as_str), Some("partial"));
     assert_eq!(
-        body.get("sources")
-            .and_then(Value::as_array)
-            .map(|items| items.len()),
-        Some(2)
+        body.get("status").and_then(Value::as_str),
+        Some("upstream_error"),
+        "body: {body}"
     );
+    let sources = body
+        .get("sources")
+        .and_then(Value::as_array)
+        .expect("sources array");
+    assert_eq!(sources.len(), 2);
+    for source in sources {
+        assert_eq!(
+            source.get("status").and_then(Value::as_str),
+            Some("upstream_error"),
+        );
+        // `Crawl4aiError::Disabled::issue_type()` → "crawl4ai_unavailable".
+        // Locked so src/support.rs remediation hints stay in sync.
+        assert_eq!(
+            source
+                .get("issue")
+                .and_then(|issue| issue.get("issue_type"))
+                .and_then(Value::as_str),
+            Some("crawl4ai_unavailable"),
+        );
+    }
 }
 
+/// Same contract for `/express/packages`: disabled config → empty package
+/// list, all sources in upstream_error with the `crawl4ai_unavailable` issue
+/// type. Also verifies the `/express/search` aliased handler behaves the
+/// same (it delegates to `express_packages`).
 #[tokio::test]
-async fn express_packages_route_aggregates_and_filters_results() {
-    let crawl4ai_router = Router::new()
-        .route(
-            "/crawl",
-            post(|Json(payload): Json<Value>| async move {
-                let url = payload
-                    .get("urls")
-                    .and_then(Value::as_array)
-                    .and_then(|items| items.first())
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let body = if url.contains("taobao.com") {
-                    json!({
-                        "results": [{
-                            "url":"https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm",
-                            "success":true,
-                            "status_code":200,
-                            "html":"<html></html>",
-                            "js_execution_result":{
-                                "source":"ali",
-                                "status":"ok",
-                                "checked_at":"2026-04-08T12:00:00Z",
-                                "logged_in":true,
-                                "package_count":1,
-                                "packages":[{"id":"ali-1","source":"ali","merchant":"taobao","title":"淘宝 蓝牙耳机","shop_name":"数码店","status":"运输中","latest_update":"快件正在运输途中","latest_time":"2026-04-08 10:00","carrier":"顺丰","tracking_no_masked":"SF****1234","raw_source_meta":{}}]
-                            }
-                        }]
-                    })
-                } else {
-                    json!({
-                        "results": [{
-                            "url":"https://order.jd.com/center/list.action",
-                            "success":true,
-                            "status_code":200,
-                            "html":"<html></html>",
-                            "js_execution_result":{
-                                "source":"jd",
-                                "status":"ok",
-                                "checked_at":"2026-04-08T12:00:00Z",
-                                "logged_in":true,
-                                "package_count":1,
-                                "packages":[{"id":"jd-1","source":"jd","merchant":"jd","title":"京东 咖啡胶囊","shop_name":"京东自营","status":"待取件","latest_update":"已到驿站，请及时取件","latest_time":"2026-04-08 12:00","carrier":"京东快递","pickup_code_masked":"42**","raw_source_meta":{}}]
-                            }
-                        }]
-                    })
-                };
-                Json(body)
-            }),
-        );
-    let crawl4ai_base_url = spawn_json_router(crawl4ai_router).await;
-    let local_config = sample_local_config_with_crawl4ai_base_url(&crawl4ai_base_url);
+async fn express_packages_route_surfaces_disabled_as_typed_error() {
+    let mut local_config = sample_local_config_with_crawl4ai_base_url("http://127.0.0.1:0");
+    local_config.crawl4ai.enabled = false;
     let paths = sample_paths();
     let (upstream, _service_calls) = spawn_test_client(sample_states()).await;
     let base_url = spawn_proxy_base_url_with_local_config(
@@ -164,32 +98,35 @@ async fn express_packages_route_aggregates_and_filters_results() {
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let body: Value = response.json().await.unwrap();
-    assert_eq!(body.get("status").and_then(Value::as_str), Some("ok"));
-    assert_eq!(body.get("package_count").and_then(Value::as_u64), Some(2));
-    assert!(body
-        .get("speech")
-        .and_then(Value::as_str)
-        .map(|text| text.contains("共找到 2 个包裹"))
-        .unwrap_or(false));
+    assert_eq!(
+        body.get("status").and_then(Value::as_str),
+        Some("upstream_error"),
+    );
+    assert_eq!(body.get("package_count").and_then(Value::as_u64), Some(0));
+    let sources = body
+        .get("sources")
+        .and_then(Value::as_array)
+        .expect("sources array");
+    assert_eq!(sources.len(), 2);
+    for source in sources {
+        assert_eq!(
+            source
+                .get("issue")
+                .and_then(|issue| issue.get("issue_type"))
+                .and_then(Value::as_str),
+            Some("crawl4ai_unavailable"),
+        );
+    }
 
-    let filtered = Client::new()
-        .get(format!("{base_url}/express/search?q=咖啡"))
+    let search_response = Client::new()
+        .get(format!("{base_url}/express/search?q=coffee"))
         .send()
         .await
         .unwrap();
-    assert_eq!(filtered.status(), reqwest::StatusCode::OK);
-    let filtered_body: Value = filtered.json().await.unwrap();
+    assert_eq!(search_response.status(), reqwest::StatusCode::OK);
+    let search_body: Value = search_response.json().await.unwrap();
     assert_eq!(
-        filtered_body.get("package_count").and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        filtered_body
-            .get("packages")
-            .and_then(Value::as_array)
-            .and_then(|items| items.first())
-            .and_then(|item| item.get("source"))
-            .and_then(Value::as_str),
-        Some("jd")
+        search_body.get("status").and_then(Value::as_str),
+        Some("upstream_error"),
     );
 }
