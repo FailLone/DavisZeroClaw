@@ -2062,46 +2062,36 @@ loop inside the daemon respawns automatically."
 
 ### Task 13: Delete `crawl4ai_adapter crawl` subprocess path and the `Crawl4aiTransport` leftovers
 
-**Files:**
-- Modify: `src/crawl4ai.rs` (already done in Task 10 — verify no references remain)
-- Modify: `tests/rust/fixtures.rs:90-96`
-- Verify no stray uses
+**Status (2026-04-23): VERIFICATION ONLY — no code change needed.**
 
-- [ ] **Step 1: grep for dead references**
+Tasks 10 (`c91e4d0`), 11 (`31429ff`+`bd8a182`), and 12 (`d63c403`+`0abff97`) removed every production/test reference to `Crawl4aiTransport`, `crawl_via_python`, `CRAWL4AI_SUBPROCESS_GUARD_SECS`, `config.crawl4ai.transport`, and the `python -m crawl4ai_adapter crawl` subprocess invocation as part of their scope. The `tests/rust/fixtures.rs::sample_local_config_with_crawl4ai_base_url` override was updated in-line during Task 10.
 
-```bash
-rg -n "Crawl4aiTransport|crawl_via_python|crawl4ai_adapter crawl" --no-heading
-```
-
-Expected: zero matches (the only acceptable match is comments referencing the removal in commit messages).
-
-- [ ] **Step 2: Update `tests/rust/fixtures.rs:90-96`**
-
-Delete the `sample_local_config_with_crawl4ai_base_url` override of `transport = Server` — the field no longer exists:
-
-```rust
-pub(super) fn sample_local_config_with_crawl4ai_base_url(base_url: &str) -> LocalConfig {
-    let mut config = sample_local_config();
-    config.crawl4ai.enabled = true;
-    config.crawl4ai.base_url = base_url.trim_end_matches('/').to_string();
-    config
-}
-```
-
-- [ ] **Step 3: Verify**
+**Verification run on 2026-04-23 at head `0abff97`:**
 
 ```bash
-cargo build 2>&1 | tail -5 && cargo test 2>&1 | tail -5
+rg -n "Crawl4aiTransport|crawl_via_python|CRAWL4AI_SUBPROCESS_GUARD_SECS|python -m crawl4ai_adapter crawl" \
+   --no-heading -g '!target' -g '!*.lock' -g '!docs/superpowers/plans/**'
+# → zero matches
+
+rg -n 'config\.crawl4ai\.transport|crawl4ai\.transport\s*=' \
+   --no-heading -g '!target' -g '!*.lock' -g '!docs/superpowers/plans/**'
+# → zero matches
+
+rg -n 'transport\s*=\s*"(?:python|server)"' config/
+# → zero matches
+
+rg -n 'transport\s*=\s*"(?:python|server)"|Crawl4aiTransport' README.md project-sops/ project-skills/
+# → zero matches
 ```
 
-Expected: full green. Tests that used to force the `Server` transport still work (there's only one transport now).
+The only remaining matches live in this plan document (which intentionally records the history of the deletions). No commit landed for Task 13.
 
-- [ ] **Step 4: Commit**
+Original bite-sized steps are preserved below for the record; all are superseded by prior tasks.
 
-```bash
-git add -p tests/rust/fixtures.rs
-git commit -m "test(crawl4ai): drop Crawl4aiTransport overrides (no longer exists)"
-```
+- [x] **Step 1: grep for dead references** — verified zero (see above).
+- [x] **Step 2: Update `tests/rust/fixtures.rs`** — landed in Task 10's commit `c91e4d0`.
+- [x] **Step 3: Verify** — `cargo test` green at 102 passed on head `0abff97`.
+- [x] **Step 4: Commit** — no-op. Task 13 is verification only.
 
 ---
 
