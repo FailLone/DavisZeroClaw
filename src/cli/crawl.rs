@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub(super) fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
-    let python3 = require_command("python3").context("python3 is required to install Crawl4AI")?;
+    let python3 = resolve_host_python3().context(
+        "need python3.10+ on PATH to build a Crawl4AI venv (try: brew install python@3.13)",
+    )?;
     let venv_dir = paths.crawl4ai_venv_dir();
     let python = paths.crawl4ai_python_path();
     let crawl4ai_base_dir = paths.runtime_dir.display().to_string();
@@ -346,6 +348,83 @@ pub(super) async fn crawl_profile_login(paths: &RuntimePaths, profile: CrawlProf
             .current_dir(&paths.repo_root),
         "open Crawl4AI-compatible browser login flow",
     )
+}
+
+/// Pick the newest host `python3` interpreter on PATH for building a Crawl4AI venv.
+///
+/// crawl4ai + recent fastapi/pydantic need Python >= 3.10; the macOS system
+/// `/usr/bin/python3` is 3.9 and would silently succeed `venv` creation only
+/// to fail later during `pip install`. We scan every `python3*` file on PATH,
+/// ask each interpreter for its actual version (so we see through symlinks
+/// like `python3 → python3.13`), and pick the highest satisfying (>= 3.10).
+fn resolve_host_python3() -> Result<PathBuf> {
+    const MIN_MINOR: u32 = 10;
+
+    // Use the same augmented PATH as every other subprocess call in this
+    // module (prepends /opt/homebrew/bin so brew-installed python3.NN is
+    // visible even under launchd, which has a minimal default PATH).
+    let path_env = tool_path_env();
+    let mut best: Option<((u32, u32), PathBuf)> = None;
+
+    for dir in std::env::split_paths(&path_env) {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            // Accept `python3`, `python3.10`, `python3.13`, ... but not
+            // `python3-config`, `python3-dbg`, `python3.13t` (free-threaded).
+            if !name.starts_with("python3") {
+                continue;
+            }
+            let suffix = &name[7..];
+            let suffix_ok = suffix.is_empty()
+                || (suffix.starts_with('.') && suffix[1..].chars().all(|c| c.is_ascii_digit()));
+            if !suffix_ok {
+                continue;
+            }
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(version) = probe_python_version(&path) else {
+                continue;
+            };
+            if version.0 != 3 || version.1 < MIN_MINOR {
+                continue;
+            }
+            if best
+                .as_ref()
+                .is_none_or(|(best_ver, _)| version > *best_ver)
+            {
+                best = Some((version, path));
+            }
+        }
+    }
+
+    if let Some((_, path)) = best {
+        return Ok(path);
+    }
+    bail!(
+        "no python3 >= 3.{MIN_MINOR} found on PATH — install a modern Python (e.g. `brew install python@3.13`) and retry"
+    )
+}
+
+fn probe_python_version(path: &Path) -> Option<(u32, u32)> {
+    let output = Command::new(path)
+        .arg("-c")
+        .arg("import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut parts = text.trim().split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
 }
 
 pub(super) fn resolve_crawl4ai_python(
