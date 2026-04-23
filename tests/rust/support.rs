@@ -131,6 +131,21 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
     format!("http://{addr}")
 }
 
+/// Build a `RuntimePaths` rooted at the provided temp dir and pre-create
+/// the `runtime_dir/state/` subdirectory test code commonly needs. The
+/// caller owns `tmp` (typically from `tempfile::tempdir()`), so cleanup
+/// is automatic when the `TempDir` drops. Prefer this over the
+/// process-wide `fixtures::sample_paths()` when a test wants an isolated
+/// filesystem root.
+pub(super) fn fake_paths(tmp: &std::path::Path) -> crate::RuntimePaths {
+    let paths = crate::RuntimePaths {
+        repo_root: tmp.to_path_buf(),
+        runtime_dir: tmp.join(".runtime").join("davis"),
+    };
+    std::fs::create_dir_all(paths.runtime_dir.join("state")).unwrap();
+    paths
+}
+
 /// Stand up a bare axum router on an ephemeral 127.0.0.1 port and return
 /// its `http://127.0.0.1:{port}` base URL. Used by Task 14's integration
 /// tests to host mock `/health` + `/crawl` endpoints for a

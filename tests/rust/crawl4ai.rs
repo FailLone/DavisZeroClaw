@@ -1,7 +1,7 @@
-use super::support::spawn_json_router;
+use super::support::{fake_paths, spawn_json_router};
 use crate::{
     crawl4ai_crawl, express_auth_status, Crawl4aiConfig, Crawl4aiError, Crawl4aiPageRequest,
-    Crawl4aiSupervisor, RuntimePaths,
+    Crawl4aiSupervisor,
 };
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -121,15 +121,6 @@ async fn mock_crawl_503() -> axum::response::Response {
         .into_response()
 }
 
-fn fake_paths(tmp: &std::path::Path) -> RuntimePaths {
-    let paths = RuntimePaths {
-        repo_root: tmp.to_path_buf(),
-        runtime_dir: tmp.join(".runtime").join("davis"),
-    };
-    std::fs::create_dir_all(paths.runtime_dir.join("state")).unwrap();
-    paths
-}
-
 /// End-to-end happy path: mock adapter on an ephemeral port, supervisor
 /// `for_test` pointed at it, `express_auth_status` fans out to both `ali`
 /// and `jd`. Mock returns an `ali` payload; `jd` gets the same mock
@@ -149,12 +140,14 @@ async fn express_auth_status_flows_through_mock_supervisor() {
     let tmp = tempfile::tempdir().unwrap();
     let paths = fake_paths(tmp.path());
 
-    let mut cfg = Crawl4aiConfig {
+    // cfg.base_url is unused on the request path — express routes through
+    // supervisor.base_url(), not cfg. Keep enabled=true + a short timeout so
+    // Crawl4aiError::Disabled can't mask a real regression.
+    let cfg = Crawl4aiConfig {
         enabled: true,
+        timeout_secs: 5,
         ..Crawl4aiConfig::default()
     };
-    cfg.base_url = base_url.clone();
-    cfg.timeout_secs = 5;
 
     let supervisor = Arc::new(Crawl4aiSupervisor::for_test(paths.clone(), base_url));
     let locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -197,12 +190,12 @@ async fn crawl4ai_503_maps_to_server_unavailable() {
     let tmp = tempfile::tempdir().unwrap();
     let paths = fake_paths(tmp.path());
 
-    let mut cfg = Crawl4aiConfig {
+    // cfg.base_url is unused — crawl4ai_crawl reads supervisor.base_url().
+    let cfg = Crawl4aiConfig {
         enabled: true,
+        timeout_secs: 2,
         ..Crawl4aiConfig::default()
     };
-    cfg.base_url = base_url.clone();
-    cfg.timeout_secs = 2;
 
     let supervisor = Crawl4aiSupervisor::for_test(paths.clone(), base_url);
 

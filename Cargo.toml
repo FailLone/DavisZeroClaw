@@ -15,6 +15,12 @@ path = "src/main.rs"
 name = "daviszeroclaw"
 path = "src/bin/daviszeroclaw.rs"
 
+[features]
+# Opt-in to `Crawl4aiSupervisor::for_test(...)` from downstream crates
+# (anyone mocking the adapter). Always on in `cargo test`; off in release
+# builds unless explicitly requested.
+test-util = []
+
 [dependencies]
 anyhow = "1"
 axum = "0.7"
