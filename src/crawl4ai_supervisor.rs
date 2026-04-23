@@ -38,11 +38,11 @@ pub struct Crawl4aiSupervisor {
 struct SupervisorInner {
     child: Option<Child>,
     paths: RuntimePaths,
-    // Retained for Task 14's `for_test` constructor (which clones the
-    // config off an existing instance). Not read by any other code path
-    // today; Task 9's supervisor.start reads the `config` function
-    // argument, not this field.
-    #[allow(dead_code)]
+    /// Consumed by `base_url()` — trimming trailing slashes off this field
+    /// gives the URL callers POST /crawl to. In production, `start()` sets
+    /// this from `local.toml` (default `http://127.0.0.1:11235`). In tests
+    /// `for_test()` sets it to the ephemeral-port axum mock's base URL, so
+    /// the same accessor works uniformly.
     config: Crawl4aiConfig,
     python: PathBuf,
     port: u16,
@@ -127,10 +127,20 @@ impl Crawl4aiSupervisor {
         guard.gave_up
     }
 
-    /// Returns the URL callers should POST /crawl to (e.g. http://127.0.0.1:11235).
+    /// Returns the URL callers should POST /crawl to (e.g. `http://127.0.0.1:11235`).
+    ///
+    /// Reads from `config.base_url` (trimmed of trailing slashes) rather than
+    /// reconstructing `http://127.0.0.1:{port}`. In production, `start()`
+    /// sets `config.base_url` from `local.toml`, and the default there is
+    /// `http://127.0.0.1:11235` — so this returns the same string the old
+    /// code did for any default-configured deployment. The explicit choice
+    /// to honor the configured host (rather than hardcoding 127.0.0.1) also
+    /// lets `Crawl4aiSupervisor::for_test(paths, base_url)` point at a
+    /// random-port axum mock without having to teach the supervisor about
+    /// "test mode."
     pub async fn base_url(&self) -> String {
         let guard = self.inner.lock().await;
-        format!("http://127.0.0.1:{}", guard.port)
+        guard.config.base_url.trim_end_matches('/').to_string()
     }
 
     /// Shared HTTP client for callers. Connection pool is reused.
@@ -291,6 +301,44 @@ impl Crawl4aiSupervisor {
                 }
             }
         });
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl Crawl4aiSupervisor {
+    /// Test constructor: skips spawning a child, points `base_url()` and the
+    /// shared `reqwest::Client` at the caller-supplied address (typically an
+    /// ephemeral-port axum mock router). Lets integration tests drive
+    /// `crawl4ai_crawl` / `express_auth_status` end-to-end through a fake
+    /// `/crawl` + `/health` HTTP surface without a real Python process.
+    ///
+    /// Gated behind `#[cfg(any(test, feature = "test-util"))]`; the
+    /// `test-util` feature is reserved for future external test harnesses and
+    /// is not yet declared in `Cargo.toml`. In-crate `cargo test` picks this
+    /// up via the `test` cfg.
+    pub fn for_test(paths: RuntimePaths, base_url: impl Into<String>) -> Self {
+        let base = base_url.into();
+        let parsed = url::Url::parse(&base).expect("for_test requires a parseable base_url");
+        let port = parsed.port_or_known_default().unwrap_or(0);
+        let http = Client::new();
+        let health_url = format!("{}/health", base.trim_end_matches('/'));
+        let config = Crawl4aiConfig {
+            enabled: true,
+            base_url: base,
+            ..Crawl4aiConfig::default()
+        };
+        Self {
+            inner: Arc::new(Mutex::new(SupervisorInner {
+                child: None,
+                paths,
+                config,
+                python: PathBuf::new(),
+                port,
+                gave_up: false,
+            })),
+            health_url,
+            http,
+        }
     }
 }
 

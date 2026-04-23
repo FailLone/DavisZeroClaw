@@ -131,11 +131,10 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
     format!("http://{addr}")
 }
 
-// Reserved for Task 14: the `Crawl4aiSupervisor::for_test(base_url)` work
-// will stand up mock /health + /crawl endpoints on this router. Task 11's
-// typed-error tests (tests/rust/express.rs) don't need it because they
-// exercise the `Crawl4aiError::Disabled` short-circuit, not the HTTP path.
-#[allow(dead_code)]
+/// Stand up a bare axum router on an ephemeral 127.0.0.1 port and return
+/// its `http://127.0.0.1:{port}` base URL. Used by Task 14's integration
+/// tests to host mock `/health` + `/crawl` endpoints for a
+/// `Crawl4aiSupervisor::for_test(...)` instance.
 pub(super) async fn spawn_json_router(router: Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
