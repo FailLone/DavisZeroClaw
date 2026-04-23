@@ -505,11 +505,11 @@ pub(super) async fn crawl_service_status(paths: &RuntimePaths) -> Result<()> {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             let first_line = body.lines().next().unwrap_or("");
-            let excerpt = if first_line.len() > 200 {
-                &first_line[..200]
-            } else {
-                first_line
-            };
+            // Slice by characters, not bytes. `str::len()` returns byte
+            // count, so `&first_line[..200]` panics when byte 200 lands
+            // mid-codepoint — trivially reproducible with a Chinese
+            // /health error body like "服务暂时不可用...".
+            let excerpt: String = first_line.chars().take(200).collect();
             println!("health   : {status} ({url})");
             if !excerpt.is_empty() {
                 println!("           {excerpt}");
@@ -560,6 +560,20 @@ fn crawl_service_stop_inner(paths: &RuntimePaths, remove_pid: bool) -> Result<()
         }
     };
     let pid: i32 = raw.trim().parse().context("parse crawl4ai.pid")?;
+    // Guard POSIX kill(2) special semantics before we reach libc::kill:
+    //   pid ==  0 signals the whole calling process group
+    //   pid == -1 signals every process the caller can signal
+    //   pid <  -1 signals process group -pid
+    // A corrupted pid file (disk-full truncation, concurrent editor
+    // save, operator meddling) would otherwise turn `crawl service stop`
+    // into a self-SIGTERM against the daemon and its siblings. `pid == 1`
+    // is reserved for init / launchd; also refuse it.
+    if pid <= 1 {
+        bail!("refusing to signal pid {pid} from pid file (invalid or reserved)");
+    }
+    if pid == std::process::id() as i32 {
+        bail!("refusing to signal self (pid file points at daviszeroclaw itself: {pid})");
+    }
     // Detect stale pid before signaling — avoids racing another process
     // that happens to have been assigned the same pid after ours exited.
     if !is_process_alive(pid) {
@@ -601,7 +615,15 @@ enum PidState {
 /// a zombie or owned by another user), `ESRCH` otherwise. We deliberately
 /// do not distinguish "no permission" (`EPERM`) from "exists" — either
 /// way the process is still around.
+///
+/// We short-circuit on `pid <= 1` because `kill(0, 0)` returns 0 (process
+/// group 0 exists and we can signal it), which would wrongly report the
+/// adapter as "alive" when the pid file is actually corrupt. `pid == 1`
+/// is reserved for init / launchd and never belongs to us.
 fn is_process_alive(pid: i32) -> bool {
+    if pid <= 1 {
+        return false;
+    }
     // SAFETY: kill(pid, 0) with signal 0 performs only the error check
     // and does not alter any process state.
     unsafe { libc::kill(pid, 0) == 0 }
