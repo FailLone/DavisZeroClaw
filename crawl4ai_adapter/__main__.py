@@ -29,12 +29,6 @@ def _ensure_runtime_env(args: argparse.Namespace) -> Path:
     return runtime_dir
 
 
-def _load_crawl4ai() -> tuple[Any, Any, Any, Any]:
-    from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
-
-    return AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
-
-
 async def _terminate_browser_process(browser_process: Any | None) -> None:
     if browser_process is None or browser_process.poll() is not None:
         return
@@ -185,68 +179,6 @@ async def _run_login(args: argparse.Namespace) -> int:
         return _error("crawl4ai profile login failed", details=str(exc))
 
 
-async def _run_crawl(args: argparse.Namespace) -> int:
-    _ensure_runtime_env(args)
-    try:
-        AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode = _load_crawl4ai()
-    except Exception as exc:  # pragma: no cover - import failure path
-        return _error(
-            "failed to import crawl4ai. Install it into the configured Python environment first",
-            details=str(exc),
-        )
-
-    try:
-        request = json.load(sys.stdin)
-    except Exception as exc:
-        return _error("failed to read crawl request json from stdin", details=str(exc))
-
-    profile_path = Path(request["profile_path"]).expanduser().resolve()
-    profile_path.mkdir(parents=True, exist_ok=True)
-
-    browser_config = BrowserConfig(
-        browser_type="chromium",
-        headless=bool(request.get("headless", True)),
-        use_managed_browser=True,
-        use_persistent_context=True,
-        user_data_dir=str(profile_path),
-        enable_stealth=bool(request.get("enable_stealth", True)),
-        viewport_width=1440,
-        viewport_height=960,
-        verbose=False,
-    )
-    crawler_config = CrawlerRunConfig(
-        cache_mode=CacheMode.BYPASS,
-        page_timeout=int(request.get("timeout_secs", 90) * 1000),
-        delay_before_return_html=1.0,
-        magic=bool(request.get("magic", True)),
-        simulate_user=bool(request.get("simulate_user", True)),
-        override_navigator=bool(request.get("override_navigator", True)),
-        remove_overlay_elements=bool(request.get("remove_overlay_elements", True)),
-        wait_for=request.get("wait_for") or None,
-        js_code=request.get("js_code") or None,
-    )
-
-    try:
-        async with AsyncWebCrawler(config=browser_config) as crawler:
-            result = await crawler.arun(url=request["url"], config=crawler_config)
-        _emit(
-            {
-                "success": bool(getattr(result, "success", False)),
-                "url": getattr(result, "url", request["url"]),
-                "redirected_url": getattr(result, "redirected_url", None),
-                "status_code": getattr(result, "status_code", None),
-                "html": getattr(result, "html", None),
-                "cleaned_html": getattr(result, "cleaned_html", None),
-                "markdown": getattr(result, "markdown", None),
-                "js_execution_result": getattr(result, "js_execution_result", None),
-                "error_message": getattr(result, "error_message", None),
-            }
-        )
-        return 0
-    except Exception as exc:
-        return _error("crawl4ai crawl execution failed", details=str(exc))
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m crawl4ai_adapter")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -257,9 +189,6 @@ def build_parser() -> argparse.ArgumentParser:
     login.add_argument("--profile-path", required=True)
     login.add_argument("--url", required=True)
 
-    crawl = subparsers.add_parser("crawl")
-    crawl.add_argument("--runtime-dir", required=True)
-
     return parser
 
 
@@ -268,8 +197,6 @@ async def _main_async() -> int:
     args = parser.parse_args()
     if args.command == "login":
         return await _run_login(args)
-    if args.command == "crawl":
-        return await _run_crawl(args)
     return _error(f"unsupported command: {args.command}")
 
 
