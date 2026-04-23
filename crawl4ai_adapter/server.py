@@ -1,9 +1,13 @@
 """Long-lived HTTP adapter for crawl4ai.
 
 Runs as a child of the Rust daemon (see src/crawl4ai_supervisor.rs).
-Exposes POST /crawl and GET /health. One AsyncWebCrawler instance is
-reused across requests; per-request BrowserConfig / CrawlerRunConfig
-are built fresh from the JSON body.
+Exposes POST /crawl and GET /health. A fresh AsyncWebCrawler is
+opened per request — crawl4ai's BrowserConfig + persistent_context
+tie a crawler to one Chromium user_data_dir, so reuse across
+requests would conflate profiles. The long-lived FastAPI process
+still wins by keeping Python + the crawl4ai module imports warm;
+only the Chromium launch is paid per call, and concurrent same-profile
+calls are serialized by the Rust-side mutex (src/express.rs).
 """
 
 from __future__ import annotations
@@ -124,6 +128,7 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
 
     profile_path = Path(req.profile_path).expanduser().resolve()
     profile_path.mkdir(parents=True, exist_ok=True)
+    logger.info("crawl url=%s profile=%s timeout_secs=%d", req.url, profile_path, req.timeout_secs)
 
     browser_config = BrowserConfig(
         browser_type="chromium",
@@ -156,11 +161,13 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
                 timeout=req.timeout_secs + 15,
             )
     except asyncio.TimeoutError:
+        logger.warning("crawl timeout url=%s budget_secs=%d", req.url, req.timeout_secs + 15)
         raise HTTPException(
             status_code=504,
             detail={"error": "crawl_timeout", "details": f"exceeded {req.timeout_secs + 15}s"},
         )
     except Exception as exc:
+        logger.exception("crawl failed url=%s", req.url)
         raise HTTPException(
             status_code=500,
             detail={"error": "crawl_failed", "details": str(exc)},
