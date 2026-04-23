@@ -269,8 +269,12 @@ impl Crawl4aiSupervisor {
             {
                 Ok(resp) => {
                     let status = resp.status();
-                    let body: Value = resp.json().await.unwrap_or(Value::Null);
+                    // Only parse the body for statuses we actually read from
+                    // (2xx → versions map, 503 past grace → verbatim error).
+                    // Transient 500s mid-boot are logged by status alone and
+                    // skip the JSON allocation.
                     if status.is_success() {
+                        let body: Value = resp.json().await.unwrap_or(Value::Null);
                         // Emit a single-line summary with the adapter's package versions.
                         // Unpinned-by-design (see Task 5 rationale): if a crawl breaks
                         // next week, `grep 'crawl4ai adapter ready' daemon.log` tells
@@ -290,6 +294,7 @@ impl Crawl4aiSupervisor {
                         // Bail verbatim with the body so operators see
                         // "crawl4ai_import_failed: ModuleNotFoundError..."
                         // in daemon.log instead of a generic 30s timeout.
+                        let body: Value = resp.json().await.unwrap_or(Value::Null);
                         return Err(Crawl4aiError::ServerUnavailable {
                             details: format!("adapter reports unhealthy: {}", compact_json(&body)),
                         });

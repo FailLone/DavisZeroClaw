@@ -122,6 +122,22 @@ async fn mock_crawl_503() -> axum::response::Response {
         .into_response()
 }
 
+/// Mock `/health` handler that always returns a structured 503 shaped like
+/// a broken-venv adapter (`crawl4ai_import_failed`). Kept alongside the
+/// other mock handlers at module scope for consistency; consumed by
+/// `supervisor_surfaces_adapter_unhealthy_body_quickly`.
+async fn mock_health_unhealthy() -> axum::response::Response {
+    (
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "status": "unhealthy",
+            "reason": "crawl4ai_import_failed",
+            "details": "ModuleNotFoundError: No module named 'crawl4ai'",
+        })),
+    )
+        .into_response()
+}
+
 /// End-to-end happy path: mock adapter on an ephemeral port, supervisor
 /// `for_test` pointed at it, `express_auth_status` fans out to both `ali`
 /// and `jd`. Mock returns an `ali` payload; `jd` gets the same mock
@@ -234,19 +250,7 @@ async fn crawl4ai_503_maps_to_server_unavailable() {
 /// the wrong error shape.
 #[tokio::test]
 async fn supervisor_surfaces_adapter_unhealthy_body_quickly() {
-    async fn mock_unhealthy() -> axum::response::Response {
-        (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "status": "unhealthy",
-                "reason": "crawl4ai_import_failed",
-                "details": "ModuleNotFoundError: No module named 'crawl4ai'",
-            })),
-        )
-            .into_response()
-    }
-
-    let app = Router::new().route("/health", get(mock_unhealthy));
+    let app = Router::new().route("/health", get(mock_health_unhealthy));
     let base_url = spawn_json_router(app).await;
 
     let tmp = tempfile::tempdir().unwrap();
