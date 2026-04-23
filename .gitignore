@@ -7,3 +7,5 @@ browser-worker/node_modules/
 config/davis/local.toml
 shortcuts/*.shortcut
 skills/*
+__pycache__/
+*.pyc
