@@ -95,12 +95,8 @@ fn default_max_fallbacks() -> usize {
 pub struct Crawl4aiConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
-    pub transport: Crawl4aiTransport,
     #[serde(default = "default_crawl4ai_base_url")]
     pub base_url: String,
-    #[serde(default)]
-    pub python: String,
     #[serde(default = "default_crawl4ai_timeout_secs")]
     pub timeout_secs: u64,
     #[serde(default = "default_true")]
@@ -115,14 +111,6 @@ pub struct Crawl4aiConfig {
     pub remove_overlay_elements: bool,
     #[serde(default = "default_true")]
     pub enable_stealth: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum Crawl4aiTransport {
-    Server,
-    #[default]
-    Python,
 }
 
 /// Flat passthrough for ZeroClaw's [[mcp.servers]] array. Each entry is
@@ -262,9 +250,7 @@ impl Default for Crawl4aiConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            transport: Crawl4aiTransport::default(),
             base_url: default_crawl4ai_base_url(),
-            python: String::new(),
             timeout_secs: default_crawl4ai_timeout_secs(),
             headless: default_true(),
             magic: default_true(),
@@ -401,7 +387,6 @@ fn validate_local_config(mut config: LocalConfig) -> Result<LocalConfig> {
         .trim()
         .trim_end_matches('/')
         .to_string();
-    config.crawl4ai.python = config.crawl4ai.python.trim().to_string();
     if config.crawl4ai.base_url.is_empty() {
         config.crawl4ai.base_url = default_crawl4ai_base_url();
     }

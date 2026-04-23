@@ -98,13 +98,12 @@ pub(super) fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
 
 pub(super) fn check_crawl4ai(paths: &RuntimePaths) -> Result<()> {
     let config = check_local_config(paths)?;
-    let python = resolve_crawl4ai_python(paths, &config.crawl4ai)?;
+    let python = resolve_crawl4ai_python(paths)?;
     let adapter_dir = paths.crawl4ai_adapter_dir();
     let crawl4ai_base_dir = paths.runtime_dir.display().to_string();
 
     println!("Crawl4AI config:");
     println!("- enabled: {}", config.crawl4ai.enabled);
-    println!("- transport: {:?}", config.crawl4ai.transport);
     println!("- python: {}", python.display());
     println!("- adapter_dir: {}", adapter_dir.display());
     println!(
@@ -307,7 +306,7 @@ pub(super) fn parse_crawl4ai_adapter_json(stdout: &[u8]) -> Result<Value> {
 }
 
 pub(super) async fn crawl_profile_login(paths: &RuntimePaths, profile: CrawlProfile) -> Result<()> {
-    let local_config = check_local_config(paths)?;
+    let _ = check_local_config(paths)?;
     let adapter_dir = paths.crawl4ai_adapter_dir();
     if !adapter_dir.join("__main__.py").is_file() {
         bail!("crawl4ai adapter was not found: {}", adapter_dir.display());
@@ -324,7 +323,7 @@ pub(super) async fn crawl_profile_login(paths: &RuntimePaths, profile: CrawlProf
             profile_dir.display()
         )
     })?;
-    let python = resolve_crawl4ai_python(paths, &local_config.crawl4ai)?;
+    let python = resolve_crawl4ai_python(paths)?;
     println!("Opening Crawl4AI-compatible browser profile.");
     println!("- profile id: {profile_name}");
     println!("- profile dir: {}", profile_dir.display());
@@ -427,22 +426,7 @@ fn probe_python_version(path: &Path) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-pub(super) fn resolve_crawl4ai_python(
-    paths: &RuntimePaths,
-    config: &crate::Crawl4aiConfig,
-) -> Result<PathBuf> {
-    if !config.python.is_empty() {
-        let configured = PathBuf::from(&config.python);
-        if configured.components().count() > 1 || configured.is_absolute() {
-            return Ok(configured);
-        }
-        return require_command(&config.python).with_context(|| {
-            format!(
-                "configured crawl4ai.python was not found: {}",
-                config.python
-            )
-        });
-    }
+pub(super) fn resolve_crawl4ai_python(paths: &RuntimePaths) -> Result<PathBuf> {
     let runtime_python = paths.crawl4ai_python_path();
     if runtime_python.is_file() {
         return Ok(runtime_python);

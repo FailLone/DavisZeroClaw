@@ -90,7 +90,6 @@ max_fallbacks = 1
 pub(super) fn sample_local_config_with_crawl4ai_base_url(base_url: &str) -> LocalConfig {
     let mut config = sample_local_config();
     config.crawl4ai.enabled = true;
-    config.crawl4ai.transport = Crawl4aiTransport::Server;
     config.crawl4ai.base_url = base_url.trim_end_matches('/').to_string();
     config
 }

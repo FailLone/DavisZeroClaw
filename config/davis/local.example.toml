@@ -62,11 +62,8 @@ max_fallbacks = 2
 
 [crawl4ai]
 enabled = true
-transport = "python"
-# Optional override. Empty means use .runtime/davis/crawl4ai-venv/bin/python when present,
-# otherwise fall back to python3 from PATH.
-python = ""
-# Optional when transport = "server".
+# The Rust daemon supervises a long-lived adapter on this address.
+# Change only if the default port (11235) conflicts with another service.
 base_url = "http://127.0.0.1:11235"
 timeout_secs = 90
 headless = true

@@ -52,7 +52,7 @@ impl Crawl4aiSupervisor {
         if !config.enabled {
             return Err(Crawl4aiError::Disabled);
         }
-        let python = resolve_python_binary(&paths, &config)?;
+        let python = resolve_python_binary(&paths)?;
         let port = parse_port(&config.base_url)?;
         let http = Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs.saturating_add(10)))
@@ -240,13 +240,7 @@ impl Crawl4aiSupervisor {
     }
 }
 
-fn resolve_python_binary(
-    paths: &RuntimePaths,
-    config: &Crawl4aiConfig,
-) -> Result<PathBuf, Crawl4aiError> {
-    if !config.python.is_empty() {
-        return Ok(PathBuf::from(&config.python));
-    }
+fn resolve_python_binary(paths: &RuntimePaths) -> Result<PathBuf, Crawl4aiError> {
     let candidate = paths.crawl4ai_python_path();
     if candidate.is_file() {
         return Ok(candidate);
