@@ -156,14 +156,6 @@ impl RuntimePaths {
         self.crawl4ai_venv_dir().join("bin").join("python")
     }
 
-    pub fn crawl4ai_setup_path(&self) -> PathBuf {
-        self.crawl4ai_venv_dir().join("bin").join("crawl4ai-setup")
-    }
-
-    pub fn crawl4ai_doctor_path(&self) -> PathBuf {
-        self.crawl4ai_venv_dir().join("bin").join("crawl4ai-doctor")
-    }
-
     pub fn mempalace_palace_dir(&self) -> PathBuf {
         self.runtime_dir.join("mempalace")
     }

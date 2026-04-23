@@ -44,7 +44,7 @@ pub(super) fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
         "crawl4ai pip upgrade",
     )?;
 
-    println!("Installing Crawl4AI.");
+    println!("Installing Crawl4AI and HTTP server deps.");
     run_status(
         Command::new(&python)
             .arg("-m")
@@ -52,10 +52,13 @@ pub(super) fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
             .arg("install")
             .arg("--upgrade")
             .arg("crawl4ai")
+            .arg("fastapi")
+            .arg("uvicorn[standard]")
+            .arg("pydantic")
             .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
             .env("PATH", tool_path_env())
             .current_dir(&paths.repo_root),
-        "pip install crawl4ai",
+        "pip install --upgrade crawl4ai fastapi uvicorn pydantic",
     )?;
 
     println!("Installing Playwright Chromium.");
@@ -84,7 +87,7 @@ pub(super) fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
         "python -m patchright install chromium",
     )?;
 
-    println!("Crawl4AI installed.");
+    println!("Crawl4AI + HTTP server deps installed.");
     println!("Python: {}", python.display());
     println!("Adapter: {}", paths.crawl4ai_adapter_dir().display());
     println!("Next: daviszeroclaw crawl check");
