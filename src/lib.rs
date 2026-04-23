@@ -6,6 +6,7 @@ pub mod cli;
 mod constants;
 mod control;
 mod crawl4ai;
+pub mod crawl4ai_error;
 mod crawl_sources;
 mod entity;
 mod express;
@@ -57,6 +58,7 @@ pub use control::{
     save_failure_state,
 };
 pub use crawl4ai::{crawl4ai_crawl, Crawl4aiPageRequest, Crawl4aiPageResult};
+pub use crawl4ai_error::Crawl4aiError;
 pub use crawl_sources::{
     builtin_crawl_sources, find_builtin_crawl_source, run_builtin_crawl_source,
     CrawlSourceDefinition,
