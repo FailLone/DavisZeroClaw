@@ -21,6 +21,7 @@ pub fn init_article_memory(paths: &RuntimePaths) -> Result<ArticleMemoryStatusRe
         write_index(paths, &ArticleMemoryIndex::new())?;
     }
     migrate_urls_to_normalized(paths)?;
+    merge_duplicate_urls(paths)?;
     check_article_memory(paths)
 }
 
@@ -279,6 +280,98 @@ pub fn migrate_urls_to_normalized(paths: &RuntimePaths) -> Result<usize> {
         tracing::info!(count = changed, "migrated article URLs to normalized form");
     }
     Ok(changed)
+}
+
+/// Merge duplicate article records sharing the same `url`. Winner selection:
+/// (1) higher `value_score`, (2) later `captured_at`, (3) first-seen. Loser
+/// record is removed from the index and its on-disk content/summary/raw/
+/// normalized/translation/embedding files are deleted. No backup is kept —
+/// one-way cleanup per Q11 D+A policy.
+pub fn merge_duplicate_urls(paths: &RuntimePaths) -> Result<usize> {
+    use std::collections::HashMap;
+
+    let mut index = internals::load_index(paths)?;
+    if index.articles.is_empty() {
+        return Ok(0);
+    }
+
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, article) in index.articles.iter().enumerate() {
+        if let Some(url) = &article.url {
+            groups.entry(url.clone()).or_default().push(i);
+        }
+    }
+
+    let mut losers: Vec<usize> = Vec::new();
+    for indices in groups.values() {
+        if indices.len() < 2 {
+            continue;
+        }
+        let mut best = indices[0];
+        for &candidate in &indices[1..] {
+            let best_rec = &index.articles[best];
+            let cand_rec = &index.articles[candidate];
+            let best_score = best_rec.value_score.unwrap_or(0.0);
+            let cand_score = cand_rec.value_score.unwrap_or(0.0);
+            let pick_candidate = if cand_score > best_score {
+                true
+            } else if cand_score < best_score {
+                false
+            } else {
+                cand_rec.captured_at > best_rec.captured_at
+            };
+            if pick_candidate {
+                best = candidate;
+            }
+        }
+        for &i in indices {
+            if i != best {
+                losers.push(i);
+            }
+        }
+    }
+
+    if losers.is_empty() {
+        return Ok(0);
+    }
+
+    let articles_dir = paths.runtime_dir.join("article-memory").join("articles");
+    let embeddings_dir = paths.runtime_dir.join("article-memory").join("embeddings");
+
+    let loser_ids: Vec<String> = losers
+        .iter()
+        .map(|&i| index.articles[i].id.clone())
+        .collect();
+
+    let mut sorted_losers = losers;
+    sorted_losers.sort_unstable_by(|a, b| b.cmp(a));
+    for i in sorted_losers {
+        let dropped = index.articles.remove(i);
+        tracing::info!(
+            dropped_id = %dropped.id,
+            url = %dropped.url.unwrap_or_default(),
+            "merging duplicate article: dropping loser"
+        );
+    }
+
+    index.updated_at = isoformat(now_utc());
+    internals::write_index(paths, &index)?;
+
+    for id in &loser_ids {
+        for ext in [
+            "md",
+            "raw.txt",
+            "normalized.md",
+            "summary.md",
+            "translation.md",
+        ] {
+            let p = articles_dir.join(format!("{id}.{ext}"));
+            let _ = fs::remove_file(&p);
+        }
+        let _ = fs::remove_file(embeddings_dir.join(format!("{id}.bin")));
+    }
+
+    Ok(loser_ids.len())
 }
 
 /// Linear-scan lookup by canonical URL. Returns the first record whose
@@ -1097,5 +1190,161 @@ mod migrate_tests {
         seed(&paths, vec![("aaa", None)]);
         let changed = migrate_urls_to_normalized(&paths).unwrap();
         assert_eq!(changed, 0);
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    use crate::article_memory::types::{ArticleMemoryRecord, ArticleMemoryRecordStatus};
+    use tempfile::TempDir;
+
+    fn mk_paths(tmp: &TempDir) -> RuntimePaths {
+        RuntimePaths {
+            repo_root: tmp.path().to_path_buf(),
+            runtime_dir: tmp.path().join("runtime"),
+        }
+    }
+
+    fn mk_record(id: &str, url: &str, score: f32, captured_at: &str) -> ArticleMemoryRecord {
+        ArticleMemoryRecord {
+            id: id.into(),
+            title: format!("T {id}"),
+            url: Some(url.into()),
+            source: "test".into(),
+            language: None,
+            tags: vec![],
+            status: ArticleMemoryRecordStatus::Saved,
+            value_score: Some(score),
+            captured_at: captured_at.into(),
+            updated_at: captured_at.into(),
+            content_path: format!("articles/{id}.md"),
+            raw_path: Some(format!("articles/{id}.raw.txt")),
+            normalized_path: Some(format!("articles/{id}.normalized.md")),
+            summary_path: None,
+            translation_path: None,
+            notes: None,
+            clean_status: None,
+            clean_profile: None,
+        }
+    }
+
+    fn seed(paths: &RuntimePaths, records: Vec<ArticleMemoryRecord>) {
+        // Skip init_article_memory; it runs migration+merge and would destroy
+        // the duplicates these tests want to observe. Set up dirs manually.
+        ensure_article_memory_dirs(paths).unwrap();
+        internals::write_index(paths, &ArticleMemoryIndex::new()).unwrap();
+        let mut index = internals::load_index(paths).unwrap();
+        index.articles = records;
+        internals::write_index(paths, &index).unwrap();
+        let articles_dir = paths.runtime_dir.join("article-memory").join("articles");
+        std::fs::create_dir_all(&articles_dir).unwrap();
+        for record in &index.articles {
+            std::fs::write(articles_dir.join(format!("{}.md", record.id)), "c").unwrap();
+            std::fs::write(articles_dir.join(format!("{}.raw.txt", record.id)), "r").unwrap();
+            std::fs::write(
+                articles_dir.join(format!("{}.normalized.md", record.id)),
+                "n",
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn merge_keeps_higher_value_score_and_deletes_loser_files() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed(
+            &paths,
+            vec![
+                mk_record(
+                    "lower",
+                    "https://example.com/p",
+                    0.7,
+                    "2026-04-20T00:00:00Z",
+                ),
+                mk_record(
+                    "higher",
+                    "https://example.com/p",
+                    0.9,
+                    "2026-04-10T00:00:00Z",
+                ),
+            ],
+        );
+
+        let merged = merge_duplicate_urls(&paths).unwrap();
+        assert_eq!(merged, 1);
+
+        let index = internals::load_index(&paths).unwrap();
+        assert_eq!(index.articles.len(), 1);
+        assert_eq!(index.articles[0].id, "higher");
+
+        let articles_dir = paths.runtime_dir.join("article-memory").join("articles");
+        assert!(!articles_dir.join("lower.md").exists());
+        assert!(!articles_dir.join("lower.raw.txt").exists());
+        assert!(!articles_dir.join("lower.normalized.md").exists());
+        assert!(articles_dir.join("higher.md").exists());
+    }
+
+    #[test]
+    fn merge_tiebreaks_by_captured_at_when_scores_equal() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed(
+            &paths,
+            vec![
+                mk_record(
+                    "older",
+                    "https://example.com/p",
+                    0.5,
+                    "2026-04-01T00:00:00Z",
+                ),
+                mk_record(
+                    "newer",
+                    "https://example.com/p",
+                    0.5,
+                    "2026-04-20T00:00:00Z",
+                ),
+            ],
+        );
+
+        merge_duplicate_urls(&paths).unwrap();
+
+        let index = internals::load_index(&paths).unwrap();
+        assert_eq!(index.articles.len(), 1);
+        assert_eq!(index.articles[0].id, "newer");
+    }
+
+    #[test]
+    fn merge_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed(
+            &paths,
+            vec![mk_record(
+                "a",
+                "https://example.com/p",
+                0.5,
+                "2026-04-01T00:00:00Z",
+            )],
+        );
+        merge_duplicate_urls(&paths).unwrap();
+        let second = merge_duplicate_urls(&paths).unwrap();
+        assert_eq!(second, 0);
+    }
+
+    #[test]
+    fn merge_leaves_records_without_url_untouched() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        let mut r1 = mk_record("a", "https://example.com/p", 0.5, "2026-04-01T00:00:00Z");
+        r1.url = None;
+        let mut r2 = mk_record("b", "https://example.com/p", 0.5, "2026-04-01T00:00:00Z");
+        r2.url = None;
+        seed(&paths, vec![r1, r2]);
+        let merged = merge_duplicate_urls(&paths).unwrap();
+        assert_eq!(merged, 0);
+        let index = internals::load_index(&paths).unwrap();
+        assert_eq!(index.articles.len(), 2);
     }
 }
