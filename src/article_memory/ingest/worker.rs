@@ -146,8 +146,8 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
         .title_override
         .clone()
         .or_else(|| {
-            page.raw
-                .get("metadata")
+            page.metadata
+                .as_ref()
                 .and_then(|m| m.get("title"))
                 .and_then(|v| v.as_str())
                 .map(String::from)

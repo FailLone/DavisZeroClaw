@@ -52,6 +52,7 @@ class CrawlResponse(BaseModel):
     js_execution_result: Optional[Any] = None
     error_message: Optional[str] = None
     markdown: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 def _collect_versions() -> dict[str, str]:
@@ -201,6 +202,10 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
         if response_markdown is None:
             response_markdown = getattr(result, "markdown", None)
 
+    response_metadata = getattr(result, "metadata", None)
+    if not isinstance(response_metadata, dict):
+        response_metadata = None
+
     return CrawlResponse(
         success=bool(getattr(result, "success", False)),
         url=getattr(result, "url", req.url),
@@ -211,4 +216,5 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
         js_execution_result=getattr(result, "js_execution_result", None),
         error_message=getattr(result, "error_message", None),
         markdown=response_markdown,
+        metadata=response_metadata,
     )

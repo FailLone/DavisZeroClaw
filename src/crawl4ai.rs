@@ -20,6 +20,7 @@ pub struct Crawl4aiPageResult {
     pub html: Option<String>,
     pub cleaned_html: Option<String>,
     pub markdown: Option<String>,
+    pub metadata: Option<Value>,
     pub error_message: Option<String>,
     pub status_code: Option<u16>,
     pub raw: Value,
@@ -208,6 +209,7 @@ fn parse_result_value(raw: Value) -> Crawl4aiPageResult {
             .get("markdown")
             .and_then(Value::as_str)
             .map(str::to_string),
+        metadata: raw.get("metadata").cloned(),
         error_message: raw
             .get("error_message")
             .or_else(|| raw.get("error"))

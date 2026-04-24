@@ -412,8 +412,8 @@ async fn ingest_different_hosts_parallelize() {
         let _ = wait_for_terminal(&queue, id, 15).await;
     }
     let max = mock.max_in_flight.load(Ordering::SeqCst);
-    assert!(
-        max >= 2,
-        "cross-host ingests must parallelize; observed max={max}"
+    assert_eq!(
+        max, 3,
+        "expected all 3 cross-host workers to run concurrently; observed max={max}"
     );
 }
