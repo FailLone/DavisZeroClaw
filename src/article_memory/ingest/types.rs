@@ -99,6 +99,8 @@ fn default_attempts() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IngestRequest {
     pub url: String,
+    #[serde(default)]
+    pub force: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default)]
@@ -125,6 +127,11 @@ pub enum IngestSubmitError {
         existing_article_id: Option<String>,
         finished_at: String,
     },
+    ArticleExists {
+        existing_article_id: String,
+        title: String,
+        url: String,
+    },
     IngestDisabled,
     PersistenceError(String),
     PersistenceDegraded {
@@ -146,6 +153,14 @@ impl std::fmt::Display for IngestSubmitError {
                 f,
                 "article already saved within dedup window at {finished_at} (article_id={})",
                 existing_article_id.as_deref().unwrap_or("-")
+            ),
+            Self::ArticleExists {
+                existing_article_id,
+                url,
+                ..
+            } => write!(
+                f,
+                "article already saved for {url} (article_id={existing_article_id})"
             ),
             Self::IngestDisabled => write!(f, "article memory ingest is disabled"),
             Self::PersistenceError(d) => write!(f, "failed to persist job: {d}"),
@@ -225,5 +240,31 @@ mod tests {
         assert!(req.tags.is_empty());
         assert!(req.title.is_none());
         assert!(req.source_hint.is_none());
+    }
+
+    #[test]
+    fn ingest_request_defaults_force_to_false() {
+        let req: IngestRequest =
+            serde_json::from_str(r#"{"url": "https://example.com/"}"#).unwrap();
+        assert!(!req.force);
+    }
+
+    #[test]
+    fn ingest_request_accepts_force_true() {
+        let req: IngestRequest =
+            serde_json::from_str(r#"{"url": "https://example.com/", "force": true}"#).unwrap();
+        assert!(req.force);
+    }
+
+    #[test]
+    fn article_exists_error_displays_with_article_id_and_url() {
+        let e = IngestSubmitError::ArticleExists {
+            existing_article_id: "aaa".into(),
+            title: "T".into(),
+            url: "https://example.com/".into(),
+        };
+        let s = format!("{e}");
+        assert!(s.contains("aaa"));
+        assert!(s.contains("https://example.com/"));
     }
 }

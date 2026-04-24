@@ -217,6 +217,7 @@ async fn ingest_happy_path_end_to_end() {
     let resp = queue
         .submit(IngestRequest {
             url: "https://zhihu.com/p/1".into(),
+            force: false,
             title: None,
             tags: vec!["test".into()],
             source_hint: Some("test".into()),
@@ -261,6 +262,7 @@ async fn ingest_empty_markdown_rejected() {
     let resp = queue
         .submit(IngestRequest {
             url: "https://zhihu.com/p/short".into(),
+            force: false,
             title: None,
             tags: vec![],
             source_hint: None,
@@ -299,6 +301,7 @@ async fn ingest_crawl_server_error_surfaces_issue_type() {
     let resp = queue
         .submit(IngestRequest {
             url: "https://zhihu.com/p/503".into(),
+            force: false,
             title: None,
             tags: vec![],
             source_hint: None,
@@ -340,6 +343,7 @@ async fn ingest_same_host_serializes() {
         let resp = queue
             .submit(IngestRequest {
                 url: format!("https://zhihu.com/p/{i}"),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -399,6 +403,7 @@ async fn ingest_different_hosts_parallelize() {
             queue
                 .submit(IngestRequest {
                     url: u.into(),
+                    force: false,
                     title: None,
                     tags: vec![],
                     source_hint: None,

@@ -517,6 +517,7 @@ mod tests {
         let resp = queue
             .submit(IngestRequest {
                 url: "https://zhihu.com/p/1".into(),
+                force: false,
                 title: None,
                 tags: vec!["tag1".into()],
                 source_hint: Some("cli".into()),
@@ -542,6 +543,7 @@ mod tests {
         let err = queue
             .submit(IngestRequest {
                 url: "not a url".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -561,6 +563,7 @@ mod tests {
         let err = queue
             .submit(IngestRequest {
                 url: "http://127.0.0.1/admin".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -577,6 +580,7 @@ mod tests {
         let r1 = queue
             .submit(IngestRequest {
                 url: "https://zhihu.com/p/1".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -586,6 +590,7 @@ mod tests {
         let r2 = queue
             .submit(IngestRequest {
                 url: "https://zhihu.com/p/1#anchor".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -605,6 +610,7 @@ mod tests {
         let err = queue
             .submit(IngestRequest {
                 url: "https://zhihu.com/p/1".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -629,6 +635,7 @@ mod tests {
         queue
             .submit(IngestRequest {
                 url: "https://zhihu.com/p/1".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -653,6 +660,7 @@ mod tests {
             submit_handles.push(tokio::spawn(async move {
                 q.submit(IngestRequest {
                     url: format!("https://zhihu.com/p/{i}"),
+                    force: false,
                     title: None,
                     tags: vec![],
                     source_hint: None,
@@ -739,6 +747,7 @@ mod tests {
         let resp = queue
             .submit(IngestRequest {
                 url: "https://zhihu.com/p/1".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -768,6 +777,7 @@ mod tests {
         let err = queue
             .submit(IngestRequest {
                 url: "https://zhihu.com/p/1".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -803,6 +813,7 @@ mod tests {
         let resp = queue
             .submit(IngestRequest {
                 url: "https://zhihu.com/p/1".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -839,6 +850,7 @@ mod tests {
         let resp2 = queue
             .submit(IngestRequest {
                 url: "https://zhihu.com/p/1".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -858,6 +870,7 @@ mod tests {
         let _ = queue
             .submit(IngestRequest {
                 url: "https://zhihu.com/p/1".into(),
+                force: false,
                 title: None,
                 tags: vec![],
                 source_hint: None,
@@ -1054,6 +1067,7 @@ mod tests {
             let err = queue
                 .submit(IngestRequest {
                     url: "https://zhihu.com/p/1".into(),
+                    force: false,
                     title: None,
                     tags: vec![],
                     source_hint: None,

@@ -966,6 +966,21 @@ async fn ingest_submit_handler(
                     "action": "check disk space, free space, then restart daemon to retry"
                 })),
             ),
+            IngestSubmitError::ArticleExists {
+                existing_article_id,
+                url,
+                ..
+            } => {
+                tracing::error!(
+                    existing_article_id = %existing_article_id,
+                    url = %url,
+                    "ArticleExists hit placeholder arm — Task 1d landed out of order"
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "not_yet_mapped", "detail": "pending task 1d"})),
+                )
+            }
         },
     }
 }
