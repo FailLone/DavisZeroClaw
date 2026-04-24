@@ -115,7 +115,10 @@ async fn get_ingest_by_id_round_trip() {
         .await
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    let job_id = body["job_id"].as_str().expect("job_id in response").to_string();
+    let job_id = body["job_id"]
+        .as_str()
+        .expect("job_id in response")
+        .to_string();
 
     let get = app
         .oneshot(

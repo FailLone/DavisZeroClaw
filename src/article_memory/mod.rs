@@ -175,6 +175,26 @@ pub fn add_article_memory(
     Ok(record)
 }
 
+/// Linear-scan lookup by canonical URL. Returns the first record whose
+/// `url` field equals `normalized_url`.
+///
+/// Callers normalize via `ingest::host_profile::normalize_url` before
+/// calling — storing a mix of raw and normalized URLs in the index would
+/// cause dedup to miss (same logical URL, different string bytes).
+// Consumers land in Task 1c (submit Rule 0) and Task 1f (worker force path).
+// Remove this allow once either of those commits.
+#[allow(dead_code)]
+pub fn find_article_by_normalized_url(
+    paths: &RuntimePaths,
+    normalized_url: &str,
+) -> Result<Option<ArticleMemoryRecord>> {
+    let index = internals::load_index(paths)?;
+    Ok(index
+        .articles
+        .into_iter()
+        .find(|r| r.url.as_deref() == Some(normalized_url)))
+}
+
 pub fn list_article_memory(paths: &RuntimePaths, limit: usize) -> ArticleMemoryListResponse {
     match load_index(paths) {
         Ok(mut index) => {
@@ -653,5 +673,112 @@ mod tests {
             repo_root: root.clone(),
             runtime_dir: root.join("runtime"),
         }
+    }
+}
+
+#[cfg(test)]
+mod find_by_url_tests {
+    use super::*;
+    use crate::article_memory::types::{ArticleMemoryRecord, ArticleMemoryRecordStatus};
+    use tempfile::TempDir;
+
+    fn mk_paths(tmp: &TempDir) -> RuntimePaths {
+        RuntimePaths {
+            repo_root: tmp.path().to_path_buf(),
+            runtime_dir: tmp.path().join("runtime"),
+        }
+    }
+
+    fn mk_record(id: &str, url: Option<&str>) -> ArticleMemoryRecord {
+        ArticleMemoryRecord {
+            id: id.into(),
+            title: format!("T {id}"),
+            url: url.map(String::from),
+            source: "test".into(),
+            language: None,
+            tags: vec![],
+            status: ArticleMemoryRecordStatus::Saved,
+            value_score: Some(0.9),
+            captured_at: "2026-04-24T00:00:00Z".into(),
+            updated_at: "2026-04-24T00:00:00Z".into(),
+            content_path: format!("articles/{id}.md"),
+            raw_path: None,
+            normalized_path: None,
+            summary_path: None,
+            translation_path: None,
+            notes: None,
+            clean_status: None,
+            clean_profile: None,
+        }
+    }
+
+    fn seed(paths: &RuntimePaths, records: Vec<ArticleMemoryRecord>) {
+        init_article_memory(paths).unwrap();
+        let mut index = crate::article_memory::internals::load_index(paths).unwrap();
+        index.articles = records;
+        crate::article_memory::internals::write_index(paths, &index).unwrap();
+    }
+
+    #[test]
+    fn returns_none_when_index_empty() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        init_article_memory(&paths).unwrap();
+        let hit = find_article_by_normalized_url(&paths, "https://example.com/").unwrap();
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn returns_record_when_normalized_url_matches() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed(&paths, vec![mk_record("aaa", Some("https://example.com/"))]);
+        let hit = find_article_by_normalized_url(&paths, "https://example.com/")
+            .unwrap()
+            .expect("record should be found");
+        assert_eq!(hit.id, "aaa");
+    }
+
+    #[test]
+    fn returns_none_when_only_non_matching_urls() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed(&paths, vec![mk_record("aaa", Some("https://other.com/"))]);
+        let hit = find_article_by_normalized_url(&paths, "https://example.com/").unwrap();
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn skips_records_with_missing_url() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed(
+            &paths,
+            vec![
+                mk_record("aaa", None),
+                mk_record("bbb", Some("https://example.com/")),
+            ],
+        );
+        let hit = find_article_by_normalized_url(&paths, "https://example.com/")
+            .unwrap()
+            .expect("bbb should be found");
+        assert_eq!(hit.id, "bbb");
+    }
+
+    #[test]
+    fn returns_first_hit_when_multiple_match() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed(
+            &paths,
+            vec![
+                mk_record("aaa", Some("https://example.com/")),
+                mk_record("bbb", Some("https://example.com/")),
+            ],
+        );
+        let hit = find_article_by_normalized_url(&paths, "https://example.com/")
+            .unwrap()
+            .expect("should find first");
+        assert_eq!(hit.id, "aaa");
     }
 }
