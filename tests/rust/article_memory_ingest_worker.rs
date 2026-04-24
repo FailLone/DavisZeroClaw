@@ -524,6 +524,68 @@ async fn worker_force_path_reuses_existing_article_id() {
 }
 
 #[tokio::test]
+async fn worker_notify_hook_fires_on_early_return_fetch_failure() {
+    // Regression for the Phase 2.5 gap: before wrapper refactor, a fetch
+    // failure early-returned BEFORE the trailing notify block, so iMessage
+    // users never got a failure reply. With the wrapper, maybe_notify_terminal
+    // runs regardless of which stage produced the terminal state.
+    //
+    // Reply handle is NOT in allowed_contacts — notify_user will WARN-log
+    // and return Ok, so the hook does not panic and the job reaches Failed
+    // normally.
+    let (_tmp, paths) = test_paths();
+    let mock = MockState::default();
+    // Force crawl4ai to return a non-success response; the supervisor will
+    // surface this as an error and the worker early-returns Failed.
+    *mock.status_override.lock().unwrap() = Some(500);
+    *mock.fail_body.lock().unwrap() = Some(json!({"error": "mock fail"}));
+    let supervisor = spawn_mock_supervisor(&paths, mock.clone()).await;
+    let ingest_cfg = default_ingest_cfg();
+    let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    IngestWorkerPool::spawn(
+        queue.clone(),
+        IngestWorkerDeps {
+            paths: paths.clone(),
+            crawl4ai_config: test_crawl4ai_config(),
+            supervisor,
+            profile_locks: Arc::new(Mutex::new(HashMap::new())),
+            article_memory_config: default_article_memory_cfg(),
+            providers: Arc::new(vec![]),
+            ingest_config: ingest_cfg,
+            imessage_config: Arc::new(crate::app_config::ImessageConfig {
+                // Empty allowlist → notify_user warn-logs and returns Ok
+                // without actually trying osascript. Proves the hook ran.
+                allowed_contacts: vec![],
+            }),
+        },
+        1,
+    );
+
+    let resp = queue
+        .submit(IngestRequest {
+            url: "https://example.com/p/fail".into(),
+            force: false,
+            title: None,
+            tags: vec![],
+            source_hint: None,
+            reply_handle: Some("+8613800000000".into()),
+        })
+        .await
+        .unwrap();
+
+    let job = wait_for_terminal(&queue, &resp.job_id, 10).await;
+    assert_eq!(job.status, IngestJobStatus::Failed);
+    assert!(
+        job.error
+            .as_ref()
+            .map(|e| e.stage.as_str() == "fetching")
+            .unwrap_or(false),
+        "expected fetching-stage failure, got {:?}",
+        job.error
+    );
+}
+
+#[tokio::test]
 async fn worker_skips_notify_when_reply_handle_missing() {
     // CLI/cron path: no reply_handle → notify hook is a no-op and the
     // worker still reaches Saved normally.

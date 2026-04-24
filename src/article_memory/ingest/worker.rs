@@ -70,6 +70,55 @@ async fn worker_loop(worker_id: usize, queue: Arc<IngestQueue>, deps: IngestWork
     fields(job_id = %job.id, url = %job.url, profile = %job.profile_name),
 )]
 async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJob) {
+    execute_job_core(queue, deps, &job).await;
+    // Wrapper guarantees terminal notification runs regardless of which
+    // stage produced the terminal state. Early-return Failed branches in
+    // `execute_job_core` (fetch / markdown / cleaning / judging errors) are
+    // now covered alongside the main Saved/Rejected path.
+    maybe_notify_terminal(queue, deps, &job).await;
+}
+
+async fn maybe_notify_terminal(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &IngestJob) {
+    let Some(handle) = job.reply_handle.as_deref() else {
+        return;
+    };
+    let Some(finished_job) = queue.get(&job.id).await else {
+        return;
+    };
+    if !finished_job.status.is_terminal() {
+        // Defensive: caller should only reach here after execute_job_core
+        // has driven the job to a terminal state. If it hasn't, skip notify
+        // so we don't message a Pending job.
+        return;
+    }
+    let resolved_title = finished_job.article_id.as_ref().and_then(|id| {
+        super::super::internals::load_index(&deps.paths)
+            .ok()
+            .and_then(|idx| {
+                idx.articles
+                    .into_iter()
+                    .find(|r| &r.id == id)
+                    .map(|r| r.title)
+            })
+    });
+    let text = super::reply_text::build_reply_text(&finished_job, resolved_title.as_deref());
+    if text.is_empty() {
+        return;
+    }
+    if let Err(err) =
+        crate::imessage_send::notify_user(handle, &text, &deps.imessage_config.allowed_contacts)
+            .await
+    {
+        tracing::warn!(
+            job_id = %finished_job.id,
+            handle = %handle,
+            error = %err,
+            "imessage notification failed; job state unchanged"
+        );
+    }
+}
+
+async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &IngestJob) {
     let profile_lock = acquire_profile_lock(&deps.profile_locks, &job.profile_name).await;
     let _guard = profile_lock.lock().await;
 
@@ -322,38 +371,4 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
         }
     };
     queue.finish(&job.id, outcome).await;
-
-    // Terminal notification: only if job carries a reply_handle. Article is
-    // already saved by this point; notification failure never changes job
-    // state — worst case is a warn log.
-    if let Some(handle) = job.reply_handle.as_deref() {
-        let Some(finished_job) = queue.get(&job.id).await else {
-            return;
-        };
-        let resolved_title = finished_job.article_id.as_ref().and_then(|id| {
-            super::super::internals::load_index(&deps.paths)
-                .ok()
-                .and_then(|idx| {
-                    idx.articles
-                        .into_iter()
-                        .find(|r| &r.id == id)
-                        .map(|r| r.title)
-                })
-        });
-        let text = super::reply_text::build_reply_text(&finished_job, resolved_title.as_deref());
-        if text.is_empty() {
-            return;
-        }
-        if let Err(err) =
-            crate::imessage_send::notify_user(handle, &text, &deps.imessage_config.allowed_contacts)
-                .await
-        {
-            tracing::warn!(
-                job_id = %finished_job.id,
-                handle = %handle,
-                error = %err,
-                "imessage notification failed; job state unchanged"
-            );
-        }
-    }
 }
