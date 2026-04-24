@@ -205,6 +205,10 @@ impl RuntimePaths {
             .join("implementation-requests")
     }
 
+    pub fn article_memory_ingest_jobs_path(&self) -> PathBuf {
+        self.article_memory_dir().join("ingest_jobs.json")
+    }
+
     pub fn workspace_dir(&self) -> PathBuf {
         self.runtime_dir.join("workspace")
     }
@@ -231,5 +235,20 @@ impl RuntimePaths {
 
     pub fn daemon_log_path(&self) -> PathBuf {
         self.runtime_dir.join("daemon.log")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ingest_jobs_path_nests_under_article_memory_dir() {
+        let paths = RuntimePaths {
+            repo_root: std::path::PathBuf::from("/tmp/repo"),
+            runtime_dir: std::path::PathBuf::from("/tmp/runtime"),
+        };
+        let got = paths.article_memory_ingest_jobs_path();
+        assert_eq!(got, paths.article_memory_dir().join("ingest_jobs.json"));
     }
 }
