@@ -13,6 +13,7 @@ mod entity;
 mod express;
 mod ha_client;
 mod ha_mcp;
+pub mod imessage_send;
 mod local_proxy;
 mod model_routing;
 mod models;

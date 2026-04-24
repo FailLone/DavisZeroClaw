@@ -3,6 +3,7 @@ mod control;
 mod crawl4ai;
 mod express;
 mod fixtures;
+mod imessage_send;
 mod ingest_http;
 mod routes;
 mod support;
