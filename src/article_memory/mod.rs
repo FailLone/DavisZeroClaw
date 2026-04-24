@@ -175,6 +175,87 @@ pub fn add_article_memory(
     Ok(record)
 }
 
+/// Update an existing article record in place, reusing `override_id`.
+/// Writes new content/summary/translation files under the same id, then
+/// atomically rewrites the index. Fails if `override_id` is not present
+/// in the index. Consumer: ingest worker `force` branch (Task 1f).
+#[allow(dead_code)]
+pub fn add_article_memory_override(
+    paths: &RuntimePaths,
+    request: ArticleMemoryAddRequest,
+    override_id: &str,
+) -> Result<ArticleMemoryRecord> {
+    ensure_article_memory_dirs(paths)?;
+
+    let title = clean_required("title", &request.title)?;
+    let content = clean_required("content", &request.content)?;
+    let source = clean_optional(&request.source).unwrap_or_else(|| "manual".to_string());
+    let now = isoformat(now_utc());
+
+    let content_path = format!("articles/{override_id}.md");
+    let raw_path = format!("articles/{override_id}.raw.txt");
+    let normalized_path = format!("articles/{override_id}.normalized.md");
+    let summary_path = request
+        .summary
+        .as_deref()
+        .and_then(clean_optional)
+        .map(|_| format!("articles/{override_id}.summary.md"));
+    let translation_path = request
+        .translation
+        .as_deref()
+        .and_then(clean_optional)
+        .map(|_| format!("articles/{override_id}.translation.md"));
+
+    fs::write(resolve_article_path(paths, &raw_path), &content)
+        .with_context(|| format!("failed to write article raw content for {override_id}"))?;
+    fs::write(resolve_article_path(paths, &normalized_path), &content)
+        .with_context(|| format!("failed to write article normalized content for {override_id}"))?;
+    fs::write(resolve_article_path(paths, &content_path), &content)
+        .with_context(|| format!("failed to write article content for {override_id}"))?;
+    if let (Some(summary), Some(path)) = (request.summary.as_deref(), summary_path.as_deref()) {
+        fs::write(resolve_article_path(paths, path), summary.trim())
+            .with_context(|| format!("failed to write article summary for {override_id}"))?;
+    }
+    if let (Some(translation), Some(path)) =
+        (request.translation.as_deref(), translation_path.as_deref())
+    {
+        fs::write(resolve_article_path(paths, path), translation.trim())
+            .with_context(|| format!("failed to write article translation for {override_id}"))?;
+    }
+
+    let mut index = internals::load_index(paths)?;
+    let idx = index
+        .articles
+        .iter()
+        .position(|r| r.id == override_id)
+        .ok_or_else(|| anyhow::anyhow!("article_id {override_id} not in index"))?;
+
+    let replacement = ArticleMemoryRecord {
+        id: override_id.to_string(),
+        title,
+        url: request.url.and_then(|value| clean_optional(&value)),
+        source,
+        language: request.language.and_then(|value| clean_optional(&value)),
+        tags: normalize_tags(request.tags),
+        status: request.status,
+        value_score: normalize_score(request.value_score)?,
+        captured_at: now.clone(),
+        updated_at: now,
+        content_path,
+        raw_path: Some(raw_path),
+        normalized_path: Some(normalized_path),
+        summary_path,
+        translation_path,
+        notes: request.notes.and_then(|value| clean_optional(&value)),
+        clean_status: Some("raw".to_string()),
+        clean_profile: None,
+    };
+    index.articles[idx] = replacement.clone();
+    index.updated_at = isoformat(now_utc());
+    internals::write_index(paths, &index)?;
+    Ok(replacement)
+}
+
 /// Linear-scan lookup by canonical URL. Returns the first record whose
 /// `url` field equals `normalized_url`.
 ///
@@ -777,5 +858,143 @@ mod find_by_url_tests {
             .unwrap()
             .expect("should find first");
         assert_eq!(hit.id, "aaa");
+    }
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+    use crate::article_memory::types::{ArticleMemoryRecord, ArticleMemoryRecordStatus};
+    use tempfile::TempDir;
+
+    fn mk_paths(tmp: &TempDir) -> RuntimePaths {
+        RuntimePaths {
+            repo_root: tmp.path().to_path_buf(),
+            runtime_dir: tmp.path().join("runtime"),
+        }
+    }
+
+    fn seed_one(paths: &RuntimePaths, id: &str, url: &str) {
+        init_article_memory(paths).unwrap();
+        let mut index = internals::load_index(paths).unwrap();
+        index.articles.push(ArticleMemoryRecord {
+            id: id.into(),
+            title: "OLD TITLE".into(),
+            url: Some(url.into()),
+            source: "test".into(),
+            language: None,
+            tags: vec![],
+            status: ArticleMemoryRecordStatus::Saved,
+            value_score: Some(0.5),
+            captured_at: "2026-04-01T00:00:00Z".into(),
+            updated_at: "2026-04-01T00:00:00Z".into(),
+            content_path: format!("articles/{id}.md"),
+            raw_path: Some(format!("articles/{id}.raw.txt")),
+            normalized_path: Some(format!("articles/{id}.normalized.md")),
+            summary_path: None,
+            translation_path: None,
+            notes: None,
+            clean_status: Some("raw".into()),
+            clean_profile: None,
+        });
+        internals::write_index(paths, &index).unwrap();
+        let articles_dir = paths.runtime_dir.join("article-memory").join("articles");
+        std::fs::create_dir_all(&articles_dir).unwrap();
+        std::fs::write(articles_dir.join(format!("{id}.md")), "OLD CONTENT").unwrap();
+        std::fs::write(articles_dir.join(format!("{id}.raw.txt")), "OLD CONTENT").unwrap();
+        std::fs::write(
+            articles_dir.join(format!("{id}.normalized.md")),
+            "OLD CONTENT",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn override_reuses_id_and_does_not_append() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed_one(&paths, "aaa", "https://example.com/");
+
+        let _updated = add_article_memory_override(
+            &paths,
+            ArticleMemoryAddRequest {
+                title: "NEW TITLE".into(),
+                url: Some("https://example.com/".into()),
+                source: "web".into(),
+                language: None,
+                tags: vec![],
+                content: "NEW CONTENT".into(),
+                summary: None,
+                translation: None,
+                status: ArticleMemoryRecordStatus::Saved,
+                value_score: Some(0.95),
+                notes: None,
+            },
+            "aaa",
+        )
+        .unwrap();
+
+        let index = internals::load_index(&paths).unwrap();
+        assert_eq!(index.articles.len(), 1, "no append");
+        assert_eq!(index.articles[0].id, "aaa");
+        assert_eq!(index.articles[0].title, "NEW TITLE");
+        assert_eq!(index.articles[0].value_score, Some(0.95));
+    }
+
+    #[test]
+    fn override_overwrites_on_disk_content_files() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed_one(&paths, "aaa", "https://example.com/");
+
+        add_article_memory_override(
+            &paths,
+            ArticleMemoryAddRequest {
+                title: "T".into(),
+                url: Some("https://example.com/".into()),
+                source: "web".into(),
+                language: None,
+                tags: vec![],
+                content: "NEW CONTENT".into(),
+                summary: None,
+                translation: None,
+                status: ArticleMemoryRecordStatus::Saved,
+                value_score: None,
+                notes: None,
+            },
+            "aaa",
+        )
+        .unwrap();
+
+        let articles_dir = paths.runtime_dir.join("article-memory").join("articles");
+        let md = std::fs::read_to_string(articles_dir.join("aaa.md")).unwrap();
+        assert_eq!(md, "NEW CONTENT");
+    }
+
+    #[test]
+    fn override_errors_when_id_not_in_index() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        init_article_memory(&paths).unwrap();
+
+        let err = add_article_memory_override(
+            &paths,
+            ArticleMemoryAddRequest {
+                title: "T".into(),
+                url: Some("https://example.com/".into()),
+                source: "web".into(),
+                language: None,
+                tags: vec![],
+                content: "X".into(),
+                summary: None,
+                translation: None,
+                status: ArticleMemoryRecordStatus::Saved,
+                value_score: None,
+                notes: None,
+            },
+            "missing",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("missing"));
     }
 }
