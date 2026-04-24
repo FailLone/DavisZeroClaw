@@ -9,6 +9,8 @@ pub struct Crawl4aiPageRequest {
     pub url: String,
     pub wait_for: Option<String>,
     pub js_code: Option<String>,
+    /// When true, request crawl4ai to produce fit-filtered Markdown.
+    pub markdown: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -17,6 +19,7 @@ pub struct Crawl4aiPageResult {
     pub current_url: Option<String>,
     pub html: Option<String>,
     pub cleaned_html: Option<String>,
+    pub markdown: Option<String>,
     pub error_message: Option<String>,
     pub status_code: Option<u16>,
     pub raw: Value,
@@ -35,6 +38,8 @@ struct CrawlRequestBody<'a> {
     override_navigator: bool,
     remove_overlay_elements: bool,
     enable_stealth: bool,
+    markdown_generator: bool,
+    content_filter: Option<&'a str>,
 }
 
 #[tracing::instrument(
@@ -73,6 +78,12 @@ pub async fn crawl4ai_crawl(
         override_navigator: config.override_navigator,
         remove_overlay_elements: config.remove_overlay_elements,
         enable_stealth: config.enable_stealth,
+        markdown_generator: request.markdown,
+        content_filter: if request.markdown {
+            Some("pruning")
+        } else {
+            None
+        },
     };
 
     let base = supervisor.base_url().await;
@@ -191,6 +202,10 @@ fn parse_result_value(raw: Value) -> Crawl4aiPageResult {
         html: raw.get("html").and_then(Value::as_str).map(str::to_string),
         cleaned_html: raw
             .get("cleaned_html")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        markdown: raw
+            .get("markdown")
             .and_then(Value::as_str)
             .map(str::to_string),
         error_message: raw

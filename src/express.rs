@@ -279,6 +279,7 @@ async fn crawl_source_payload(
             url: source_order_url(source).to_string(),
             wait_for: Some(source_wait_for(source).to_string()),
             js_code: Some(script),
+            markdown: false,
         },
     )
     .await?;

@@ -225,6 +225,7 @@ async fn crawl4ai_503_maps_to_server_unavailable() {
             url: "https://example.com".to_string(),
             wait_for: None,
             js_code: None,
+            markdown: false,
         },
     )
     .await
