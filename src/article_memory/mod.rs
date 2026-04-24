@@ -181,9 +181,6 @@ pub fn add_article_memory(
 /// Callers normalize via `ingest::host_profile::normalize_url` before
 /// calling — storing a mix of raw and normalized URLs in the index would
 /// cause dedup to miss (same logical URL, different string bytes).
-// Consumers land in Task 1c (submit Rule 0) and Task 1f (worker force path).
-// Remove this allow once either of those commits.
-#[allow(dead_code)]
 pub fn find_article_by_normalized_url(
     paths: &RuntimePaths,
     normalized_url: &str,

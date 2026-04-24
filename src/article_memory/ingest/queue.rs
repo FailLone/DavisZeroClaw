@@ -41,6 +41,10 @@ fn default_state_version() -> u32 {
 pub struct IngestQueue {
     pub(super) inner: Mutex<IngestQueueState>,
     persistence_path: PathBuf,
+    /// Runtime paths needed for article_memory index lookups during
+    /// Rule 0 (article-level) dedup. Cloned on construction so the queue
+    /// owns its view of the filesystem layout independent of callers.
+    paths: RuntimePaths,
     notify: Arc<Notify>,
     config: Arc<ArticleMemoryIngestConfig>,
     /// Count of consecutive persist_locked failures since the last success.
@@ -69,6 +73,7 @@ impl IngestQueue {
         let queue = Self {
             inner: Mutex::new(state),
             persistence_path,
+            paths: paths.clone(),
             notify: Arc::new(Notify::new()),
             config,
             persist_failures: std::sync::atomic::AtomicUsize::new(0),
@@ -193,6 +198,31 @@ impl IngestQueue {
         })?;
         let normalized = normalize_url(&req.url)
             .map_err(|_| IngestSubmitError::InvalidUrl("could not normalize".to_string()))?;
+
+        // Dedup rule 0 (article-level): if !force and the URL already has a
+        // record in ArticleMemoryIndex, reject with ArticleExists. Respects
+        // user intent to refresh via force=true. Runs BEFORE acquiring the
+        // state mutex so the disk read for the article index never blocks
+        // concurrent ingest submissions.
+        if !req.force {
+            match crate::article_memory::find_article_by_normalized_url(&self.paths, &normalized) {
+                Ok(Some(existing)) => {
+                    return Err(IngestSubmitError::ArticleExists {
+                        existing_article_id: existing.id,
+                        title: existing.title,
+                        url: existing.url.unwrap_or_else(|| normalized.clone()),
+                    });
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        url = %normalized,
+                        "Rule 0 article-level dedup lookup failed; allowing submission to proceed to queue-level dedup"
+                    );
+                }
+            }
+        }
 
         let mut state = self.inner.lock().await;
 
@@ -507,6 +537,18 @@ mod tests {
                 source: Some("zhihu".into()),
             }],
             ..Default::default()
+        })
+    }
+
+    fn default_config() -> Arc<ArticleMemoryIngestConfig> {
+        Arc::new(ArticleMemoryIngestConfig {
+            enabled: true,
+            max_concurrency: 3,
+            default_profile: "articles-generic".into(),
+            min_markdown_chars: 600,
+            dedup_window_hours: 24,
+            allow_private_hosts: vec![],
+            host_profiles: vec![],
         })
     }
 
@@ -1085,5 +1127,116 @@ mod tests {
                 other => panic!("expected PersistenceDegraded, got {other:?}"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn submit_without_force_rejects_when_article_exists_in_store() {
+        let tmp = TempDir::new().unwrap();
+        let paths = RuntimePaths {
+            repo_root: tmp.path().to_path_buf(),
+            runtime_dir: tmp.path().join("runtime"),
+        };
+        crate::init_article_memory(&paths).unwrap();
+        // Seed article_memory index with a record at the target URL.
+        let mut index = crate::article_memory::internals::load_index(&paths).unwrap();
+        index
+            .articles
+            .push(crate::article_memory::types::ArticleMemoryRecord {
+                id: "existing".into(),
+                title: "Existing Article".into(),
+                url: Some("https://example.com/p/1".into()),
+                source: "test".into(),
+                language: None,
+                tags: vec![],
+                status: crate::article_memory::types::ArticleMemoryRecordStatus::Saved,
+                value_score: Some(0.9),
+                captured_at: "2026-04-20T00:00:00Z".into(),
+                updated_at: "2026-04-20T00:00:00Z".into(),
+                content_path: "articles/existing.md".into(),
+                raw_path: None,
+                normalized_path: None,
+                summary_path: None,
+                translation_path: None,
+                notes: None,
+                clean_status: None,
+                clean_profile: None,
+            });
+        crate::article_memory::internals::write_index(&paths, &index).unwrap();
+
+        let queue = IngestQueue::load_or_create(&paths, default_config());
+
+        let err = queue
+            .submit(IngestRequest {
+                url: "https://example.com/p/1".into(),
+                force: false,
+                title: None,
+                tags: vec![],
+                source_hint: None,
+            })
+            .await
+            .expect_err("should reject with ArticleExists");
+
+        match err {
+            IngestSubmitError::ArticleExists {
+                existing_article_id,
+                title,
+                url,
+            } => {
+                assert_eq!(existing_article_id, "existing");
+                assert_eq!(title, "Existing Article");
+                assert_eq!(url, "https://example.com/p/1");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_with_force_bypasses_article_dedup() {
+        let tmp = TempDir::new().unwrap();
+        let paths = RuntimePaths {
+            repo_root: tmp.path().to_path_buf(),
+            runtime_dir: tmp.path().join("runtime"),
+        };
+        crate::init_article_memory(&paths).unwrap();
+        let mut index = crate::article_memory::internals::load_index(&paths).unwrap();
+        index
+            .articles
+            .push(crate::article_memory::types::ArticleMemoryRecord {
+                id: "existing".into(),
+                title: "Existing".into(),
+                url: Some("https://example.com/p/1".into()),
+                source: "test".into(),
+                language: None,
+                tags: vec![],
+                status: crate::article_memory::types::ArticleMemoryRecordStatus::Saved,
+                value_score: Some(0.9),
+                captured_at: "2026-04-20T00:00:00Z".into(),
+                updated_at: "2026-04-20T00:00:00Z".into(),
+                content_path: "articles/existing.md".into(),
+                raw_path: None,
+                normalized_path: None,
+                summary_path: None,
+                translation_path: None,
+                notes: None,
+                clean_status: None,
+                clean_profile: None,
+            });
+        crate::article_memory::internals::write_index(&paths, &index).unwrap();
+
+        let queue = IngestQueue::load_or_create(&paths, default_config());
+
+        let resp = queue
+            .submit(IngestRequest {
+                url: "https://example.com/p/1".into(),
+                force: true,
+                title: None,
+                tags: vec![],
+                source_hint: None,
+            })
+            .await
+            .expect("force=true should bypass article dedup");
+
+        assert_eq!(resp.status, IngestJobStatus::Pending);
+        assert!(!resp.deduped);
     }
 }
