@@ -118,3 +118,49 @@ min_polish_input_chars = 1200
 max_polish_input_chars = 24000
 summary_input_chars = 24000
 fallback_min_ratio = 0.7
+
+# URL ingest pipeline — crawl4ai fetches → article_memory pipeline.
+# Any channel (iMessage, Shortcut, cron, CLI, HTTP) can POST a URL to
+# `/article-memory/ingest` and the daemon handles crawl → clean → judge →
+# embed asynchronously. Defaults are safe — leaving this block out routes
+# every URL to the shared `articles-generic` Chromium profile.
+[article_memory.ingest]
+enabled = true
+# Number of worker tokio tasks consuming the queue. Cross-host parallel,
+# same-host serialized via the existing Crawl4aiProfileLocks.
+max_concurrency = 3
+# Chromium profile used when no host_profiles entry matches. Log in once
+# with `daviszeroclaw crawl profile login articles-generic` if you want
+# cookies persisted.
+default_profile = "articles-generic"
+# Reject pages whose extracted Markdown is shorter than this. 600 chars
+# roughly matches the value-judge floor; shorter pages are usually 403s,
+# SPA skeletons, or login walls.
+min_markdown_chars = 600
+# Resubmitting a URL that was Saved within this window returns HTTP 409
+# instead of re-crawling. Set to 0 to disable dedup.
+dedup_window_hours = 24
+# Exact-match allowlist to bypass the SSRF guard for specific private
+# hostnames (internal wikis, LAN tools). No wildcards. Example:
+# allow_private_hosts = ["wiki.internal.corp"]
+allow_private_hosts = []
+
+# Per-host Chromium profile routing. First suffix match wins.
+# Profiles are scoped per site so cookies for one site don't leak to
+# another. Log a profile in with `daviszeroclaw crawl profile login
+# articles-<name>` once; the cookies persist across restarts.
+#
+# [[article_memory.ingest.host_profiles]]
+# match = "zhihu.com"
+# profile = "articles-zhihu"
+# source = "zhihu"
+#
+# [[article_memory.ingest.host_profiles]]
+# match = "mp.weixin.qq.com"
+# profile = "articles-weixin"
+# source = "weixin"
+#
+# [[article_memory.ingest.host_profiles]]
+# match = "medium.com"
+# profile = "articles-medium"
+# source = "medium"
