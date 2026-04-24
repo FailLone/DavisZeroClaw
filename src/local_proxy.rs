@@ -1,10 +1,12 @@
 use crate::{
     build_app, build_shortcut_bridge_app, check_local_config, load_control_config,
-    render_runtime_config, zeroclaw_env_vars, AppState, Crawl4aiSupervisor, HaClient, HaMcpClient,
-    HaState, IngestQueue, RuntimePaths,
+    render_runtime_config, zeroclaw_env_vars, AppState, Crawl4aiProfileLocks, Crawl4aiSupervisor,
+    HaClient, HaMcpClient, HaState, IngestQueue, IngestWorkerDeps, IngestWorkerPool, RuntimePaths,
 };
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub async fn run_local_proxy() -> anyhow::Result<()> {
     let paths = RuntimePaths::from_env();
@@ -120,13 +122,34 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         Arc::new(Crawl4aiSupervisor::disabled(paths.clone()))
     };
 
-    // Construct the ingest queue up front so the HTTP surface can accept
-    // submissions. Task 11 will extend this with worker spawning; for now
-    // submissions pile up until workers come online.
-    let ingest_queue = Arc::new(IngestQueue::load_or_create(
-        &paths,
-        Arc::new(local_config.article_memory.ingest.clone()),
-    ));
+    // Build a single profile_locks map shared by AppState's /express/*
+    // routes and the ingest worker pool. Task 10 created the queue;
+    // Task 11 adds the workers that actually process submitted jobs.
+    let profile_locks: Crawl4aiProfileLocks = Arc::new(Mutex::new(HashMap::new()));
+    let ingest_config = Arc::new(local_config.article_memory.ingest.clone());
+    let ingest_queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_config.clone()));
+
+    if ingest_config.enabled {
+        IngestWorkerPool::spawn(
+            ingest_queue.clone(),
+            IngestWorkerDeps {
+                paths: paths.clone(),
+                crawl4ai_config: Arc::new(local_config.crawl4ai.clone()),
+                supervisor: crawl4ai_supervisor.clone(),
+                profile_locks: profile_locks.clone(),
+                article_memory_config: Arc::new(local_config.article_memory.clone()),
+                providers: Arc::new(local_config.providers.clone()),
+                ingest_config: ingest_config.clone(),
+            },
+            ingest_config.max_concurrency,
+        );
+        tracing::info!(
+            workers = ingest_config.max_concurrency,
+            "article memory ingest workers started"
+        );
+    } else {
+        tracing::info!("article memory ingest disabled by config");
+    }
 
     let state = AppState::new(
         client,
@@ -138,6 +161,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
         local_config.webhook.secret.clone(),
+        profile_locks,
         ingest_queue,
     );
     let app = build_app(state.clone());

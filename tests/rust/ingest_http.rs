@@ -31,6 +31,8 @@ async fn build_state_for_test() -> (AppState, TempDir) {
         &paths,
         Arc::new(local_config.article_memory.ingest.clone()),
     ));
+    let profile_locks: crate::Crawl4aiProfileLocks =
+        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let state = AppState::new(
         ha_client,
         mcp_client,
@@ -41,6 +43,7 @@ async fn build_state_for_test() -> (AppState, TempDir) {
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
         local_config.webhook.secret.clone(),
+        profile_locks,
         ingest_queue,
     );
     (state, tmp)

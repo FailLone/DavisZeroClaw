@@ -116,6 +116,8 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
         &paths,
         Arc::new(local_config.article_memory.ingest.clone()),
     ));
+    let profile_locks: crate::Crawl4aiProfileLocks =
+        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let app = build_app(AppState::new(
         client,
         mcp_client,
@@ -126,6 +128,7 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
         local_config.webhook.secret,
+        profile_locks,
         ingest_queue,
     ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

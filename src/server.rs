@@ -93,6 +93,7 @@ impl AppState {
         article_memory_config: Arc<ArticleMemoryConfig>,
         providers: Arc<Vec<ModelProviderConfig>>,
         shortcut_secret: String,
+        crawl4ai_profile_locks: Crawl4aiProfileLocks,
         ingest_queue: Arc<IngestQueue>,
     ) -> Self {
         Self {
@@ -101,7 +102,7 @@ impl AppState {
             paths,
             control_config,
             crawl4ai_config,
-            crawl4ai_profile_locks: Arc::new(Mutex::new(HashMap::new())),
+            crawl4ai_profile_locks,
             crawl4ai_supervisor,
             article_memory_config,
             providers,
