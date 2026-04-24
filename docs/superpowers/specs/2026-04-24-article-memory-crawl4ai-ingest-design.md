@@ -9,7 +9,9 @@ Target branch: `docs/crawl4ai-plan-slim` (local-only per user workflow — never
 
 ## 1. Goal
 
-Let any channel (iMessage, Shortcut, cron, MCP, CLI, HTTP) trigger article capture by posting only a URL. The daemon fetches the page via crawl4ai, converts to Markdown, runs the existing `article_memory` pipeline (clean → value judge → polish → summary → embedding), and stores the result.
+Let any direct caller (CLI, cron, Shortcut, webhook) POST a URL to `/article-memory/ingest` over loopback HTTP and trigger async capture. The daemon fetches the page via crawl4ai, converts to Markdown, runs the existing `article_memory` pipeline (clean → value judge → polish → summary → embedding), and stores the result.
+
+iMessage intake is **not** a direct caller. iMessage messages reach this daemon through ZeroClaw's LLM tool-calling layer via the `article-memory__ingest_*` skill tools defined in `project-skills/article-memory/`. See the Architecture Addendum at the bottom of this spec and the Phase 2 spec (`2026-04-24-article-memory-phase2-skill-and-dedup-design.md`) for the final contract.
 
 **User quote**: "我只希望，今后我通过 imessage 或其他 channel，定时任务，shortcut，都可以只发 url，agent 就开始抓取并存储"
 
@@ -40,8 +42,11 @@ This consolidates crawl4ai as the project's single crawling subsystem and retire
 ## 4. Architecture overview
 
 ```
-Channels (iMessage / Shortcut / cron / MCP / CLI / HTTP)
-   │  POST /article-memory/ingest { url, title?, tags?, source_hint? }
+Direct HTTP callers (CLI / cron / Shortcut / webhook)        LLM tool-call path
+   │                                                              (iMessage → ZeroClaw agent → skill)
+   │                                                              │
+   └──────────────────┬───────────────────────────────────────────┘
+                      │  POST /article-memory/ingest { url, title?, tags?, source_hint?, reply_handle? }
    ▼
 server.rs::ingest_handler
    │ validate_url_for_ingest(url, config)
@@ -524,7 +529,7 @@ impl IngestQueue {
 - `#[tracing::instrument(name = "ingest.worker", skip_all, fields(job_id, url, profile))]` on the execute function
 - Existing `runtime/crawl4ai.log` and `runtime/davis.log` pick up worker spans automatically
 - CLI `articles ingest history --failed` is the primary postmortem tool
-- `GET /article-memory/ingest?status=failed` mirrors it over HTTP (useful for iMessage bot to surface "hey, 3 articles failed yesterday")
+- `GET /article-memory/ingest?status=failed` is exposed to ZeroClaw's LLM as the `article-memory__ingest_list` skill tool; iMessage users ask for "recent failures" in natural language and the LLM calls this tool.
 
 No new metrics system; this is a single-user local daemon.
 
@@ -613,7 +618,7 @@ In order of cost:
 ## 14. Follow-ups (out of scope)
 
 - Shortcut migration (`shortcuts/叫下戴维斯.shortcut.json` → URL-only) once ingest is proven in production.
-- iMessage bridge wiring (separate project) posting to `/article-memory/ingest`.
+- iMessage integration is complete in Phase 2 via the `article-memory` skill tools and `reply_handle`-driven completion notifications; no separate bridge wiring is needed.
 - Cron job examples in `docs/` for scheduled RSS → ingest.
 - Proper article-level URL dedup (queryable `find_by_url()` in `article_memory`) — more robust than the 24h-window guard.
 - DNS rebinding defense in crawl4ai adapter (resolve to IP before Chromium launch, reject private ranges).
@@ -633,3 +638,25 @@ None at spec-close; all decisions were made during brainstorming. The writing-pl
 - **Active status** — any of Pending/Fetching/Cleaning/Judging/Embedding. Used for in-flight dedup.
 - **Terminal status** — Saved / Rejected / Failed.
 - **Zero-fork pipeline** — ingest does not duplicate or alter the `add_article_memory → normalize → embed` sequence. It reuses the exact same functions.
+
+---
+
+## Architecture Addendum (2026-04-24)
+
+The original "Channels" framing in §1 and §3 incorrectly treated iMessage
+as a direct HTTP caller on par with CLI/cron. In reality, iMessage is
+handled by the open-source ZeroClaw process, which exposes its LLM agent
+to user messages and discovers daemon capabilities through the skill-tool
+contract at `project-skills/article-memory/SKILL.toml`. Phase 2 closes
+this gap by updating the skill prompts and tool entries to match the real
+`POST /article-memory/ingest` body schema, adding `force=true` semantics,
+and wiring a `reply_handle`-driven completion notification via osascript
+inside the daemon itself. See the Phase 2 spec
+(`2026-04-24-article-memory-phase2-skill-and-dedup-design.md`) for the
+new contract.
+
+The `[article_memory.ingest]` config section lives in `config/davis/local.toml`
+and is consumed by the daemon via `LocalConfig` only. ZeroClaw does not
+reference these fields (verified 2026-04-24 via `rg` over
+`/Users/faillonexie/Projects/zeroclaw/src`), so `render_runtime_config_str`
+does not need to propagate the section.
