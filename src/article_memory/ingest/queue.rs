@@ -1,6 +1,3 @@
-// Consumed starting Task 9 (worker.rs) and Task 10 (server.rs).
-// Remove this attribute once IngestQueue is wired into AppState.
-#![allow(dead_code)]
 use super::host_profile::{normalize_url, resolve_profile, validate_url_for_ingest};
 use super::types::{
     IngestJob, IngestJobError, IngestJobStatus, IngestOutcomeSummary, IngestRequest,

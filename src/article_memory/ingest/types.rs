@@ -1,6 +1,3 @@
-// Consumed starting Task 6 (queue.rs). Remove this attribute once consumers land.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

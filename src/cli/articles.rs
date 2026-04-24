@@ -464,100 +464,167 @@ pub(super) fn print_article_status(status: &crate::ArticleMemoryStatusResponse) 
 }
 
 pub(super) async fn submit_article_ingest(
-    paths: &RuntimePaths,
+    _paths: &RuntimePaths,
     url: String,
     tags: Vec<String>,
     title: Option<String>,
     source_hint: Option<String>,
     wait: bool,
 ) -> Result<()> {
-    let config = check_local_config(paths)?;
-    let ingest_config = std::sync::Arc::new(config.article_memory.ingest.clone());
-    let queue = std::sync::Arc::new(crate::IngestQueue::load_or_create(
-        paths,
-        ingest_config.clone(),
-    ));
-    let req = crate::IngestRequest {
-        url,
-        title,
-        tags,
-        source_hint: source_hint.or_else(|| Some("cli".to_string())),
-    };
-    let resp = queue.submit(req).await?;
-    println!("Submitted ingest job.");
-    println!("- job_id: {}", resp.job_id);
-    println!("- status: {}", resp.status.as_str());
-    println!("- deduped: {}", resp.deduped);
-    if !wait {
-        return Ok(());
-    }
-    // Note: in --wait mode we are a one-shot CLI — no worker is running here.
-    // Workers only run inside the daemon. --wait polls the daemon's
-    // persisted view via the queue's JSON file.
-    println!("Polling... (Ctrl-C to stop)");
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        let queue_reload = crate::IngestQueue::load_or_create(paths, ingest_config.clone());
-        if let Some(job) = queue_reload.get(&resp.job_id).await {
-            println!(
-                "  status={}  article_id={:?}",
-                job.status.as_str(),
-                job.article_id
-            );
-            if job.status.is_terminal() {
-                if let Some(err) = &job.error {
-                    println!("  error: {} — {}", err.issue_type, err.message);
+    let body = serde_json::json!({
+        "url": url,
+        "tags": tags,
+        "title": title,
+        "source_hint": source_hint.or_else(|| Some("cli".to_string())),
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let resp = client
+        .post(ingest_endpoint())
+        .json(&body)
+        .send()
+        .await
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "failed to reach daemon: {err}. Is the daemon running? Try `daviszeroclaw start` first."
+            )
+        })?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap_or_else(|_| serde_json::json!({}));
+    if status == reqwest::StatusCode::ACCEPTED {
+        let job_id = body.get("job_id").and_then(|v| v.as_str()).unwrap_or("?");
+        let job_status = body.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+        let deduped = body
+            .get("deduped")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        println!("Submitted ingest job.");
+        println!("- job_id: {}", job_id);
+        println!("- status: {}", job_status);
+        println!("- deduped: {}", deduped);
+        if !wait {
+            return Ok(());
+        }
+        println!("Polling... (Ctrl-C to stop)");
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let show = client
+                .get(format!("{}/{}", ingest_endpoint(), job_id))
+                .send()
+                .await?;
+            if show.status() != reqwest::StatusCode::OK {
+                println!(
+                    "  (lost track of job; re-run with `articles ingest show {}`)",
+                    job_id
+                );
+                break;
+            }
+            let job: serde_json::Value = show.json().await?;
+            let s = job.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+            let aid = job.get("article_id").and_then(|v| v.as_str());
+            println!("  status={}  article_id={:?}", s, aid);
+            if matches!(s, "saved" | "rejected" | "failed") {
+                if let Some(err) = job.get("error") {
+                    let issue = err
+                        .get("issue_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    let msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    println!("  error: {} — {}", issue, msg);
                 }
                 break;
             }
         }
+        Ok(())
+    } else {
+        bail!(
+            "daemon rejected submission ({}): {}",
+            status,
+            serde_json::to_string(&body).unwrap_or_default()
+        );
     }
-    Ok(())
 }
 
 pub(super) async fn list_article_ingest(
-    paths: &RuntimePaths,
+    _paths: &RuntimePaths,
     limit: usize,
     only_failed: bool,
 ) -> Result<()> {
-    let config = check_local_config(paths)?;
-    let ingest_config = std::sync::Arc::new(config.article_memory.ingest.clone());
-    let queue = crate::IngestQueue::load_or_create(paths, ingest_config);
-    let jobs = queue
-        .list(&crate::ListFilter {
-            status: None,
-            limit: Some(limit),
-            only_failed,
-        })
-        .await;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let mut query = vec![("limit".to_string(), limit.to_string())];
+    if only_failed {
+        query.push(("only_failed".to_string(), "true".to_string()));
+    }
+    let resp = client
+        .get(ingest_endpoint())
+        .query(&query)
+        .send()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to reach daemon: {err}. Is the daemon running?"))?;
+    if resp.status() != reqwest::StatusCode::OK {
+        bail!("daemon returned {}", resp.status());
+    }
+    let body: serde_json::Value = resp.json().await?;
+    let jobs = body
+        .get("jobs")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     println!("Ingest history: {} job(s)", jobs.len());
     for job in jobs {
+        let id = job.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+        let s = job.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+        let profile = job
+            .get("profile_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let submitted = job
+            .get("submitted_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let url = job.get("url").and_then(|v| v.as_str()).unwrap_or("?");
         println!(
             "- {} | {} | profile={} | {} | {}",
-            job.id,
-            job.status.as_str(),
-            job.profile_name,
-            job.submitted_at,
-            job.url
+            id, s, profile, submitted, url
         );
-        if let Some(err) = &job.error {
-            println!("  error: {} — {}", err.issue_type, err.message);
+        if let Some(err) = job.get("error") {
+            let issue = err
+                .get("issue_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            println!("  error: {} — {}", issue, msg);
         }
     }
     Ok(())
 }
 
-pub(super) async fn show_article_ingest(paths: &RuntimePaths, job_id: &str) -> Result<()> {
-    let config = check_local_config(paths)?;
-    let ingest_config = std::sync::Arc::new(config.article_memory.ingest.clone());
-    let queue = crate::IngestQueue::load_or_create(paths, ingest_config);
-    match queue.get(job_id).await {
-        Some(job) => {
-            let rendered =
-                serde_json::to_string_pretty(&job).unwrap_or_else(|_| format!("{job:?}"));
-            println!("{rendered}");
+pub(super) async fn show_article_ingest(_paths: &RuntimePaths, job_id: &str) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let resp = client
+        .get(format!("{}/{}", ingest_endpoint(), job_id))
+        .send()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to reach daemon: {err}. Is the daemon running?"))?;
+    match resp.status() {
+        reqwest::StatusCode::OK => {
+            let job: serde_json::Value = resp.json().await?;
+            println!("{}", serde_json::to_string_pretty(&job)?);
             Ok(())
         }
-        None => bail!("ingest job not found: {job_id}"),
+        reqwest::StatusCode::NOT_FOUND => {
+            bail!("ingest job not found: {job_id}");
+        }
+        other => bail!("daemon returned {}", other),
     }
+}
+
+fn ingest_endpoint() -> String {
+    std::env::var("DAVIS_DAEMON_URL").unwrap_or_else(|_| "http://127.0.0.1:3010".to_string())
+        + "/article-memory/ingest"
 }

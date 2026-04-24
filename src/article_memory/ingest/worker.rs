@@ -1,7 +1,3 @@
-// Consumed starting Task 11 (local_proxy boot).
-// Remove once IngestWorkerPool is spawned from daemon startup.
-#![allow(dead_code)]
-
 use super::queue::IngestQueue;
 use super::types::{IngestJob, IngestJobError, IngestJobStatus, IngestOutcomeSummary};
 use crate::app_config::{ArticleMemoryConfig, ArticleMemoryIngestConfig, ModelProviderConfig};

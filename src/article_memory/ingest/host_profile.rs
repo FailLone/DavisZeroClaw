@@ -1,7 +1,3 @@
-// Consumed starting Task 4 (types.rs) and Task 6 (queue.rs). Once all symbols
-// are wired, remove this attribute — it's a staging allowance only.
-#![allow(dead_code)]
-
 use crate::app_config::ArticleMemoryIngestConfig;
 use std::fmt;
 use url::{Host, Url};
