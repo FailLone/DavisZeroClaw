@@ -127,6 +127,10 @@ pub enum IngestSubmitError {
     },
     IngestDisabled,
     PersistenceError(String),
+    PersistenceDegraded {
+        consecutive_failures: usize,
+        last_error: String,
+    },
 }
 
 impl std::fmt::Display for IngestSubmitError {
@@ -145,6 +149,13 @@ impl std::fmt::Display for IngestSubmitError {
             ),
             Self::IngestDisabled => write!(f, "article memory ingest is disabled"),
             Self::PersistenceError(d) => write!(f, "failed to persist job: {d}"),
+            Self::PersistenceDegraded {
+                consecutive_failures,
+                last_error,
+            } => write!(
+                f,
+                "ingest queue persistence degraded after {consecutive_failures} consecutive failures: {last_error}"
+            ),
         }
     }
 }

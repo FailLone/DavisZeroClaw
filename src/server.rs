@@ -45,6 +45,10 @@ struct HealthResponse {
     /// `starting` — enabled, not abandoned, but not healthy yet (boot or restart)
     /// `abandoned` — supervisor exhausted its retry budget; no further respawns
     crawl4ai: &'static str,
+    /// Ingest queue's persistence state. "healthy" means recent persists
+    /// succeeded. "degraded" means 3+ consecutive failures — user should
+    /// investigate disk space. Mirrors `queue.persist_health()`.
+    ingest_persist: crate::article_memory::PersistHealth,
 }
 
 #[derive(Serialize)]
@@ -225,6 +229,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
     } else {
         "starting"
     };
+    let ingest_persist = state.ingest_queue.persist_health();
     Json(
         serde_json::to_value(HealthResponse {
             status: "ok",
@@ -247,6 +252,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
                 "shortcut_bridge",
             ],
             crawl4ai: crawl4ai_state,
+            ingest_persist,
         })
         .unwrap_or_else(|_| json!({"status":"ok"})),
     )
@@ -947,6 +953,18 @@ async fn ingest_submit_handler(
             IngestSubmitError::PersistenceError(d) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "persistence_error", "detail": d})),
+            ),
+            IngestSubmitError::PersistenceDegraded {
+                consecutive_failures,
+                last_error,
+            } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "error": "persistence_degraded",
+                    "detail": format!("ingest queue persistence degraded after {consecutive_failures} consecutive failures"),
+                    "last_error": last_error,
+                    "action": "check disk space, free space, then restart daemon to retry"
+                })),
             ),
         },
     }

@@ -7,7 +7,7 @@ pub use host_profile::{
     normalize_url, resolve_profile, validate_url_for_ingest, NormalizeUrlError, ResolvedProfile,
     UrlValidationError,
 };
-pub use queue::{IngestQueue, IngestQueueState};
+pub use queue::{IngestQueue, IngestQueueState, PersistHealth};
 pub use types::{
     IngestJob, IngestJobError, IngestJobStatus, IngestOutcome, IngestOutcomeSummary, IngestRequest,
     IngestResponse, IngestSubmitError, ListFilter,

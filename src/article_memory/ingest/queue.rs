@@ -17,6 +17,11 @@ use uuid::Uuid;
 
 const INGEST_JOBS_VERSION: u32 = 1;
 
+/// After this many consecutive persist failures, the queue refuses new
+/// submissions and surfaces a degraded status via `/health`. User is
+/// expected to free disk space and restart the daemon.
+const PERSIST_DEGRADED_THRESHOLD: usize = 3;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IngestQueueState {
     #[serde(default = "default_state_version")]
@@ -38,6 +43,20 @@ pub struct IngestQueue {
     persistence_path: PathBuf,
     notify: Arc<Notify>,
     config: Arc<ArticleMemoryIngestConfig>,
+    /// Count of consecutive persist_locked failures since the last success.
+    /// Once this reaches PERSIST_DEGRADED_THRESHOLD, `is_degraded()` returns
+    /// true and new `submit()` calls fail fast with PersistenceDegraded.
+    pub(super) persist_failures: std::sync::atomic::AtomicUsize,
+    /// Last persist error message, for operator visibility via `/health`.
+    pub(super) last_persist_error: std::sync::Mutex<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PersistHealth {
+    pub state: &'static str,
+    pub consecutive_failures: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 impl IngestQueue {
@@ -52,6 +71,8 @@ impl IngestQueue {
             persistence_path,
             notify: Arc::new(Notify::new()),
             config,
+            persist_failures: std::sync::atomic::AtomicUsize::new(0),
+            last_persist_error: std::sync::Mutex::new(None),
         };
         // Best-effort persistence of the reset state. Non-fatal on failure,
         // but log so operators can see a read-only-disk situation.
@@ -114,9 +135,47 @@ impl IngestQueue {
         self.notify.clone()
     }
 
+    pub fn is_degraded(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.persist_failures.load(Ordering::Relaxed) >= PERSIST_DEGRADED_THRESHOLD
+    }
+
+    pub fn persist_health(&self) -> PersistHealth {
+        use std::sync::atomic::Ordering;
+        let failures = self.persist_failures.load(Ordering::Relaxed);
+        let last_error = self
+            .last_persist_error
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+        PersistHealth {
+            state: if failures >= PERSIST_DEGRADED_THRESHOLD {
+                "degraded"
+            } else {
+                "healthy"
+            },
+            consecutive_failures: failures,
+            last_error,
+        }
+    }
+
     pub async fn submit(&self, req: IngestRequest) -> Result<IngestResponse, IngestSubmitError> {
         if !self.config.enabled {
             return Err(IngestSubmitError::IngestDisabled);
+        }
+        if self.is_degraded() {
+            let last_error = self
+                .last_persist_error
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+            return Err(IngestSubmitError::PersistenceDegraded {
+                consecutive_failures: self
+                    .persist_failures
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                last_error,
+            });
         }
         validate_url_for_ingest(&req.url, &self.config).map_err(|err| match err {
             super::host_profile::UrlValidationError::InvalidUrl => {
@@ -371,12 +430,57 @@ impl IngestQueue {
     }
 
     fn persist_locked(&self, state: &IngestQueueState) -> std::io::Result<()> {
+        let result = self.persist_locked_raw(state);
+        use std::sync::atomic::Ordering;
+        match &result {
+            Ok(_) => {
+                self.persist_failures.store(0, Ordering::Relaxed);
+                if let Ok(mut guard) = self.last_persist_error.lock() {
+                    *guard = None;
+                }
+            }
+            Err(err) => {
+                let prev = self.persist_failures.fetch_add(1, Ordering::Relaxed);
+                let msg = format!("{}: {err}", self.persistence_path.display());
+                if let Ok(mut guard) = self.last_persist_error.lock() {
+                    *guard = Some(msg.clone());
+                }
+                if prev + 1 >= PERSIST_DEGRADED_THRESHOLD {
+                    tracing::error!(
+                        consecutive_failures = prev + 1,
+                        path = %self.persistence_path.display(),
+                        error = %err,
+                        "ingest queue persist DEGRADED; new submissions will be rejected until disk recovers"
+                    );
+                }
+            }
+        }
+        result
+    }
+
+    /// Actual atomic-rename persist implementation. Write to a sibling
+    /// tempfile, fsync it, then atomically rename over the target. If any
+    /// step fails, the target file is untouched — critical for disk-full
+    /// scenarios where `fs::write` would have truncated the old file to 0
+    /// bytes before failing to write the new contents.
+    fn persist_locked_raw(&self, state: &IngestQueueState) -> std::io::Result<()> {
         if let Some(parent) = self.persistence_path.parent() {
             fs::create_dir_all(parent)?;
         }
         let body = serde_json::to_vec_pretty(state)
             .map_err(|e| std::io::Error::other(format!("serialize ingest jobs: {e}")))?;
-        fs::write(&self.persistence_path, body)
+        let parent = self
+            .persistence_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        // NamedTempFile::new_in(parent) ensures the tempfile sits on the same
+        // filesystem as the target, so `persist()` can use atomic rename(2).
+        let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+        use std::io::Write;
+        tmp.write_all(&body)?;
+        tmp.as_file().sync_all()?; // fsync data blocks so rename is durable
+        tmp.persist(&self.persistence_path).map_err(|e| e.error)?;
+        Ok(())
     }
 
     fn persist_blocking(&self) -> std::io::Result<()> {
@@ -748,5 +852,226 @@ mod tests {
             .unwrap();
         assert_ne!(resp.job_id, resp2.job_id);
         assert!(!resp2.deduped);
+    }
+
+    #[tokio::test]
+    async fn persist_failure_preserves_old_file() {
+        // Seed a state, let first persist succeed, then break the parent dir
+        // and observe that the old file is still readable.
+        let (_tmp, paths) = test_paths();
+        let queue = IngestQueue::load_or_create(&paths, test_config());
+        let _ = queue
+            .submit(IngestRequest {
+                url: "https://zhihu.com/p/1".into(),
+                title: None,
+                tags: vec![],
+                source_hint: None,
+            })
+            .await
+            .unwrap();
+
+        // Capture successful state on disk.
+        let path = paths.article_memory_ingest_jobs_path();
+        let v1 = std::fs::read_to_string(&path).unwrap();
+        assert!(v1.contains("\"pending\""));
+
+        // Force next persist to fail: make the parent dir read-only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let parent = path.parent().unwrap();
+            let mut perms = std::fs::metadata(parent).unwrap().permissions();
+            perms.set_mode(0o555);
+            std::fs::set_permissions(parent, perms).unwrap();
+
+            // Any state mutation triggers a persist — try to finish_saved the job.
+            let job_id = {
+                let state = queue.inner.lock().await;
+                state.jobs.keys().next().cloned().unwrap()
+            };
+            queue
+                .finish_saved(
+                    &job_id,
+                    "a1".to_string(),
+                    IngestOutcomeSummary {
+                        clean_status: "polished".into(),
+                        clean_profile: "zhihu".into(),
+                        value_decision: Some("save".into()),
+                        value_score: Some(0.9),
+                        normalized_chars: 1200,
+                        polished: true,
+                        summary_generated: true,
+                        embedded: true,
+                    },
+                    Vec::new(),
+                )
+                .await;
+
+            // Old file must still be intact (atomic rename means target never
+            // got truncated).
+            let v2 = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(v1, v2, "persist failure must not corrupt existing file");
+
+            // Restore perms so TempDir drop doesn't panic.
+            let mut perms = std::fs::metadata(parent).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(parent, perms).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn consecutive_failures_trigger_degraded_state() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let (_tmp, paths) = test_paths();
+            let queue = IngestQueue::load_or_create(&paths, test_config());
+
+            let parent = paths.article_memory_dir();
+            assert!(!queue.is_degraded());
+
+            // Pre-seed a job via direct state mutation, then break perms.
+            let job_id = "test-job-id".to_string();
+            {
+                let mut state = queue.inner.lock().await;
+                state.jobs.insert(
+                    job_id.clone(),
+                    IngestJob {
+                        id: job_id.clone(),
+                        url: "https://zhihu.com/p/x".into(),
+                        normalized_url: "https://zhihu.com/p/x".into(),
+                        title_override: None,
+                        tags: vec![],
+                        source_hint: None,
+                        profile_name: "articles-zhihu".into(),
+                        resolved_source: None,
+                        status: IngestJobStatus::Pending,
+                        article_id: None,
+                        outcome: None,
+                        error: None,
+                        warnings: vec![],
+                        submitted_at: crate::support::isoformat(crate::support::now_utc()),
+                        started_at: None,
+                        finished_at: None,
+                        attempts: 1,
+                    },
+                );
+            }
+
+            // Break the dir and attempt 3 persists via mark_status.
+            let mut perms = std::fs::metadata(&parent).unwrap().permissions();
+            perms.set_mode(0o555);
+            std::fs::set_permissions(&parent, perms).unwrap();
+
+            for _ in 0..3 {
+                let _ = queue.mark_status(&job_id, IngestJobStatus::Fetching).await;
+            }
+            assert!(queue.is_degraded(), "expected degraded after 3 failures");
+            let health = queue.persist_health();
+            assert_eq!(health.state, "degraded");
+            assert!(health.consecutive_failures >= 3);
+            assert!(health.last_error.is_some());
+
+            // Restore perms.
+            let mut perms = std::fs::metadata(&parent).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&parent, perms).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_persist_resets_failure_counter() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let (_tmp, paths) = test_paths();
+            let queue = IngestQueue::load_or_create(&paths, test_config());
+            let parent = paths.article_memory_dir();
+
+            // Seed a job first (before breaking perms).
+            let job_id = "reset-test".to_string();
+            {
+                let mut state = queue.inner.lock().await;
+                state.jobs.insert(
+                    job_id.clone(),
+                    IngestJob {
+                        id: job_id.clone(),
+                        url: "https://zhihu.com/p/x".into(),
+                        normalized_url: "https://zhihu.com/p/x".into(),
+                        title_override: None,
+                        tags: vec![],
+                        source_hint: None,
+                        profile_name: "articles-zhihu".into(),
+                        resolved_source: None,
+                        status: IngestJobStatus::Pending,
+                        article_id: None,
+                        outcome: None,
+                        error: None,
+                        warnings: vec![],
+                        submitted_at: crate::support::isoformat(crate::support::now_utc()),
+                        started_at: None,
+                        finished_at: None,
+                        attempts: 1,
+                    },
+                );
+            }
+
+            // Break perms and trigger 2 failures.
+            let mut perms = std::fs::metadata(&parent).unwrap().permissions();
+            perms.set_mode(0o555);
+            std::fs::set_permissions(&parent, perms).unwrap();
+            for _ in 0..2 {
+                let _ = queue.mark_status(&job_id, IngestJobStatus::Fetching).await;
+            }
+            assert!(queue.persist_health().consecutive_failures >= 2);
+
+            // Fix perms and trigger a successful persist.
+            let mut perms = std::fs::metadata(&parent).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&parent, perms).unwrap();
+
+            let _ = queue.mark_status(&job_id, IngestJobStatus::Cleaning).await;
+            assert_eq!(queue.persist_health().consecutive_failures, 0);
+            assert!(!queue.is_degraded());
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_when_degraded_returns_persistence_degraded() {
+        #[cfg(unix)]
+        {
+            let (_tmp, paths) = test_paths();
+            let queue = IngestQueue::load_or_create(&paths, test_config());
+
+            // Manually push the counter past threshold without filesystem tricks.
+            use std::sync::atomic::Ordering;
+            queue
+                .persist_failures
+                .store(PERSIST_DEGRADED_THRESHOLD, Ordering::Relaxed);
+            {
+                let mut guard = queue.last_persist_error.lock().unwrap();
+                *guard = Some("disk full (simulated)".into());
+            }
+
+            let err = queue
+                .submit(IngestRequest {
+                    url: "https://zhihu.com/p/1".into(),
+                    title: None,
+                    tags: vec![],
+                    source_hint: None,
+                })
+                .await
+                .unwrap_err();
+            match err {
+                IngestSubmitError::PersistenceDegraded {
+                    consecutive_failures,
+                    last_error,
+                } => {
+                    assert_eq!(consecutive_failures, PERSIST_DEGRADED_THRESHOLD);
+                    assert!(last_error.contains("disk full"));
+                }
+                other => panic!("expected PersistenceDegraded, got {other:?}"),
+            }
+        }
     }
 }

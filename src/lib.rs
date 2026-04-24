@@ -49,8 +49,9 @@ pub use article_memory::{
     ArticleValueAuditResponse, ArticleValueConfig, ArticleValueReport, IngestJob, IngestJobError,
     IngestJobStatus, IngestOutcome, IngestOutcomeSummary, IngestQueue, IngestQueueState,
     IngestRequest, IngestResponse, IngestSubmitError, IngestWorkerDeps, IngestWorkerPool,
-    ListFilter, NormalizeUrlError, ResolvedArticleEmbeddingConfig, ResolvedArticleNormalizeConfig,
-    ResolvedArticleValueConfig, ResolvedProfile, UrlValidationError,
+    ListFilter, NormalizeUrlError, PersistHealth, ResolvedArticleEmbeddingConfig,
+    ResolvedArticleNormalizeConfig, ResolvedArticleValueConfig, ResolvedProfile,
+    UrlValidationError,
 };
 pub use audit::{audit_entity, parse_window};
 pub use constants::{
