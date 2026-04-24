@@ -1,9 +1,9 @@
 # Article Memory × crawl4ai — Unified URL Ingest Design
 
-Status: **Draft, awaiting user review**
+Status: **Landed (2026-04-24)** — implementation across commits `89d763b..5c6a441` on branch `docs/crawl4ai-plan-slim`. 149/149 tests pass; clippy and fmt clean.
 Date: 2026-04-24
 Owner: Faillone Xie
-Target branch: (to be created after spec approval)
+Target branch: `docs/crawl4ai-plan-slim` (local-only per user workflow — never pushed)
 
 ---
 
