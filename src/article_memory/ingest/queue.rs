@@ -37,7 +37,7 @@ fn default_state_version() -> u32 {
 }
 
 pub struct IngestQueue {
-    inner: Mutex<IngestQueueState>,
+    pub(super) inner: Mutex<IngestQueueState>,
     persistence_path: PathBuf,
     notify: Arc<Notify>,
     config: Arc<ArticleMemoryIngestConfig>,
@@ -56,8 +56,15 @@ impl IngestQueue {
             notify: Arc::new(Notify::new()),
             config,
         };
-        // Best-effort persistence of the reset state. Non-fatal on failure.
-        let _ = queue.persist_blocking();
+        // Best-effort persistence of the reset state. Non-fatal on failure,
+        // but log so operators can see a read-only-disk situation.
+        if let Err(e) = queue.persist_blocking() {
+            tracing::error!(
+                path = %queue.persistence_path.display(),
+                error = %e,
+                "failed to persist ingest queue on boot; queue will be in-memory-only this session"
+            );
+        }
         queue
     }
 
@@ -147,18 +154,53 @@ impl IngestQueue {
             });
         }
 
-        // Dedup rule 2: same URL Saved within window → 409
+        // Dedup rule 2: same URL Saved within window → 409.
+        // Conservative: if `finished_at` is malformed/unparseable, treat the
+        // record as if it were within the window (block the duplicate) and
+        // log — better to make the user resubmit after investigation than to
+        // silently let duplicates slip through on corrupted timestamps.
         let window_hours = self.config.dedup_window_hours as i64;
-        if let Some(recent) = state
-            .jobs
-            .values()
-            .filter(|j| j.normalized_url == normalized && j.status == IngestJobStatus::Saved)
-            .filter_map(|j| j.finished_at.as_ref().map(|ts| (ts.as_str(), j)))
-            .filter_map(|(ts, j)| crate::support::parse_time(ts).map(|t| (t, j)))
-            .filter(|(t, _)| (now_utc() - *t) <= Duration::hours(window_hours))
-            .max_by_key(|(t, _)| *t)
-            .map(|(_, j)| j.clone())
-        {
+        let mut recent_hit: Option<IngestJob> = None;
+        let mut recent_ts: Option<chrono::DateTime<chrono::Utc>> = None;
+        for j in state.jobs.values() {
+            if j.normalized_url != normalized || j.status != IngestJobStatus::Saved {
+                continue;
+            }
+            let within_window = match j.finished_at.as_deref() {
+                Some(ts) => match crate::support::parse_time(ts) {
+                    Some(t) => {
+                        if (now_utc() - t) > Duration::hours(window_hours) {
+                            // Outside the window; skip.
+                            continue;
+                        }
+                        // Capture the most recent candidate for the 409 body.
+                        if recent_ts.is_none_or(|prev| t > prev) {
+                            recent_ts = Some(t);
+                        }
+                        true
+                    }
+                    None => {
+                        tracing::warn!(
+                            job_id = %j.id,
+                            finished_at = %ts,
+                            "malformed finished_at on Saved ingest job; treating as within dedup window"
+                        );
+                        true
+                    }
+                },
+                None => {
+                    tracing::warn!(
+                        job_id = %j.id,
+                        "missing finished_at on Saved ingest job; treating as within dedup window"
+                    );
+                    true
+                }
+            };
+            if within_window {
+                recent_hit = Some(j.clone());
+            }
+        }
+        if let Some(recent) = recent_hit {
             return Err(IngestSubmitError::DuplicateSaved {
                 existing_article_id: recent.article_id.clone(),
                 finished_at: recent.finished_at.clone().unwrap_or_default(),
@@ -215,7 +257,9 @@ impl IngestQueue {
                         job.started_at = Some(isoformat(now_utc()));
                         let cloned = job.clone();
                         state.updated_at = isoformat(now_utc());
-                        let _ = self.persist_locked(&state);
+                        if let Err(e) = self.persist_locked(&state) {
+                            tracing::error!(job_id = %id, error = %e, "failed to persist next_pending transition to Fetching");
+                        }
                         return cloned;
                     }
                 }
@@ -240,7 +284,9 @@ impl IngestQueue {
         if let Some(job) = state.jobs.get_mut(job_id) {
             job.article_id = Some(article_id);
             state.updated_at = isoformat(now_utc());
-            let _ = self.persist_locked(&state);
+            if let Err(e) = self.persist_locked(&state) {
+                tracing::error!(job_id = %job_id, error = %e, "failed to persist attach_article_id");
+            }
         }
     }
 
@@ -259,7 +305,9 @@ impl IngestQueue {
             job.warnings = warnings;
             job.finished_at = Some(isoformat(now_utc()));
             state.updated_at = isoformat(now_utc());
-            let _ = self.persist_locked(&state);
+            if let Err(e) = self.persist_locked(&state) {
+                tracing::error!(job_id = %job_id, error = %e, "failed to persist finish_saved; in-memory state says Saved but disk may be stale");
+            }
         }
     }
 
@@ -276,7 +324,9 @@ impl IngestQueue {
             job.outcome = Some(summary);
             job.finished_at = Some(isoformat(now_utc()));
             state.updated_at = isoformat(now_utc());
-            let _ = self.persist_locked(&state);
+            if let Err(e) = self.persist_locked(&state) {
+                tracing::error!(job_id = %job_id, error = %e, "failed to persist finish_rejected");
+            }
         }
     }
 
@@ -287,7 +337,9 @@ impl IngestQueue {
             job.error = Some(error);
             job.finished_at = Some(isoformat(now_utc()));
             state.updated_at = isoformat(now_utc());
-            let _ = self.persist_locked(&state);
+            if let Err(e) = self.persist_locked(&state) {
+                tracing::error!(job_id = %job_id, error = %e, "failed to persist finish_failed");
+            }
         }
     }
 
@@ -585,5 +637,119 @@ mod tests {
         let err = job.error.unwrap();
         assert_eq!(err.issue_type, "daemon_restart");
         assert_eq!(err.stage, "fetching");
+    }
+
+    #[tokio::test]
+    async fn submit_dedup_conflicts_for_recent_saved() {
+        let (_tmp, paths) = test_paths();
+        let queue = IngestQueue::load_or_create(&paths, test_config());
+        // Submit, then manually mark it Saved with a fresh timestamp.
+        let resp = queue
+            .submit(IngestRequest {
+                url: "https://zhihu.com/p/1".into(),
+                title: None,
+                tags: vec![],
+                source_hint: None,
+            })
+            .await
+            .unwrap();
+        queue
+            .finish_saved(
+                &resp.job_id,
+                "article-abc".to_string(),
+                IngestOutcomeSummary {
+                    clean_status: "polished".into(),
+                    clean_profile: "zhihu".into(),
+                    value_decision: Some("save".into()),
+                    value_score: Some(0.9),
+                    normalized_chars: 1200,
+                    polished: true,
+                    summary_generated: true,
+                    embedded: true,
+                },
+                Vec::new(),
+            )
+            .await;
+        // Second submission must 409.
+        let err = queue
+            .submit(IngestRequest {
+                url: "https://zhihu.com/p/1".into(),
+                title: None,
+                tags: vec![],
+                source_hint: None,
+            })
+            .await
+            .unwrap_err();
+        match err {
+            IngestSubmitError::DuplicateSaved {
+                existing_article_id,
+                finished_at,
+            } => {
+                assert_eq!(existing_article_id.as_deref(), Some("article-abc"));
+                assert!(!finished_at.is_empty());
+            }
+            other => panic!("expected DuplicateSaved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_dedup_allows_after_window_expires() {
+        let (_tmp, paths) = test_paths();
+        // Tight window so we can reason about "outside"
+        let cfg = ArticleMemoryIngestConfig {
+            dedup_window_hours: 1,
+            host_profiles: vec![ArticleMemoryHostProfile {
+                match_suffix: "zhihu.com".into(),
+                profile: "articles-zhihu".into(),
+                source: Some("zhihu".into()),
+            }],
+            ..Default::default()
+        };
+        let queue = IngestQueue::load_or_create(&paths, Arc::new(cfg));
+        let resp = queue
+            .submit(IngestRequest {
+                url: "https://zhihu.com/p/1".into(),
+                title: None,
+                tags: vec![],
+                source_hint: None,
+            })
+            .await
+            .unwrap();
+        queue
+            .finish_saved(
+                &resp.job_id,
+                "article-old".to_string(),
+                IngestOutcomeSummary {
+                    clean_status: "polished".into(),
+                    clean_profile: "zhihu".into(),
+                    value_decision: Some("save".into()),
+                    value_score: Some(0.9),
+                    normalized_chars: 1200,
+                    polished: true,
+                    summary_generated: true,
+                    embedded: true,
+                },
+                Vec::new(),
+            )
+            .await;
+        // Manually backdate finished_at to 2 hours ago (outside 1h window).
+        {
+            let mut state = queue.inner.lock().await;
+            let job = state.jobs.get_mut(&resp.job_id).unwrap();
+            let two_hours_ago = now_utc() - Duration::hours(2);
+            job.finished_at = Some(isoformat(two_hours_ago));
+        }
+        // Second submission should now be accepted as a NEW job.
+        let resp2 = queue
+            .submit(IngestRequest {
+                url: "https://zhihu.com/p/1".into(),
+                title: None,
+                tags: vec![],
+                source_hint: None,
+            })
+            .await
+            .unwrap();
+        assert_ne!(resp.job_id, resp2.job_id);
+        assert!(!resp2.deduped);
     }
 }
