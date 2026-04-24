@@ -5,7 +5,8 @@ use super::types::{
 use crate::app_config::{ArticleMemoryConfig, ArticleMemoryIngestConfig, ModelProviderConfig};
 use crate::server::Crawl4aiProfileLocks;
 use crate::{
-    add_article_memory, crawl4ai_crawl, normalize_article_memory, resolve_article_embedding_config,
+    add_article_memory, add_article_memory_override, crawl4ai_crawl,
+    find_article_by_normalized_url, normalize_article_memory, resolve_article_embedding_config,
     resolve_article_normalize_config, resolve_article_value_config,
     upsert_article_memory_embedding, ArticleMemoryAddRequest, ArticleMemoryRecordStatus,
     Crawl4aiConfig, Crawl4aiPageRequest, Crawl4aiSupervisor, RuntimePaths,
@@ -156,22 +157,37 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
         .clone()
         .unwrap_or_else(|| "web".to_string());
 
-    let record = match add_article_memory(
-        &deps.paths,
-        ArticleMemoryAddRequest {
-            title,
-            url: Some(job.url.clone()),
-            source,
-            language: None,
-            tags: job.tags.clone(),
-            content: markdown,
-            summary: None,
-            translation: None,
-            status: ArticleMemoryRecordStatus::Candidate,
-            value_score: None,
-            notes: None,
-        },
-    ) {
+    let add_req = ArticleMemoryAddRequest {
+        title,
+        url: Some(job.url.clone()),
+        source,
+        language: None,
+        tags: job.tags.clone(),
+        content: markdown,
+        summary: None,
+        translation: None,
+        status: ArticleMemoryRecordStatus::Candidate,
+        value_score: None,
+        notes: None,
+    };
+
+    // On force, reuse the existing article_id (update-in-place) so the
+    // worker does not append a duplicate row alongside the record that
+    // Rule 0 dedup would have rejected without force.
+    let existing_for_force = if job.force {
+        find_article_by_normalized_url(&deps.paths, &job.normalized_url)
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
+    let record = match existing_for_force {
+        Some(existing) => add_article_memory_override(&deps.paths, add_req, &existing.id),
+        None => add_article_memory(&deps.paths, add_req),
+    };
+
+    let record = match record {
         Ok(rec) => rec,
         Err(err) => {
             queue

@@ -69,6 +69,8 @@ pub struct IngestJob {
     pub title_override: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub force: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_hint: Option<String>,
     pub profile_name: String,

@@ -422,3 +422,79 @@ async fn ingest_different_hosts_parallelize() {
         "expected all 3 cross-host workers to run concurrently; observed max={max}"
     );
 }
+
+#[tokio::test]
+async fn worker_force_path_reuses_existing_article_id() {
+    let (_tmp, paths) = test_paths();
+
+    // Seed an existing record with id "original" at the target URL.
+    let mut index = crate::article_memory::internals::load_index(&paths).unwrap();
+    index
+        .articles
+        .push(crate::article_memory::ArticleMemoryRecord {
+            id: "original".into(),
+            title: "OLD".into(),
+            url: Some("https://example.com/p/1".into()),
+            source: "test".into(),
+            language: None,
+            tags: vec![],
+            status: crate::article_memory::ArticleMemoryRecordStatus::Saved,
+            value_score: Some(0.5),
+            captured_at: "2026-04-01T00:00:00Z".into(),
+            updated_at: "2026-04-01T00:00:00Z".into(),
+            content_path: "articles/original.md".into(),
+            raw_path: None,
+            normalized_path: None,
+            summary_path: None,
+            translation_path: None,
+            notes: None,
+            clean_status: None,
+            clean_profile: None,
+        });
+    crate::article_memory::internals::write_index(&paths, &index).unwrap();
+
+    let mock = MockState::default();
+    *mock.markdown_body.lock().unwrap() = rich_markdown_body();
+    let supervisor = spawn_mock_supervisor(&paths, mock.clone()).await;
+    let ingest_cfg = default_ingest_cfg();
+    let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    IngestWorkerPool::spawn(
+        queue.clone(),
+        IngestWorkerDeps {
+            paths: paths.clone(),
+            crawl4ai_config: test_crawl4ai_config(),
+            supervisor,
+            profile_locks: Arc::new(Mutex::new(HashMap::new())),
+            article_memory_config: default_article_memory_cfg(),
+            providers: Arc::new(vec![]),
+            ingest_config: ingest_cfg,
+        },
+        1,
+    );
+
+    let resp = queue
+        .submit(IngestRequest {
+            url: "https://example.com/p/1".into(),
+            force: true,
+            title: None,
+            tags: vec![],
+            source_hint: None,
+        })
+        .await
+        .unwrap();
+    let _ = wait_for_terminal(&queue, &resp.job_id, 10).await;
+
+    let index = crate::article_memory::internals::load_index(&paths).unwrap();
+    assert_eq!(index.articles.len(), 1, "no duplicate row appended");
+    assert_eq!(index.articles[0].id, "original", "id stable under force");
+    let content_path = paths
+        .runtime_dir
+        .join("article-memory/articles/original.md");
+    let content = std::fs::read_to_string(&content_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", content_path.display()));
+    assert!(
+        content.contains("Agent Memory") || content.contains("Paragraph"),
+        "content overwritten with fresh crawl markdown; got first 120 chars: {:?}",
+        content.chars().take(120).collect::<String>()
+    );
+}

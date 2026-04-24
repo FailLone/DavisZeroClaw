@@ -178,8 +178,7 @@ pub fn add_article_memory(
 /// Update an existing article record in place, reusing `override_id`.
 /// Writes new content/summary/translation files under the same id, then
 /// atomically rewrites the index. Fails if `override_id` is not present
-/// in the index. Consumer: ingest worker `force` branch (Task 1f).
-#[allow(dead_code)]
+/// in the index.
 pub fn add_article_memory_override(
     paths: &RuntimePaths,
     request: ArticleMemoryAddRequest,
