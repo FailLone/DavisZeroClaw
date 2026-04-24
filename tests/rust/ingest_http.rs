@@ -88,6 +88,49 @@ async fn post_ingest_invalid_url_returns_400() {
 }
 
 #[tokio::test]
+async fn get_ingest_by_id_round_trip() {
+    // Regression: axum 0.7 uses `:job_id`, not `{job_id}`. A literal
+    // brace route silently never matches and every GET 404s even though
+    // the job exists in the queue. Submit a job, read list, then GET by
+    // id and expect 200.
+    let (state, _tmp) = build_state_for_test().await;
+    let app = build_app(state);
+
+    let submit = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/article-memory/ingest")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({"url": "https://example.com/p/1"})).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(submit.status(), StatusCode::ACCEPTED);
+    let body_bytes = axum::body::to_bytes(submit.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let job_id = body["job_id"].as_str().expect("job_id in response").to_string();
+
+    let get = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/article-memory/ingest/{job_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn post_ingest_ssrf_returns_400() {
     let (state, _tmp) = build_state_for_test().await;
     let app = build_app(state);

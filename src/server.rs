@@ -154,7 +154,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/article-memory/search", get(article_memory_search_handler))
         .route("/article-memory/ingest", post(ingest_submit_handler))
         .route("/article-memory/ingest", get(ingest_list_handler))
-        .route("/article-memory/ingest/{job_id}", get(ingest_get_handler))
+        .route("/article-memory/ingest/:job_id", get(ingest_get_handler))
         .route("/ha-mcp/capabilities", get(ha_mcp_capabilities))
         .route("/ha-mcp/live-context", get(ha_mcp_live_context))
         .layer(tower_http::trace::TraceLayer::new_for_http())
