@@ -38,6 +38,8 @@ class CrawlRequest(BaseModel):
     override_navigator: bool = True
     remove_overlay_elements: bool = True
     enable_stealth: bool = True
+    markdown_generator: bool = False
+    content_filter: Optional[str] = None  # "pruning" | "bm25" | None
 
 
 class CrawlResponse(BaseModel):
@@ -49,6 +51,7 @@ class CrawlResponse(BaseModel):
     cleaned_html: Optional[str] = None
     js_execution_result: Optional[Any] = None
     error_message: Optional[str] = None
+    markdown: Optional[str] = None
 
 
 def _collect_versions() -> dict[str, str]:
@@ -141,6 +144,20 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
         viewport_height=960,
         verbose=False,
     )
+    markdown_generator_cfg = None
+    if req.markdown_generator:
+        from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+        content_filter_obj = None
+        if req.content_filter == "pruning":
+            from crawl4ai.content_filter_strategy import PruningContentFilter
+            content_filter_obj = PruningContentFilter()
+        elif req.content_filter == "bm25":
+            from crawl4ai.content_filter_strategy import BM25ContentFilter
+            content_filter_obj = BM25ContentFilter()
+        markdown_generator_cfg = DefaultMarkdownGenerator(
+            content_filter=content_filter_obj
+        )
+
     crawler_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         page_timeout=req.timeout_secs * 1000,
@@ -151,6 +168,7 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
         remove_overlay_elements=req.remove_overlay_elements,
         wait_for=req.wait_for,
         js_code=req.js_code,
+        markdown_generator=markdown_generator_cfg,
     )
 
     try:
@@ -173,6 +191,16 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
             detail={"error": "crawl_failed", "details": str(exc)},
         )
 
+    response_markdown = None
+    if req.markdown_generator:
+        markdown_v2 = getattr(result, "markdown_v2", None)
+        if markdown_v2 is not None:
+            response_markdown = getattr(markdown_v2, "fit_markdown", None) or getattr(
+                markdown_v2, "raw_markdown", None
+            )
+        if response_markdown is None:
+            response_markdown = getattr(result, "markdown", None)
+
     return CrawlResponse(
         success=bool(getattr(result, "success", False)),
         url=getattr(result, "url", req.url),
@@ -182,4 +210,5 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
         cleaned_html=getattr(result, "cleaned_html", None),
         js_execution_result=getattr(result, "js_execution_result", None),
         error_message=getattr(result, "error_message", None),
+        markdown=response_markdown,
     )
