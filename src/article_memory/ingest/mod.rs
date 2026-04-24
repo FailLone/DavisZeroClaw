@@ -1,5 +1,6 @@
 mod host_profile;
 mod queue;
+pub(super) mod reply_text;
 mod types;
 mod worker;
 
