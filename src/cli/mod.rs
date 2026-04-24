@@ -302,6 +302,11 @@ enum ArticlesCommand {
         #[arg(long)]
         no_llm: bool,
     },
+    /// Submit a URL for asynchronous crawl + ingest.
+    Ingest {
+        #[command(subcommand)]
+        command: ArticleIngestCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -347,6 +352,32 @@ enum ArticleStrategyCommand {
         #[arg(long, default_value_t = 20)]
         recent: usize,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ArticleIngestCommand {
+    /// Submit a URL for ingest.
+    Submit {
+        url: String,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        source_hint: Option<String>,
+        /// Poll the job to terminal state before returning.
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Show recent ingest jobs.
+    History {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        failed: bool,
+    },
+    /// Show a single ingest job.
+    Show { job_id: String },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -533,6 +564,19 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             ArticlesCommand::Normalize { id, all, no_llm } => {
                 normalize_articles(&paths, id, all, no_llm).await
             }
+            ArticlesCommand::Ingest { command } => match command {
+                ArticleIngestCommand::Submit {
+                    url,
+                    tags,
+                    title,
+                    source_hint,
+                    wait,
+                } => submit_article_ingest(&paths, url, tags, title, source_hint, wait).await,
+                ArticleIngestCommand::History { limit, failed } => {
+                    list_article_ingest(&paths, limit, failed).await
+                }
+                ArticleIngestCommand::Show { job_id } => show_article_ingest(&paths, &job_id).await,
+            },
         },
     }
 }

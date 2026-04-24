@@ -124,3 +124,27 @@ target_topics = [
   "multi-agent",
   "LLM",
 ]
+
+# --- URL ingest pipeline (crawl4ai → article_memory) ----------------------
+# Defaults are safe: enabled with 3 workers, empty host_profiles routes
+# everything to a generic profile. To scope cookies per site, log a profile
+# in with `daviszeroclaw crawl profile login articles-<name>` and list it
+# below.
+#
+# [ingest]
+# enabled = true
+# max_concurrency = 3
+# default_profile = "articles-generic"
+# min_markdown_chars = 600
+# dedup_window_hours = 24
+# allow_private_hosts = []
+#
+# [[ingest.host_profiles]]
+# match = "zhihu.com"
+# profile = "articles-zhihu"
+# source = "zhihu"
+#
+# [[ingest.host_profiles]]
+# match = "mp.weixin.qq.com"
+# profile = "articles-weixin"
+# source = "weixin"

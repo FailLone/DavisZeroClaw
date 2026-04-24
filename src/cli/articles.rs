@@ -462,3 +462,102 @@ pub(super) fn print_article_status(status: &crate::ArticleMemoryStatusResponse) 
     println!("- rejected: {}", status.rejected_articles);
     println!("- archived: {}", status.archived_articles);
 }
+
+pub(super) async fn submit_article_ingest(
+    paths: &RuntimePaths,
+    url: String,
+    tags: Vec<String>,
+    title: Option<String>,
+    source_hint: Option<String>,
+    wait: bool,
+) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let ingest_config = std::sync::Arc::new(config.article_memory.ingest.clone());
+    let queue = std::sync::Arc::new(crate::IngestQueue::load_or_create(
+        paths,
+        ingest_config.clone(),
+    ));
+    let req = crate::IngestRequest {
+        url,
+        title,
+        tags,
+        source_hint: source_hint.or_else(|| Some("cli".to_string())),
+    };
+    let resp = queue.submit(req).await?;
+    println!("Submitted ingest job.");
+    println!("- job_id: {}", resp.job_id);
+    println!("- status: {}", resp.status.as_str());
+    println!("- deduped: {}", resp.deduped);
+    if !wait {
+        return Ok(());
+    }
+    // Note: in --wait mode we are a one-shot CLI — no worker is running here.
+    // Workers only run inside the daemon. --wait polls the daemon's
+    // persisted view via the queue's JSON file.
+    println!("Polling... (Ctrl-C to stop)");
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let queue_reload = crate::IngestQueue::load_or_create(paths, ingest_config.clone());
+        if let Some(job) = queue_reload.get(&resp.job_id).await {
+            println!(
+                "  status={}  article_id={:?}",
+                job.status.as_str(),
+                job.article_id
+            );
+            if job.status.is_terminal() {
+                if let Some(err) = &job.error {
+                    println!("  error: {} — {}", err.issue_type, err.message);
+                }
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn list_article_ingest(
+    paths: &RuntimePaths,
+    limit: usize,
+    only_failed: bool,
+) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let ingest_config = std::sync::Arc::new(config.article_memory.ingest.clone());
+    let queue = crate::IngestQueue::load_or_create(paths, ingest_config);
+    let jobs = queue
+        .list(&crate::ListFilter {
+            status: None,
+            limit: Some(limit),
+            only_failed,
+        })
+        .await;
+    println!("Ingest history: {} job(s)", jobs.len());
+    for job in jobs {
+        println!(
+            "- {} | {} | profile={} | {} | {}",
+            job.id,
+            job.status.as_str(),
+            job.profile_name,
+            job.submitted_at,
+            job.url
+        );
+        if let Some(err) = &job.error {
+            println!("  error: {} — {}", err.issue_type, err.message);
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn show_article_ingest(paths: &RuntimePaths, job_id: &str) -> Result<()> {
+    let config = check_local_config(paths)?;
+    let ingest_config = std::sync::Arc::new(config.article_memory.ingest.clone());
+    let queue = crate::IngestQueue::load_or_create(paths, ingest_config);
+    match queue.get(job_id).await {
+        Some(job) => {
+            let rendered =
+                serde_json::to_string_pretty(&job).unwrap_or_else(|_| format!("{job:?}"));
+            println!("{rendered}");
+            Ok(())
+        }
+        None => bail!("ingest job not found: {job_id}"),
+    }
+}
