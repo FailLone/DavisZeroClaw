@@ -464,7 +464,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         },
         Commands::Crawl { command } => match command {
             CrawlCommand::Install => install_crawl4ai(&paths),
-            CrawlCommand::Check => check_crawl4ai(&paths),
+            CrawlCommand::Check => check_crawl4ai(&paths).await,
             CrawlCommand::Source { command } => match command {
                 CrawlSourceCommand::List => list_crawl_sources(),
             },

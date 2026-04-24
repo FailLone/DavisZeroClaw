@@ -1,11 +1,10 @@
 use super::*;
 use crate::{run_builtin_crawl_source, RuntimePaths};
 use anyhow::{anyhow, bail, Context, Result};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 pub(super) fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
     let python3 = resolve_host_python3().context(
@@ -96,7 +95,7 @@ pub(super) fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn check_crawl4ai(paths: &RuntimePaths) -> Result<()> {
+pub(super) async fn check_crawl4ai(paths: &RuntimePaths) -> Result<()> {
     let config = check_local_config(paths)?;
     let python = resolve_crawl4ai_python(paths)?;
     let adapter_dir = paths.crawl4ai_adapter_dir();
@@ -138,32 +137,119 @@ pub(super) fn check_crawl4ai(paths: &RuntimePaths) -> Result<()> {
         bail!("Crawl4AI or Playwright import failed");
     }
 
-    let adapter_check = command_output(
-        Command::new(&python)
-            .arg("-m")
-            .arg("crawl4ai_adapter")
-            .arg("crawl")
-            .arg("--help")
-            .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
-            .env("PYTHONPATH", paths.repo_root.display().to_string())
-            .env("PATH", tool_path_env())
-            .current_dir(&paths.repo_root),
-    )?;
-    if !adapter_check.status_success {
-        print_command_streams(&adapter_check.stdout, &adapter_check.stderr);
-        bail!("crawl4ai_adapter did not respond to --help");
-    }
-
     fs::create_dir_all(paths.crawl4ai_profiles_root())?;
-    println!("Running adapter health crawl.");
-    let health_result = run_crawl4ai_health_check(paths, &python)?;
-    if !health_result {
-        bail!("crawl4ai adapter health crawl failed");
-    }
 
-    println!("Crawl4AI runtime is ready.");
+    // Probe via HTTP. Two paths:
+    //   1. No daemon running → spin a throwaway supervisor, probe /health,
+    //      run one end-to-end crawl on example.com, then drop. kill_on_drop
+    //      kills the spawned Python child when the local Arc goes away.
+    //   2. Daemon running → our start() fails because the port is held.
+    //      Fall through to probing the daemon's own /health on :3010,
+    //      which is the source of truth for a live system.
+    let outcome = probe_crawl4ai_runtime(paths, &config.crawl4ai).await;
+    match outcome {
+        Ok(ProbeOutcome::Throwaway { versions }) => {
+            if !versions.is_empty() {
+                println!("Adapter versions: {versions}");
+            }
+            println!(
+                "Crawl4AI runtime is ready (throwaway adapter spawn + end-to-end crawl succeeded)."
+            );
+        }
+        Ok(ProbeOutcome::DaemonRunning) => {
+            println!(
+                "A daemon is already running and holding the crawl4ai port — skipping throwaway spawn."
+            );
+            println!("Daemon /health reports crawl4ai OK. For a live end-to-end probe use:");
+            println!("  curl -sS http://127.0.0.1:3010/health | jq");
+        }
+        Err(err) => {
+            bail!("crawl4ai runtime check failed: {err}");
+        }
+    }
     println!("Next: daviszeroclaw crawl profile login express-ali");
     Ok(())
+}
+
+enum ProbeOutcome {
+    Throwaway { versions: String },
+    DaemonRunning,
+}
+
+async fn probe_crawl4ai_runtime(
+    paths: &RuntimePaths,
+    config: &crate::Crawl4aiConfig,
+) -> Result<ProbeOutcome> {
+    use crate::{crawl4ai_crawl, Crawl4aiError, Crawl4aiPageRequest, Crawl4aiSupervisor};
+
+    match Crawl4aiSupervisor::start(paths.clone(), config.clone()).await {
+        Ok(supervisor) => {
+            let versions = read_adapter_versions(&supervisor).await.unwrap_or_default();
+            let request = Crawl4aiPageRequest {
+                profile_name: "_healthcheck".to_string(),
+                url: "https://example.com".to_string(),
+                wait_for: None,
+                js_code: None,
+                markdown: false,
+            };
+            match crawl4ai_crawl(paths, config, &supervisor, request).await {
+                Ok(page) => {
+                    println!(
+                        "Health crawl url: {}",
+                        page.current_url.as_deref().unwrap_or("unknown")
+                    );
+                    if let Some(code) = page.status_code {
+                        println!("Health crawl status: {code}");
+                    }
+                    drop(supervisor);
+                    Ok(ProbeOutcome::Throwaway { versions })
+                }
+                Err(e) => {
+                    drop(supervisor);
+                    Err(anyhow::anyhow!("end-to-end crawl failed: {e}"))
+                }
+            }
+        }
+        Err(Crawl4aiError::ServerUnavailable { details })
+            if details.contains("Address already in use")
+                || details.contains("port")
+                || details.contains("bind") =>
+        {
+            // Port busy — assume daemon is holding it. Probe the daemon
+            // itself to make sure it's actually our daemon and not some
+            // unrelated process squatting on 11235.
+            if probe_daemon_health().await {
+                Ok(ProbeOutcome::DaemonRunning)
+            } else {
+                Err(anyhow::anyhow!(
+                    "crawl4ai port is busy but daemon /health does not respond: {details}"
+                ))
+            }
+        }
+        Err(e) => Err(anyhow::anyhow!("spawn supervisor: {e}")),
+    }
+}
+
+async fn read_adapter_versions(supervisor: &crate::Crawl4aiSupervisor) -> Option<String> {
+    let base = supervisor.base_url().await;
+    let client = supervisor.http_client();
+    let resp = client.get(format!("{base}/health")).send().await.ok()?;
+    let body: Value = resp.json().await.ok()?;
+    body.get("versions").map(|v| v.to_string())
+}
+
+async fn probe_daemon_health() -> bool {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    match client.get("http://127.0.0.1:3010/health").send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
 }
 
 pub(super) fn list_crawl_sources() -> Result<()> {
@@ -206,103 +292,6 @@ pub(super) async fn run_crawl_source(
         println!("{}", serde_json::to_string_pretty(&result)?);
     }
     Ok(())
-}
-
-pub(super) fn run_crawl4ai_health_check(paths: &RuntimePaths, python: &Path) -> Result<bool> {
-    let health_profile = paths.crawl4ai_profiles_root().join("_healthcheck");
-    fs::create_dir_all(&health_profile)?;
-
-    let payload = json!({
-        "profile_path": health_profile.display().to_string(),
-        "url": "https://example.com",
-        "timeout_secs": 45,
-        "headless": true,
-        "magic": false,
-        "simulate_user": false,
-        "override_navigator": false,
-        "remove_overlay_elements": true,
-        "enable_stealth": true,
-    });
-
-    let mut child = Command::new(python)
-        .arg("-m")
-        .arg("crawl4ai_adapter")
-        .arg("crawl")
-        .arg("--runtime-dir")
-        .arg(paths.runtime_dir.display().to_string())
-        .env(
-            "CRAWL4_AI_BASE_DIRECTORY",
-            paths.runtime_dir.display().to_string(),
-        )
-        .env("PYTHONPATH", paths.repo_root.display().to_string())
-        .env("PATH", tool_path_env())
-        .current_dir(&paths.repo_root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("spawn crawl4ai health check")?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        let raw = serde_json::to_vec(&payload)?;
-        stdin.write_all(&raw)?;
-    }
-
-    let output = child.wait_with_output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !stderr.is_empty() {
-        println!("{stderr}");
-    }
-    if !output.status.success() {
-        if !stdout.is_empty() {
-            println!("{stdout}");
-        }
-        return Ok(false);
-    }
-
-    let body = parse_crawl4ai_adapter_json(&output.stdout)
-        .context("parse crawl4ai health check response json")?;
-    let success = body
-        .get("success")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let current_url = body
-        .get("url")
-        .or_else(|| body.get("redirected_url"))
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let status_code = body
-        .get("status_code")
-        .and_then(Value::as_u64)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    println!("Health crawl url: {current_url}");
-    println!("Health crawl status: {status_code}");
-    if !success {
-        if let Some(error_message) = body
-            .get("error")
-            .or_else(|| body.get("error_message"))
-            .and_then(Value::as_str)
-        {
-            println!("Health crawl error: {error_message}");
-        }
-    }
-    Ok(success)
-}
-
-pub(super) fn parse_crawl4ai_adapter_json(stdout: &[u8]) -> Result<Value> {
-    let text = String::from_utf8_lossy(stdout);
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-            return Ok(value);
-        }
-    }
-    bail!("no json payload found in adapter stdout: {text}")
 }
 
 pub(super) async fn crawl_profile_login(paths: &RuntimePaths, profile: CrawlProfile) -> Result<()> {
