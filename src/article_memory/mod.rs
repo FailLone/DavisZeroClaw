@@ -306,7 +306,7 @@ pub use pipeline::*;
 mod embedding;
 pub use embedding::*;
 
-mod internals;
+pub(crate) mod internals;
 use internals::*;
 
 mod cleaning_internals;

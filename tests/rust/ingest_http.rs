@@ -134,6 +134,67 @@ async fn get_ingest_by_id_round_trip() {
 }
 
 #[tokio::test]
+async fn post_ingest_returns_409_article_exists_when_url_already_saved() {
+    // Seed an existing article_memory record at the target URL, then POST
+    // the same URL without `force`. Rule 0 in `IngestQueue::submit` must
+    // reject with `ArticleExists`, and the server handler must render it
+    // as HTTP 409 with the contract payload consumed by the skill.
+    let (state, _tmp) = build_state_for_test().await;
+    let mut index = crate::article_memory::internals::load_index(&state.paths).unwrap();
+    index
+        .articles
+        .push(crate::article_memory::ArticleMemoryRecord {
+            id: "existing".into(),
+            title: "Already Saved".into(),
+            url: Some("https://example.com/p/1".into()),
+            source: "test".into(),
+            language: None,
+            tags: vec![],
+            status: crate::article_memory::ArticleMemoryRecordStatus::Saved,
+            value_score: Some(0.9),
+            captured_at: "2026-04-20T00:00:00Z".into(),
+            updated_at: "2026-04-20T00:00:00Z".into(),
+            content_path: "articles/existing.md".into(),
+            raw_path: None,
+            normalized_path: None,
+            summary_path: None,
+            translation_path: None,
+            notes: None,
+            clean_status: None,
+            clean_profile: None,
+        });
+    crate::article_memory::internals::write_index(&state.paths, &index).unwrap();
+
+    let app = build_app(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/article-memory/ingest")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "url": "https://example.com/p/1"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["error"], "article_exists");
+    assert_eq!(body["existing_article_id"], "existing");
+    assert_eq!(body["title"], "Already Saved");
+    assert_eq!(body["url"], "https://example.com/p/1");
+    assert!(body["action"].as_str().unwrap().contains("force"));
+}
+
+#[tokio::test]
 async fn post_ingest_ssrf_returns_400() {
     let (state, _tmp) = build_state_for_test().await;
     let app = build_app(state);

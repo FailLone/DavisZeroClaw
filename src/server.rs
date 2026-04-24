@@ -968,19 +968,18 @@ async fn ingest_submit_handler(
             ),
             IngestSubmitError::ArticleExists {
                 existing_article_id,
+                title,
                 url,
-                ..
-            } => {
-                tracing::error!(
-                    existing_article_id = %existing_article_id,
-                    url = %url,
-                    "ArticleExists hit placeholder arm — Task 1d landed out of order"
-                );
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "not_yet_mapped", "detail": "pending task 1d"})),
-                )
-            }
+            } => (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "article_exists",
+                    "existing_article_id": existing_article_id,
+                    "title": title,
+                    "url": url,
+                    "action": "resubmit with \"force\": true to re-crawl and update"
+                })),
+            ),
         },
     }
 }

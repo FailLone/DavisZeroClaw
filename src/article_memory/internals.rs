@@ -50,7 +50,7 @@ pub(super) fn ensure_article_memory_dirs(paths: &RuntimePaths) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn load_index(paths: &RuntimePaths) -> Result<ArticleMemoryIndex> {
+pub(crate) fn load_index(paths: &RuntimePaths) -> Result<ArticleMemoryIndex> {
     let raw = fs::read_to_string(paths.article_memory_index_path()).with_context(|| {
         format!(
             "failed to read {}",
@@ -95,7 +95,7 @@ pub(super) fn load_embedding_index(paths: &RuntimePaths) -> Result<ArticleMemory
     Ok(index)
 }
 
-pub(super) fn write_index(paths: &RuntimePaths, index: &ArticleMemoryIndex) -> Result<()> {
+pub(crate) fn write_index(paths: &RuntimePaths, index: &ArticleMemoryIndex) -> Result<()> {
     ensure_article_memory_dirs(paths)?;
     let index_path = paths.article_memory_index_path();
     let parent = index_path.parent().ok_or_else(|| {
