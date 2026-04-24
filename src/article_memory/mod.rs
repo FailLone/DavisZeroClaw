@@ -20,6 +20,7 @@ pub fn init_article_memory(paths: &RuntimePaths) -> Result<ArticleMemoryStatusRe
     if !paths.article_memory_index_path().is_file() {
         write_index(paths, &ArticleMemoryIndex::new())?;
     }
+    migrate_urls_to_normalized(paths)?;
     check_article_memory(paths)
 }
 
@@ -253,6 +254,31 @@ pub fn add_article_memory_override(
     index.updated_at = isoformat(now_utc());
     internals::write_index(paths, &index)?;
     Ok(replacement)
+}
+
+/// One-time startup pass: rewrites `record.url` to its normalized form so
+/// `find_article_by_normalized_url` can match it. Idempotent — running it
+/// twice is a no-op because `normalize_url` is a fixpoint. Returns the
+/// number of records that changed.
+pub fn migrate_urls_to_normalized(paths: &RuntimePaths) -> Result<usize> {
+    let mut index = internals::load_index(paths)?;
+    let mut changed = 0usize;
+    for article in &mut index.articles {
+        let Some(url) = article.url.as_ref() else {
+            continue;
+        };
+        let normalized = normalize_url(url).unwrap_or_else(|_| url.clone());
+        if normalized != *url {
+            article.url = Some(normalized);
+            changed += 1;
+        }
+    }
+    if changed > 0 {
+        index.updated_at = isoformat(now_utc());
+        internals::write_index(paths, &index)?;
+        tracing::info!(count = changed, "migrated article URLs to normalized form");
+    }
+    Ok(changed)
 }
 
 /// Linear-scan lookup by canonical URL. Returns the first record whose
@@ -995,5 +1021,81 @@ mod override_tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("missing"));
+    }
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::*;
+    use crate::article_memory::types::{ArticleMemoryRecord, ArticleMemoryRecordStatus};
+    use tempfile::TempDir;
+
+    fn mk_paths(tmp: &TempDir) -> RuntimePaths {
+        RuntimePaths {
+            repo_root: tmp.path().to_path_buf(),
+            runtime_dir: tmp.path().join("runtime"),
+        }
+    }
+
+    fn seed(paths: &RuntimePaths, records: Vec<(&str, Option<&str>)>) {
+        init_article_memory(paths).unwrap();
+        let mut index = internals::load_index(paths).unwrap();
+        index.articles = records
+            .into_iter()
+            .map(|(id, url)| ArticleMemoryRecord {
+                id: id.into(),
+                title: format!("T {id}"),
+                url: url.map(String::from),
+                source: "test".into(),
+                language: None,
+                tags: vec![],
+                status: ArticleMemoryRecordStatus::Saved,
+                value_score: Some(0.5),
+                captured_at: "2026-04-01T00:00:00Z".into(),
+                updated_at: "2026-04-01T00:00:00Z".into(),
+                content_path: format!("articles/{id}.md"),
+                raw_path: None,
+                normalized_path: None,
+                summary_path: None,
+                translation_path: None,
+                notes: None,
+                clean_status: None,
+                clean_profile: None,
+            })
+            .collect();
+        internals::write_index(paths, &index).unwrap();
+    }
+
+    #[test]
+    fn migration_normalizes_trailing_slash_and_fragment() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed(&paths, vec![("aaa", Some("https://example.com/p#frag"))]);
+        let changed = migrate_urls_to_normalized(&paths).unwrap();
+        assert!(changed >= 1, "expected at least one URL rewritten");
+        let index = internals::load_index(&paths).unwrap();
+        assert!(
+            !index.articles[0].url.as_ref().unwrap().contains('#'),
+            "fragment should be stripped"
+        );
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed(&paths, vec![("aaa", Some("https://example.com/p#frag"))]);
+        migrate_urls_to_normalized(&paths).unwrap();
+        let changed_second = migrate_urls_to_normalized(&paths).unwrap();
+        assert_eq!(changed_second, 0, "second run should be no-op");
+    }
+
+    #[test]
+    fn migration_skips_records_with_no_url() {
+        let tmp = TempDir::new().unwrap();
+        let paths = mk_paths(&tmp);
+        seed(&paths, vec![("aaa", None)]);
+        let changed = migrate_urls_to_normalized(&paths).unwrap();
+        assert_eq!(changed, 0);
     }
 }
