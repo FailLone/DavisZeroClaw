@@ -1,31 +1,33 @@
 [skill]
 name = "article-memory"
-description = "抓取、存储、检索、回忆长文章与技术文档。用户发来 URL 想保存、追问已存文章、或想刷新某一篇时调用。不要用于存个人偏好（用 mempalace-memory）。"
+description = "Capture, store, search, and recall long-form articles and technical docs. Use when the user sends a URL to save, asks about previously saved articles, or wants to refresh a stored article. Do not use for personal preferences; use mempalace-memory for that."
 version = "0.2.0"
 tags = ["articles", "knowledge-base", "research", "learning"]
 
 prompts = [
   """Boundary: use article-memory for article records, URLs, summaries, translations, value scores, tags, and research reports. Use mempalace-memory for durable personal facts, preferences, corrections, and conversation continuity. Never store secrets, API keys, passwords, or tokens.""",
-  """用户发来纯 URL（或「存一下 <url>」「收藏 <url>」等保存意图）时：
-用 http_request POST http://127.0.0.1:3010/article-memory/ingest
-body: {"url": "<url>", "source_hint": "<channel>", "reply_handle": "<sender 或 null>", "tags": []}
-channel 取值：iMessage → "imessage"；webhook/Shortcut → "shortcut"；其他 → 按实际来源
-iMessage 场景下 reply_handle 必须填为 sender；daemon 完成后会通过 osascript 主动给用户发完成通知。其他 channel 不要填 reply_handle（保持为 null）。
-返回 202 + {job_id, status: "pending"} → 告诉用户「已收到，开始抓取」
-返回 409 + {error: "article_exists", title, existing_article_id} → 告诉用户「《title》已经收藏过了，需要刷新吗」
-返回 409 + {error: "duplicate_within_window", ...} → 告诉用户「最近已经存过，请稍后再试」
-返回 503 + {error: "persistence_degraded", ...} → 告诉用户「daemon 存储出问题，请联系管理员处理磁盘」""",
-  """用户表达「帮我刷新 <url>」「这篇文档有没有更新」「重抓一下 <url>」「再抓一遍」等重新拉取意图时：
-同上，body 里追加 "force": true
-force=true 跳过 article 级去重，直接重抓并覆盖原记录（article_id 保持不变）。
-409 article_exists 不会在 force=true 时出现；但如果同一 URL 有 active job 或刚在 24h 窗口内存过，依然会 409（duplicate_active_job / duplicate_within_window）。""",
-  """用户问「那篇存好了吗」「某个 job 现在什么状态」「最近失败了几篇」等复盘类问题时：
-- 查具体 job：用 article-memory.ingest_status，传入 job_id
-- 列最近任务 / 失败项：用 article-memory.ingest_list；传 status=failed 只看失败""",
-  """用户问已存文章相关问题（检索 / 列最近 / 健康检查）时：
-- article-memory.search：语义 + 关键词混合检索
-- article-memory.list：列最近几篇
-- article-memory.status：系统状态""",
+  """Save intent — triggered when the user sends a bare URL or a save request (Chinese examples: "存一下 <url>", "收藏 <url>"; English examples: "save this", "add this to my reading list").
+Call http_request POST http://127.0.0.1:3010/article-memory/ingest with body:
+{"url": "<url>", "source_hint": "<channel>", "reply_handle": "<sender or null>", "tags": []}
+channel values: iMessage → "imessage"; webhook/Shortcut → "shortcut"; otherwise use the real source name.
+In the iMessage channel, reply_handle MUST be set to the sender handle; the daemon sends a completion notification via osascript when the job finishes. In every other channel, leave reply_handle as null.
+Response handling:
+- 202 + {job_id, status: "pending"} → tell the user "Received, crawling started."
+- 409 + {error: "article_exists", title, existing_article_id} → tell the user "《title》 is already saved; want me to refresh it?"
+- 409 + {error: "duplicate_within_window", ...} → tell the user "Saved this recently; try again later."
+- 503 + {error: "persistence_degraded", ...} → tell the user "Daemon storage is degraded; please check disk space and restart."
+""",
+  """Refresh intent — triggered by re-crawl requests (Chinese examples: "帮我刷新 <url>", "重抓一下 <url>", "再抓一遍"; English examples: "refresh this", "re-fetch <url>").
+Same endpoint and body as the save intent, but add "force": true.
+force=true bypasses article-level dedup and overwrites the existing record (article_id is preserved).
+409 article_exists never appears when force=true; however, duplicate_active_job (in-flight) and duplicate_within_window (saved within the last 24h) can still return 409.""",
+  """Job status / audit intent — triggered when the user asks about job progress or recent failures (Chinese examples: "那篇存好了吗", "某个 job 现在什么状态", "最近失败了几篇"; English examples: "did that article save?", "show recent failures").
+- Specific job: call article-memory.ingest_status with the job_id.
+- Recent jobs / failures: call article-memory.ingest_list; pass status=failed to see failures only.""",
+  """Query intent over stored articles — triggered by search / listing / health questions.
+- article-memory.search: hybrid keyword + semantic search.
+- article-memory.list: recent article records.
+- article-memory.status: system status.""",
   """Quality gate: before saving, evaluate whether the article has clear authorship, durable insight, original analysis, useful detail, strong references, or practical workflow worth revisiting. Reject promotional, copied, thin, misleading, unverifiable, or momentarily interesting material.""",
   """Status values: candidate (not yet evaluated), saved (accepted), rejected (intentionally not kept), archived (old but retained). Ingest defaults to candidate.""",
   """Strategy review: when user asks to improve article cleaning or value judging, run 'daviszeroclaw articles strategy review-input --recent 20' first. Edit only config/davis/article_memory.toml. If config cannot express the needed behavior, write implementation request under .runtime/davis/article-memory/reports/implementation-requests/."""
@@ -58,19 +60,19 @@ limit = "Maximum number of results. Default 10."
 
 [[tools]]
 name = "ingest_status"
-description = "查询一个 URL 抓取 job 的当前状态。返回 status ∈ {pending, fetching, cleaning, judging, embedding, saved, rejected, failed}，以及 article_id (若已存)、error (若失败)、outcome 字段。用户问『那篇存好了吗』时调用。"
+description = "Fetch the current state of a URL ingest job. Returns status ∈ {pending, fetching, cleaning, judging, embedding, saved, rejected, failed}, plus article_id (when stored), error (on failure), and outcome. Call when the user asks about job progress (Chinese examples: \"那篇存好了吗\"; English: \"did that save?\")."
 kind = "http"
 command = "http://127.0.0.1:3010/article-memory/ingest/{{job_id}}"
 
 [tools.args]
-job_id = "submit 时返回的 UUID。"
+job_id = "UUID returned by the submit call."
 
 [[tools]]
 name = "ingest_list"
-description = "列出最近的抓取任务。可按状态过滤（status=failed 等）。用于用户问『最近哪些抓取失败了』『今天存了几篇』等复盘类问题。"
+description = "List recent ingest jobs. Optionally filter by status (e.g. status=failed). Call for audit questions (Chinese examples: \"最近哪些抓取失败了\", \"今天存了几篇\"; English: \"show today's ingests\", \"recent failures\")."
 kind = "http"
 command = "http://127.0.0.1:3010/article-memory/ingest?status={{status}}&limit={{limit}}"
 
 [tools.args]
-status = "pending|fetching|cleaning|judging|embedding|saved|rejected|failed 之一，留空返回全部。"
+status = "One of pending|fetching|cleaning|judging|embedding|saved|rejected|failed. Leave empty to return all."
 limit = "Maximum number of jobs to return. Default 20, max 200."
