@@ -2,7 +2,9 @@ use super::queue::IngestQueue;
 use super::types::{
     IngestJob, IngestJobError, IngestJobStatus, IngestOutcome, IngestOutcomeSummary,
 };
-use crate::app_config::{ArticleMemoryConfig, ArticleMemoryIngestConfig, ModelProviderConfig};
+use crate::app_config::{
+    ArticleMemoryConfig, ArticleMemoryIngestConfig, ImessageConfig, ModelProviderConfig,
+};
 use crate::server::Crawl4aiProfileLocks;
 use crate::{
     add_article_memory, add_article_memory_override, crawl4ai_crawl,
@@ -23,6 +25,7 @@ pub struct IngestWorkerDeps {
     pub article_memory_config: Arc<ArticleMemoryConfig>,
     pub providers: Arc<Vec<ModelProviderConfig>>,
     pub ingest_config: Arc<ArticleMemoryIngestConfig>,
+    pub imessage_config: Arc<ImessageConfig>,
 }
 
 pub struct IngestWorkerPool;
@@ -319,4 +322,38 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
         }
     };
     queue.finish(&job.id, outcome).await;
+
+    // Terminal notification: only if job carries a reply_handle. Article is
+    // already saved by this point; notification failure never changes job
+    // state — worst case is a warn log.
+    if let Some(handle) = job.reply_handle.as_deref() {
+        let Some(finished_job) = queue.get(&job.id).await else {
+            return;
+        };
+        let resolved_title = finished_job.article_id.as_ref().and_then(|id| {
+            super::super::internals::load_index(&deps.paths)
+                .ok()
+                .and_then(|idx| {
+                    idx.articles
+                        .into_iter()
+                        .find(|r| &r.id == id)
+                        .map(|r| r.title)
+                })
+        });
+        let text = super::reply_text::build_reply_text(&finished_job, resolved_title.as_deref());
+        if text.is_empty() {
+            return;
+        }
+        if let Err(err) =
+            crate::imessage_send::notify_user(handle, &text, &deps.imessage_config.allowed_contacts)
+                .await
+        {
+            tracing::warn!(
+                job_id = %finished_job.id,
+                handle = %handle,
+                error = %err,
+                "imessage notification failed; job state unchanged"
+            );
+        }
+    }
 }

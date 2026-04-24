@@ -211,6 +211,9 @@ async fn ingest_happy_path_end_to_end() {
             article_memory_config: default_article_memory_cfg(),
             providers: Arc::new(vec![]),
             ingest_config: ingest_cfg,
+            imessage_config: Arc::new(crate::app_config::ImessageConfig {
+                allowed_contacts: vec!["+8618672954807".into()],
+            }),
         },
         1,
     );
@@ -257,6 +260,9 @@ async fn ingest_empty_markdown_rejected() {
             article_memory_config: default_article_memory_cfg(),
             providers: Arc::new(vec![]),
             ingest_config: ingest_cfg,
+            imessage_config: Arc::new(crate::app_config::ImessageConfig {
+                allowed_contacts: vec!["+8618672954807".into()],
+            }),
         },
         1,
     );
@@ -297,6 +303,9 @@ async fn ingest_crawl_server_error_surfaces_issue_type() {
             article_memory_config: default_article_memory_cfg(),
             providers: Arc::new(vec![]),
             ingest_config: ingest_cfg,
+            imessage_config: Arc::new(crate::app_config::ImessageConfig {
+                allowed_contacts: vec!["+8618672954807".into()],
+            }),
         },
         1,
     );
@@ -338,6 +347,9 @@ async fn ingest_same_host_serializes() {
             article_memory_config: default_article_memory_cfg(),
             providers: Arc::new(vec![]),
             ingest_config: ingest_cfg,
+            imessage_config: Arc::new(crate::app_config::ImessageConfig {
+                allowed_contacts: vec!["+8618672954807".into()],
+            }),
         },
         3,
     );
@@ -393,6 +405,9 @@ async fn ingest_different_hosts_parallelize() {
             article_memory_config: default_article_memory_cfg(),
             providers: Arc::new(vec![]),
             ingest_config: ingest_cfg,
+            imessage_config: Arc::new(crate::app_config::ImessageConfig {
+                allowed_contacts: vec!["+8618672954807".into()],
+            }),
         },
         3,
     );
@@ -473,6 +488,9 @@ async fn worker_force_path_reuses_existing_article_id() {
             article_memory_config: default_article_memory_cfg(),
             providers: Arc::new(vec![]),
             ingest_config: ingest_cfg,
+            imessage_config: Arc::new(crate::app_config::ImessageConfig {
+                allowed_contacts: vec!["+8618672954807".into()],
+            }),
         },
         1,
     );
@@ -503,4 +521,48 @@ async fn worker_force_path_reuses_existing_article_id() {
         "content overwritten with fresh crawl markdown; got first 120 chars: {:?}",
         content.chars().take(120).collect::<String>()
     );
+}
+
+#[tokio::test]
+async fn worker_skips_notify_when_reply_handle_missing() {
+    // CLI/cron path: no reply_handle → notify hook is a no-op and the
+    // worker still reaches Saved normally.
+    let (_tmp, paths) = test_paths();
+    let mock = MockState::default();
+    *mock.markdown_body.lock().unwrap() = rich_markdown_body();
+    let supervisor = spawn_mock_supervisor(&paths, mock.clone()).await;
+    let ingest_cfg = default_ingest_cfg();
+    let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    IngestWorkerPool::spawn(
+        queue.clone(),
+        IngestWorkerDeps {
+            paths: paths.clone(),
+            crawl4ai_config: test_crawl4ai_config(),
+            supervisor,
+            profile_locks: Arc::new(Mutex::new(HashMap::new())),
+            article_memory_config: default_article_memory_cfg(),
+            providers: Arc::new(vec![]),
+            ingest_config: ingest_cfg,
+            imessage_config: Arc::new(crate::app_config::ImessageConfig {
+                allowed_contacts: vec!["+8618672954807".into()],
+            }),
+        },
+        1,
+    );
+
+    let resp = queue
+        .submit(IngestRequest {
+            url: "https://example.com/p/42".into(),
+            force: false,
+            title: None,
+            tags: vec![],
+            source_hint: None,
+            reply_handle: None,
+        })
+        .await
+        .unwrap();
+
+    let job = wait_for_terminal(&queue, &resp.job_id, 10).await;
+    assert!(job.reply_handle.is_none());
+    assert_eq!(job.status, IngestJobStatus::Saved);
 }

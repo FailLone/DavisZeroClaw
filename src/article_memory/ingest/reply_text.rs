@@ -1,8 +1,7 @@
 use super::types::{IngestJob, IngestJobStatus};
 
 /// Returns an empty string for non-terminal job states (caller should
-/// treat empty as "don't send"). Consumer: worker notify hook (Task 2d).
-#[allow(dead_code)]
+/// treat empty as "don't send"). Consumer: worker notify hook.
 pub fn build_reply_text(job: &IngestJob, resolved_title: Option<&str>) -> String {
     match job.status {
         IngestJobStatus::Saved => {
@@ -25,7 +24,6 @@ pub fn build_reply_text(job: &IngestJob, resolved_title: Option<&str>) -> String
 
 /// Map stable `issue_type` strings to user-facing Chinese phrases.
 /// Unknown types fall through to a generic hint.
-#[allow(dead_code)]
 pub fn humanize_issue_type(issue_type: &str) -> &'static str {
     match issue_type {
         "crawl4ai_unavailable" => "抓取服务暂时不可用，请稍后再试",
