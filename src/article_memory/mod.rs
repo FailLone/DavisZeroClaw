@@ -295,6 +295,11 @@ use internals::*;
 mod cleaning_internals;
 use cleaning_internals::*;
 
+mod ingest;
+// Consumed starting Task 4; remove allow once consumers land.
+#[allow(unused_imports)]
+pub use ingest::*;
+
 #[cfg(test)]
 mod tests {
     use super::*;
