@@ -79,6 +79,57 @@ fn host_matches_suffix(host: &str, suffix: &str) -> bool {
     host == s || host.ends_with(&format!(".{s}"))
 }
 
+/// Block reserved / private IPv4 ranges that `Ipv4Addr::is_private()` misses.
+/// Returns a human-readable reason string if blocked, `None` if public.
+fn blocked_ipv4_reason(ip: std::net::Ipv4Addr) -> Option<&'static str> {
+    if ip.is_loopback() {
+        return Some("loopback");
+    }
+    if ip.is_private() {
+        return Some("RFC 1918 private");
+    }
+    if ip.is_link_local() {
+        return Some("link-local (169.254/16)");
+    }
+    if ip.is_broadcast() {
+        return Some("broadcast");
+    }
+    if ip.is_multicast() {
+        return Some("multicast");
+    }
+    if ip.is_unspecified() {
+        return Some("unspecified (0.0.0.0)");
+    }
+    let o = ip.octets();
+    // RFC 6598 Carrier-Grade NAT (100.64.0.0/10)
+    if o[0] == 100 && (o[1] & 0xc0) == 64 {
+        return Some("RFC 6598 CGN (100.64/10)");
+    }
+    // RFC 6890 IETF protocol assignments (192.0.0.0/24)
+    if o[0] == 192 && o[1] == 0 && o[2] == 0 {
+        return Some("RFC 6890 (192.0.0/24)");
+    }
+    // RFC 5737 TEST-NET ranges
+    if o[0] == 192 && o[1] == 0 && o[2] == 2 {
+        return Some("TEST-NET-1 (192.0.2/24)");
+    }
+    if o[0] == 198 && o[1] == 51 && o[2] == 100 {
+        return Some("TEST-NET-2 (198.51.100/24)");
+    }
+    if o[0] == 203 && o[1] == 0 && o[2] == 113 {
+        return Some("TEST-NET-3 (203.0.113/24)");
+    }
+    // RFC 2544 benchmarking (198.18.0.0/15)
+    if o[0] == 198 && (o[1] & 0xfe) == 18 {
+        return Some("RFC 2544 benchmarking (198.18/15)");
+    }
+    // RFC 1112 Class E reserved (240.0.0.0/4)
+    if (o[0] & 0xf0) == 0xf0 {
+        return Some("class E reserved (240/4)");
+    }
+    None
+}
+
 pub fn normalize_url(url: &str) -> Result<String, NormalizeUrlError> {
     let mut parsed = Url::parse(url).map_err(|_| NormalizeUrlError::InvalidUrl)?;
     parsed.set_fragment(None);
@@ -109,19 +160,20 @@ pub fn validate_url_for_ingest(
     }
     match host {
         Host::Ipv4(ip) => {
-            if ip.is_loopback()
-                || ip.is_private()
-                || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_multicast()
-                || ip.is_unspecified()
-            {
+            if let Some(reason) = blocked_ipv4_reason(ip) {
                 return Err(UrlValidationError::PrivateAddressBlocked(format!(
-                    "{ip} is a private/loopback/link-local/broadcast/multicast/unspecified address"
+                    "{ip} blocked: {reason}"
                 )));
             }
         }
         Host::Ipv6(ip) => {
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                if let Some(reason) = blocked_ipv4_reason(v4) {
+                    return Err(UrlValidationError::PrivateAddressBlocked(format!(
+                        "IPv4-mapped IPv6 {ip} resolves to {v4} blocked: {reason}"
+                    )));
+                }
+            }
             if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
                 return Err(UrlValidationError::PrivateAddressBlocked(format!(
                     "{ip} is a loopback/unspecified/multicast IPv6 address"
@@ -343,5 +395,95 @@ mod tests {
             ..Default::default()
         };
         assert!(validate_url_for_ingest("http://wiki.internal/page", &cfg).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_cgn_range() {
+        let cfg = cfg_with(vec![]);
+        for url in [
+            "http://100.64.0.1/",
+            "http://100.100.100.100/",
+            "http://100.127.255.254/",
+        ] {
+            match validate_url_for_ingest(url, &cfg) {
+                Err(UrlValidationError::PrivateAddressBlocked(msg)) => {
+                    assert!(msg.contains("CGN"), "expected CGN reason, got: {msg}");
+                }
+                other => panic!("expected PrivateAddressBlocked for {url}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn validate_allows_edge_of_cgn_range() {
+        // 100.63/... is public (not in 100.64/10); 100.128/... is public
+        let cfg = cfg_with(vec![]);
+        assert!(validate_url_for_ingest("https://100.63.255.255/", &cfg).is_ok());
+        assert!(validate_url_for_ingest("https://100.128.0.1/", &cfg).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_test_net_ranges() {
+        let cfg = cfg_with(vec![]);
+        for url in [
+            "http://192.0.2.1/",
+            "http://198.51.100.7/",
+            "http://203.0.113.42/",
+        ] {
+            assert!(matches!(
+                validate_url_for_ingest(url, &cfg),
+                Err(UrlValidationError::PrivateAddressBlocked(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn validate_rejects_benchmarking_range() {
+        let cfg = cfg_with(vec![]);
+        for url in ["http://198.18.0.1/", "http://198.19.255.254/"] {
+            assert!(matches!(
+                validate_url_for_ingest(url, &cfg),
+                Err(UrlValidationError::PrivateAddressBlocked(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn validate_rejects_class_e_range() {
+        let cfg = cfg_with(vec![]);
+        for url in ["http://240.0.0.1/", "http://250.1.2.3/"] {
+            assert!(matches!(
+                validate_url_for_ingest(url, &cfg),
+                Err(UrlValidationError::PrivateAddressBlocked(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn validate_rejects_ipv4_mapped_private_ipv6() {
+        let cfg = cfg_with(vec![]);
+        for url in [
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::ffff:10.0.0.1]/",
+            "http://[::ffff:192.168.1.1]/",
+            "http://[::ffff:100.64.0.1]/",
+        ] {
+            match validate_url_for_ingest(url, &cfg) {
+                Err(UrlValidationError::PrivateAddressBlocked(msg)) => {
+                    assert!(
+                        msg.contains("IPv4-mapped"),
+                        "expected IPv4-mapped reason, got: {msg}"
+                    );
+                }
+                other => panic!("expected PrivateAddressBlocked for {url}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn validate_allows_public_ipv4_mapped_ipv6() {
+        let cfg = cfg_with(vec![]);
+        // 1.1.1.1 wrapped in IPv4-mapped IPv6
+        assert!(validate_url_for_ingest("https://[::ffff:1.1.1.1]/", &cfg).is_ok());
     }
 }
