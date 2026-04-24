@@ -8,6 +8,7 @@ use crate::{
     resolve_entity_payload, search_article_memory, upsert_article_memory_embedding,
     ArticleMemoryAddRequest, ArticleMemoryConfig, ControlAction, ControlConfig, Crawl4aiConfig,
     Crawl4aiSupervisor, ExecuteControlRequest, FailureReason, HaClient, HaMcpClient,
+    IngestJobStatus, IngestQueue, IngestRequest, IngestSubmitError, ListFilter,
     ModelProviderConfig, ProxyError, RuntimePaths,
 };
 use axum::body::Bytes;
@@ -77,6 +78,7 @@ pub struct AppState {
     pub article_memory_config: Arc<ArticleMemoryConfig>,
     pub providers: Arc<Vec<ModelProviderConfig>>,
     pub shortcut_secret: String,
+    pub ingest_queue: Arc<IngestQueue>,
 }
 
 impl AppState {
@@ -91,6 +93,7 @@ impl AppState {
         article_memory_config: Arc<ArticleMemoryConfig>,
         providers: Arc<Vec<ModelProviderConfig>>,
         shortcut_secret: String,
+        ingest_queue: Arc<IngestQueue>,
     ) -> Self {
         Self {
             client,
@@ -103,6 +106,7 @@ impl AppState {
             article_memory_config,
             providers,
             shortcut_secret,
+            ingest_queue,
         }
     }
 
@@ -143,6 +147,9 @@ pub fn build_app(state: AppState) -> Router {
             post(article_memory_normalize_handler),
         )
         .route("/article-memory/search", get(article_memory_search_handler))
+        .route("/article-memory/ingest", post(ingest_submit_handler))
+        .route("/article-memory/ingest", get(ingest_list_handler))
+        .route("/article-memory/ingest/{job_id}", get(ingest_get_handler))
         .route("/ha-mcp/capabilities", get(ha_mcp_capabilities))
         .route("/ha-mcp/live-context", get(ha_mcp_live_context))
         .layer(tower_http::trace::TraceLayer::new_for_http())
@@ -887,6 +894,102 @@ async fn ha_mcp_live_context(State(state): State<AppState>) -> (StatusCode, Json
             }),
         ),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct IngestListQuery {
+    status: Option<String>,
+    limit: Option<usize>,
+    only_failed: Option<bool>,
+}
+
+async fn ingest_submit_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<IngestRequest>,
+) -> (StatusCode, Json<Value>) {
+    match state.ingest_queue.submit(payload).await {
+        Ok(resp) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::to_value(resp).unwrap_or_else(|_| json!({}))),
+        ),
+        Err(err) => match err {
+            IngestSubmitError::InvalidUrl(d) => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_url", "detail": d})),
+            ),
+            IngestSubmitError::InvalidScheme => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "invalid_scheme",
+                    "detail": "only http and https schemes are allowed",
+                })),
+            ),
+            IngestSubmitError::PrivateAddressBlocked(d) => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "private_address_blocked", "detail": d})),
+            ),
+            IngestSubmitError::DuplicateSaved {
+                existing_article_id,
+                finished_at,
+            } => (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "duplicate_within_window",
+                    "existing_article_id": existing_article_id,
+                    "finished_at": finished_at,
+                })),
+            ),
+            IngestSubmitError::IngestDisabled => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "ingest_disabled"})),
+            ),
+            IngestSubmitError::PersistenceError(d) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "persistence_error", "detail": d})),
+            ),
+        },
+    }
+}
+
+async fn ingest_get_handler(
+    State(state): State<AppState>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+) -> (StatusCode, Json<Value>) {
+    match state.ingest_queue.get(&job_id).await {
+        Some(job) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(job).unwrap_or_else(|_| json!({}))),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "job_not_found", "job_id": job_id})),
+        ),
+    }
+}
+
+async fn ingest_list_handler(
+    State(state): State<AppState>,
+    Query(q): Query<IngestListQuery>,
+) -> Json<Value> {
+    let status = q.status.as_deref().and_then(|s| match s {
+        "pending" => Some(IngestJobStatus::Pending),
+        "fetching" => Some(IngestJobStatus::Fetching),
+        "cleaning" => Some(IngestJobStatus::Cleaning),
+        "judging" => Some(IngestJobStatus::Judging),
+        "embedding" => Some(IngestJobStatus::Embedding),
+        "saved" => Some(IngestJobStatus::Saved),
+        "rejected" => Some(IngestJobStatus::Rejected),
+        "failed" => Some(IngestJobStatus::Failed),
+        _ => None,
+    });
+    let filter = ListFilter {
+        status,
+        limit: q.limit,
+        only_failed: q.only_failed.unwrap_or(false),
+    };
+    let jobs = state.ingest_queue.list(&filter).await;
+    let total = jobs.len();
+    Json(json!({"jobs": jobs, "total": total}))
 }
 
 #[cfg(test)]

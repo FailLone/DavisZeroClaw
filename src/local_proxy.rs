@@ -1,7 +1,7 @@
 use crate::{
     build_app, build_shortcut_bridge_app, check_local_config, load_control_config,
     render_runtime_config, zeroclaw_env_vars, AppState, Crawl4aiSupervisor, HaClient, HaMcpClient,
-    HaState, RuntimePaths,
+    HaState, IngestQueue, RuntimePaths,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -120,6 +120,14 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         Arc::new(Crawl4aiSupervisor::disabled(paths.clone()))
     };
 
+    // Construct the ingest queue up front so the HTTP surface can accept
+    // submissions. Task 11 will extend this with worker spawning; for now
+    // submissions pile up until workers come online.
+    let ingest_queue = Arc::new(IngestQueue::load_or_create(
+        &paths,
+        Arc::new(local_config.article_memory.ingest.clone()),
+    ));
+
     let state = AppState::new(
         client,
         mcp_client,
@@ -130,6 +138,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         Arc::new(local_config.article_memory.clone()),
         Arc::new(local_config.providers.clone()),
         local_config.webhook.secret.clone(),
+        ingest_queue,
     );
     let app = build_app(state.clone());
     let shortcut_bridge_app = build_shortcut_bridge_app(state);

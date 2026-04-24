@@ -45,6 +45,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
 
 # Release profile hardening for the launchd daemon binary.
 # lto="thin"        — 15-25% smaller binary, faster startup
