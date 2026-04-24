@@ -1,3 +1,4 @@
+mod article_memory_ingest_worker;
 mod control;
 mod crawl4ai;
 mod express;

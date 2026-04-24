@@ -25,10 +25,10 @@ pub use advisor::{
     build_replacement_candidates_report, generate_config_report, generate_config_report_with_states,
 };
 pub use app_config::{
-    ArticleMemoryConfig, ArticleMemoryEmbeddingConfig, ArticleMemoryNormalizeConfig,
-    Crawl4aiConfig, HomeAssistantConfig, ImessageConfig, LocalConfig, McpConfig, McpServerConfig,
-    McpTransport, ModelProviderConfig, RoutingConfig, RoutingProfileConfig, RoutingProfilesConfig,
-    WebhookConfig,
+    ArticleMemoryConfig, ArticleMemoryEmbeddingConfig, ArticleMemoryHostProfile,
+    ArticleMemoryIngestConfig, ArticleMemoryNormalizeConfig, Crawl4aiConfig, HomeAssistantConfig,
+    ImessageConfig, LocalConfig, McpConfig, McpServerConfig, McpTransport, ModelProviderConfig,
+    RoutingConfig, RoutingProfileConfig, RoutingProfilesConfig, WebhookConfig,
 };
 pub use article_memory::{
     add_article_memory, article_cleaning_preferred_selectors, article_memory_status,
@@ -36,17 +36,21 @@ pub use article_memory::{
     hybrid_search_article_memory, init_article_memory, judge_all_article_value_memory,
     judge_article_value_memory, list_article_clean_reports, list_article_memory,
     list_article_value_reports, normalize_all_article_memory, normalize_article_memory,
-    rebuild_article_memory_embeddings, replay_article_cleaning, resolve_article_embedding_config,
-    resolve_article_normalize_config, resolve_article_value_config, search_article_memory,
-    upsert_article_memory_embedding, ArticleCleanAuditResponse, ArticleCleanReport,
-    ArticleCleaningCheckResponse, ArticleCleaningConfig, ArticleCleaningDefaults,
-    ArticleCleaningReplayResponse, ArticleCleaningSiteStrategy, ArticleMemoryAddRequest,
-    ArticleMemoryEmbeddingIndex, ArticleMemoryEmbeddingRebuildResponse,
+    normalize_url, rebuild_article_memory_embeddings, replay_article_cleaning,
+    resolve_article_embedding_config, resolve_article_normalize_config,
+    resolve_article_value_config, resolve_profile, search_article_memory,
+    upsert_article_memory_embedding, validate_url_for_ingest, ArticleCleanAuditResponse,
+    ArticleCleanReport, ArticleCleaningCheckResponse, ArticleCleaningConfig,
+    ArticleCleaningDefaults, ArticleCleaningReplayResponse, ArticleCleaningSiteStrategy,
+    ArticleMemoryAddRequest, ArticleMemoryEmbeddingIndex, ArticleMemoryEmbeddingRebuildResponse,
     ArticleMemoryEmbeddingRecord, ArticleMemoryListResponse, ArticleMemoryNormalizeResponse,
     ArticleMemoryRecord, ArticleMemoryRecordStatus, ArticleMemorySearchHit,
     ArticleMemorySearchResponse, ArticleMemoryStatusResponse, ArticleStrategyReviewInputResponse,
-    ArticleValueAuditResponse, ArticleValueConfig, ArticleValueReport,
-    ResolvedArticleEmbeddingConfig, ResolvedArticleNormalizeConfig, ResolvedArticleValueConfig,
+    ArticleValueAuditResponse, ArticleValueConfig, ArticleValueReport, IngestJob, IngestJobError,
+    IngestJobStatus, IngestOutcome, IngestOutcomeSummary, IngestQueue, IngestQueueState,
+    IngestRequest, IngestResponse, IngestSubmitError, IngestWorkerDeps, IngestWorkerPool,
+    ListFilter, NormalizeUrlError, ResolvedArticleEmbeddingConfig, ResolvedArticleNormalizeConfig,
+    ResolvedArticleValueConfig, ResolvedProfile, UrlValidationError,
 };
 pub use audit::{audit_entity, parse_window};
 pub use constants::{
