@@ -1,5 +1,7 @@
 use super::queue::IngestQueue;
-use super::types::{IngestJob, IngestJobError, IngestJobStatus, IngestOutcomeSummary};
+use super::types::{
+    IngestJob, IngestJobError, IngestJobStatus, IngestOutcome, IngestOutcomeSummary,
+};
 use crate::app_config::{ArticleMemoryConfig, ArticleMemoryIngestConfig, ModelProviderConfig};
 use crate::server::Crawl4aiProfileLocks;
 use crate::{
@@ -87,13 +89,13 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
             let issue_type = err.issue_type().to_string();
             let message = err.to_string();
             queue
-                .finish_failed(
+                .finish(
                     &job.id,
-                    IngestJobError {
+                    IngestOutcome::Failed(IngestJobError {
                         issue_type,
                         message,
                         stage: "fetching".into(),
-                    },
+                    }),
                 )
                 .await;
             return;
@@ -104,13 +106,13 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
         Some(m) => m.to_string(),
         None => {
             queue
-                .finish_failed(
+                .finish(
                     &job.id,
-                    IngestJobError {
+                    IngestOutcome::Failed(IngestJobError {
                         issue_type: "empty_content".into(),
                         message: "crawl4ai returned no markdown field".into(),
                         stage: "fetching".into(),
-                    },
+                    }),
                 )
                 .await;
             return;
@@ -118,9 +120,9 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
     };
     if markdown.chars().count() < deps.ingest_config.min_markdown_chars {
         queue
-            .finish_failed(
+            .finish(
                 &job.id,
-                IngestJobError {
+                IngestOutcome::Failed(IngestJobError {
                     issue_type: "empty_content".into(),
                     message: format!(
                         "markdown length {} below min_markdown_chars {}",
@@ -128,7 +130,7 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
                         deps.ingest_config.min_markdown_chars
                     ),
                     stage: "fetching".into(),
-                },
+                }),
             )
             .await;
         return;
@@ -173,13 +175,13 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
         Ok(rec) => rec,
         Err(err) => {
             queue
-                .finish_failed(
+                .finish(
                     &job.id,
-                    IngestJobError {
+                    IngestOutcome::Failed(IngestJobError {
                         issue_type: "pipeline_error".into(),
                         message: err.to_string(),
                         stage: "cleaning".into(),
-                    },
+                    }),
                 )
                 .await;
             return;
@@ -198,13 +200,13 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
         Ok(cfg) => cfg,
         Err(err) => {
             queue
-                .finish_failed(
+                .finish(
                     &job.id,
-                    IngestJobError {
+                    IngestOutcome::Failed(IngestJobError {
                         issue_type: "pipeline_error".into(),
                         message: format!("resolve_article_normalize_config: {err}"),
                         stage: "judging".into(),
-                    },
+                    }),
                 )
                 .await;
             return;
@@ -214,13 +216,13 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
         Ok(cfg) => cfg,
         Err(err) => {
             queue
-                .finish_failed(
+                .finish(
                     &job.id,
-                    IngestJobError {
+                    IngestOutcome::Failed(IngestJobError {
                         issue_type: "pipeline_error".into(),
                         message: format!("resolve_article_value_config: {err}"),
                         stage: "judging".into(),
-                    },
+                    }),
                 )
                 .await;
             return;
@@ -237,13 +239,13 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
         Ok(resp) => resp,
         Err(err) => {
             queue
-                .finish_failed(
+                .finish(
                     &job.id,
-                    IngestJobError {
+                    IngestOutcome::Failed(IngestJobError {
                         issue_type: "pipeline_error".into(),
                         message: err.to_string(),
                         stage: "judging".into(),
-                    },
+                    }),
                 )
                 .await;
             return;
@@ -288,13 +290,17 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
         embedded,
     };
 
-    if rejected {
-        queue
-            .finish_rejected(&job.id, Some(record.id.clone()), summary)
-            .await;
+    let outcome = if rejected {
+        IngestOutcome::Rejected {
+            article_id: Some(record.id.clone()),
+            summary,
+        }
     } else {
-        queue
-            .finish_saved(&job.id, record.id.clone(), summary, warnings)
-            .await;
-    }
+        IngestOutcome::Saved {
+            article_id: record.id.clone(),
+            summary,
+            warnings,
+        }
+    };
+    queue.finish(&job.id, outcome).await;
 }

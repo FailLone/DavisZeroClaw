@@ -1,7 +1,7 @@
 use super::host_profile::{normalize_url, resolve_profile, validate_url_for_ingest};
 use super::types::{
-    IngestJob, IngestJobError, IngestJobStatus, IngestOutcomeSummary, IngestRequest,
-    IngestResponse, IngestSubmitError, ListFilter,
+    IngestJob, IngestJobError, IngestJobStatus, IngestOutcome, IngestRequest, IngestResponse,
+    IngestSubmitError, ListFilter,
 };
 use crate::app_config::ArticleMemoryIngestConfig;
 use crate::support::{isoformat, now_utc};
@@ -346,55 +346,45 @@ impl IngestQueue {
         }
     }
 
-    pub async fn finish_saved(
-        &self,
-        job_id: &str,
-        article_id: String,
-        summary: IngestOutcomeSummary,
-        warnings: Vec<String>,
-    ) {
+    /// Atomically transition a job to a terminal state. Replaces the prior
+    /// three separate `finish_*` methods — one lock acquisition, one
+    /// persist, so the disk and in-memory views can never disagree about
+    /// which terminal state the job landed in.
+    pub async fn finish(&self, job_id: &str, outcome: IngestOutcome) {
         let mut state = self.inner.lock().await;
         if let Some(job) = state.jobs.get_mut(job_id) {
-            job.status = IngestJobStatus::Saved;
-            job.article_id = Some(article_id);
-            job.outcome = Some(summary);
-            job.warnings = warnings;
-            job.finished_at = Some(isoformat(now_utc()));
-            state.updated_at = isoformat(now_utc());
-            if let Err(e) = self.persist_locked(&state) {
-                tracing::error!(job_id = %job_id, error = %e, "failed to persist finish_saved; in-memory state says Saved but disk may be stale");
+            match outcome {
+                IngestOutcome::Saved {
+                    article_id,
+                    summary,
+                    warnings,
+                } => {
+                    job.status = IngestJobStatus::Saved;
+                    job.article_id = Some(article_id);
+                    job.outcome = Some(summary);
+                    job.warnings = warnings;
+                }
+                IngestOutcome::Rejected {
+                    article_id,
+                    summary,
+                } => {
+                    job.status = IngestJobStatus::Rejected;
+                    job.article_id = article_id;
+                    job.outcome = Some(summary);
+                }
+                IngestOutcome::Failed(error) => {
+                    job.status = IngestJobStatus::Failed;
+                    job.error = Some(error);
+                }
             }
-        }
-    }
-
-    pub async fn finish_rejected(
-        &self,
-        job_id: &str,
-        article_id: Option<String>,
-        summary: IngestOutcomeSummary,
-    ) {
-        let mut state = self.inner.lock().await;
-        if let Some(job) = state.jobs.get_mut(job_id) {
-            job.status = IngestJobStatus::Rejected;
-            job.article_id = article_id;
-            job.outcome = Some(summary);
             job.finished_at = Some(isoformat(now_utc()));
             state.updated_at = isoformat(now_utc());
             if let Err(e) = self.persist_locked(&state) {
-                tracing::error!(job_id = %job_id, error = %e, "failed to persist finish_rejected");
-            }
-        }
-    }
-
-    pub async fn finish_failed(&self, job_id: &str, error: IngestJobError) {
-        let mut state = self.inner.lock().await;
-        if let Some(job) = state.jobs.get_mut(job_id) {
-            job.status = IngestJobStatus::Failed;
-            job.error = Some(error);
-            job.finished_at = Some(isoformat(now_utc()));
-            state.updated_at = isoformat(now_utc());
-            if let Err(e) = self.persist_locked(&state) {
-                tracing::error!(job_id = %job_id, error = %e, "failed to persist finish_failed");
+                tracing::error!(
+                    job_id = %job_id,
+                    error = %e,
+                    "failed to persist ingest job terminal transition"
+                );
             }
         }
     }
@@ -494,6 +484,7 @@ impl IngestQueue {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::IngestOutcomeSummary;
     use super::*;
     use crate::app_config::{ArticleMemoryHostProfile, ArticleMemoryIngestConfig};
     use std::sync::Arc;
@@ -755,20 +746,22 @@ mod tests {
             .await
             .unwrap();
         queue
-            .finish_saved(
+            .finish(
                 &resp.job_id,
-                "article-abc".to_string(),
-                IngestOutcomeSummary {
-                    clean_status: "polished".into(),
-                    clean_profile: "zhihu".into(),
-                    value_decision: Some("save".into()),
-                    value_score: Some(0.9),
-                    normalized_chars: 1200,
-                    polished: true,
-                    summary_generated: true,
-                    embedded: true,
+                IngestOutcome::Saved {
+                    article_id: "article-abc".to_string(),
+                    summary: IngestOutcomeSummary {
+                        clean_status: "polished".into(),
+                        clean_profile: "zhihu".into(),
+                        value_decision: Some("save".into()),
+                        value_score: Some(0.9),
+                        normalized_chars: 1200,
+                        polished: true,
+                        summary_generated: true,
+                        embedded: true,
+                    },
+                    warnings: Vec::new(),
                 },
-                Vec::new(),
             )
             .await;
         // Second submission must 409.
@@ -817,20 +810,22 @@ mod tests {
             .await
             .unwrap();
         queue
-            .finish_saved(
+            .finish(
                 &resp.job_id,
-                "article-old".to_string(),
-                IngestOutcomeSummary {
-                    clean_status: "polished".into(),
-                    clean_profile: "zhihu".into(),
-                    value_decision: Some("save".into()),
-                    value_score: Some(0.9),
-                    normalized_chars: 1200,
-                    polished: true,
-                    summary_generated: true,
-                    embedded: true,
+                IngestOutcome::Saved {
+                    article_id: "article-old".to_string(),
+                    summary: IngestOutcomeSummary {
+                        clean_status: "polished".into(),
+                        clean_profile: "zhihu".into(),
+                        value_decision: Some("save".into()),
+                        value_score: Some(0.9),
+                        normalized_chars: 1200,
+                        polished: true,
+                        summary_generated: true,
+                        embedded: true,
+                    },
+                    warnings: Vec::new(),
                 },
-                Vec::new(),
             )
             .await;
         // Manually backdate finished_at to 2 hours ago (outside 1h window).
@@ -884,26 +879,29 @@ mod tests {
             perms.set_mode(0o555);
             std::fs::set_permissions(parent, perms).unwrap();
 
-            // Any state mutation triggers a persist — try to finish_saved the job.
+            // Any state mutation triggers a persist — drive the job through a
+            // terminal Saved transition.
             let job_id = {
                 let state = queue.inner.lock().await;
                 state.jobs.keys().next().cloned().unwrap()
             };
             queue
-                .finish_saved(
+                .finish(
                     &job_id,
-                    "a1".to_string(),
-                    IngestOutcomeSummary {
-                        clean_status: "polished".into(),
-                        clean_profile: "zhihu".into(),
-                        value_decision: Some("save".into()),
-                        value_score: Some(0.9),
-                        normalized_chars: 1200,
-                        polished: true,
-                        summary_generated: true,
-                        embedded: true,
+                    IngestOutcome::Saved {
+                        article_id: "a1".to_string(),
+                        summary: IngestOutcomeSummary {
+                            clean_status: "polished".into(),
+                            clean_profile: "zhihu".into(),
+                            value_decision: Some("save".into()),
+                            value_score: Some(0.9),
+                            normalized_chars: 1200,
+                            polished: true,
+                            summary_generated: true,
+                            embedded: true,
+                        },
+                        warnings: Vec::new(),
                     },
-                    Vec::new(),
                 )
                 .await;
 
