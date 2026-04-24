@@ -304,6 +304,7 @@ impl IngestQueue {
             tags: req.tags.clone(),
             force: req.force,
             source_hint: req.source_hint.clone(),
+            reply_handle: req.reply_handle.clone(),
             profile_name: resolved.profile,
             resolved_source: resolved.source,
             status: IngestJobStatus::Pending,
@@ -564,6 +565,7 @@ mod tests {
                 title: None,
                 tags: vec!["tag1".into()],
                 source_hint: Some("cli".into()),
+                reply_handle: None,
             })
             .await
             .unwrap();
@@ -590,6 +592,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap_err();
@@ -610,6 +613,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap_err();
@@ -627,6 +631,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap();
@@ -637,6 +642,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap();
@@ -657,6 +663,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap_err();
@@ -682,6 +689,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap();
@@ -707,6 +715,7 @@ mod tests {
                     title: None,
                     tags: vec![],
                     source_hint: None,
+                    reply_handle: None,
                 })
                 .await
                 .unwrap()
@@ -755,6 +764,7 @@ mod tests {
                     tags: vec![],
                     force: false,
                     source_hint: None,
+                    reply_handle: None,
                     profile_name: "articles-zhihu".into(),
                     resolved_source: Some("zhihu".into()),
                     status: IngestJobStatus::Fetching,
@@ -795,6 +805,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap();
@@ -825,6 +836,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap_err();
@@ -861,6 +873,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap();
@@ -898,6 +911,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap();
@@ -918,6 +932,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap();
@@ -999,6 +1014,7 @@ mod tests {
                         tags: vec![],
                         force: false,
                         source_hint: None,
+                        reply_handle: None,
                         profile_name: "articles-zhihu".into(),
                         resolved_source: None,
                         status: IngestJobStatus::Pending,
@@ -1058,6 +1074,7 @@ mod tests {
                         tags: vec![],
                         force: false,
                         source_hint: None,
+                        reply_handle: None,
                         profile_name: "articles-zhihu".into(),
                         resolved_source: None,
                         status: IngestJobStatus::Pending,
@@ -1117,6 +1134,7 @@ mod tests {
                     title: None,
                     tags: vec![],
                     source_hint: None,
+                    reply_handle: None,
                 })
                 .await
                 .unwrap_err();
@@ -1176,6 +1194,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .expect_err("should reject with ArticleExists");
@@ -1236,6 +1255,7 @@ mod tests {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .expect("force=true should bypass article dedup");

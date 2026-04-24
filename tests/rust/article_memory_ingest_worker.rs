@@ -221,6 +221,7 @@ async fn ingest_happy_path_end_to_end() {
             title: None,
             tags: vec!["test".into()],
             source_hint: Some("test".into()),
+            reply_handle: None,
         })
         .await
         .unwrap();
@@ -266,6 +267,7 @@ async fn ingest_empty_markdown_rejected() {
             title: None,
             tags: vec![],
             source_hint: None,
+            reply_handle: None,
         })
         .await
         .unwrap();
@@ -305,6 +307,7 @@ async fn ingest_crawl_server_error_surfaces_issue_type() {
             title: None,
             tags: vec![],
             source_hint: None,
+            reply_handle: None,
         })
         .await
         .unwrap();
@@ -347,6 +350,7 @@ async fn ingest_same_host_serializes() {
                 title: None,
                 tags: vec![],
                 source_hint: None,
+                reply_handle: None,
             })
             .await
             .unwrap();
@@ -407,6 +411,7 @@ async fn ingest_different_hosts_parallelize() {
                     title: None,
                     tags: vec![],
                     source_hint: None,
+                    reply_handle: None,
                 })
                 .await
                 .unwrap()
@@ -479,6 +484,7 @@ async fn worker_force_path_reuses_existing_article_id() {
             title: None,
             tags: vec![],
             source_hint: None,
+            reply_handle: None,
         })
         .await
         .unwrap();

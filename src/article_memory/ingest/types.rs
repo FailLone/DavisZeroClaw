@@ -73,6 +73,8 @@ pub struct IngestJob {
     pub force: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_handle: Option<String>,
     pub profile_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_source: Option<String>,
@@ -109,6 +111,8 @@ pub struct IngestRequest {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_handle: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -256,6 +260,22 @@ mod tests {
         let req: IngestRequest =
             serde_json::from_str(r#"{"url": "https://example.com/", "force": true}"#).unwrap();
         assert!(req.force);
+    }
+
+    #[test]
+    fn ingest_request_default_reply_handle_is_none() {
+        let req: IngestRequest =
+            serde_json::from_str(r#"{"url": "https://example.com/"}"#).unwrap();
+        assert!(req.reply_handle.is_none());
+    }
+
+    #[test]
+    fn ingest_request_accepts_reply_handle() {
+        let req: IngestRequest = serde_json::from_str(
+            r#"{"url": "https://example.com/", "reply_handle": "+8618672954807"}"#,
+        )
+        .unwrap();
+        assert_eq!(req.reply_handle.as_deref(), Some("+8618672954807"));
     }
 
     #[test]
