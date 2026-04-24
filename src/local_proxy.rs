@@ -140,6 +140,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                 article_memory_config: Arc::new(local_config.article_memory.clone()),
                 providers: Arc::new(local_config.providers.clone()),
                 ingest_config: ingest_config.clone(),
+                imessage_config: Arc::new(local_config.imessage.clone()),
             },
             ingest_config.max_concurrency,
         );
