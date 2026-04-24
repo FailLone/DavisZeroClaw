@@ -162,6 +162,8 @@ pub struct ArticleMemoryConfig {
     pub embedding: ArticleMemoryEmbeddingConfig,
     #[serde(default)]
     pub normalize: ArticleMemoryNormalizeConfig,
+    #[serde(default)]
+    pub ingest: ArticleMemoryIngestConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,6 +208,33 @@ pub struct ArticleMemoryNormalizeConfig {
     pub fallback_min_ratio: f32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ArticleMemoryIngestConfig {
+    #[serde(default = "default_ingest_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_ingest_max_concurrency")]
+    pub max_concurrency: usize,
+    #[serde(default = "default_ingest_default_profile")]
+    pub default_profile: String,
+    #[serde(default = "default_ingest_min_markdown_chars")]
+    pub min_markdown_chars: usize,
+    #[serde(default = "default_ingest_dedup_window_hours")]
+    pub dedup_window_hours: u64,
+    #[serde(default)]
+    pub allow_private_hosts: Vec<String>,
+    #[serde(default)]
+    pub host_profiles: Vec<ArticleMemoryHostProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ArticleMemoryHostProfile {
+    #[serde(rename = "match")]
+    pub match_suffix: String,
+    pub profile: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -244,6 +273,26 @@ fn default_article_normalize_summary_input_chars() -> usize {
 
 fn default_article_normalize_fallback_min_ratio() -> f32 {
     0.70
+}
+
+fn default_ingest_enabled() -> bool {
+    true
+}
+
+fn default_ingest_max_concurrency() -> usize {
+    3
+}
+
+fn default_ingest_default_profile() -> String {
+    "articles-generic".to_string()
+}
+
+fn default_ingest_min_markdown_chars() -> usize {
+    600
+}
+
+fn default_ingest_dedup_window_hours() -> u64 {
+    24
 }
 
 impl Default for Crawl4aiConfig {
@@ -289,6 +338,20 @@ impl Default for ArticleMemoryNormalizeConfig {
             max_polish_input_chars: default_article_normalize_max_polish_input_chars(),
             summary_input_chars: default_article_normalize_summary_input_chars(),
             fallback_min_ratio: default_article_normalize_fallback_min_ratio(),
+        }
+    }
+}
+
+impl Default for ArticleMemoryIngestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_ingest_enabled(),
+            max_concurrency: default_ingest_max_concurrency(),
+            default_profile: default_ingest_default_profile(),
+            min_markdown_chars: default_ingest_min_markdown_chars(),
+            dedup_window_hours: default_ingest_dedup_window_hours(),
+            allow_private_hosts: Vec::new(),
+            host_profiles: Vec::new(),
         }
     }
 }
@@ -570,6 +633,51 @@ fn validate_profile(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArticleMemoryConfig;
+
+    #[test]
+    fn article_memory_ingest_defaults_when_missing() {
+        let toml = r#"
+            [normalize]
+            [embedding]
+        "#;
+        let cfg: ArticleMemoryConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.ingest.enabled);
+        assert_eq!(cfg.ingest.max_concurrency, 3);
+        assert_eq!(cfg.ingest.default_profile, "articles-generic");
+        assert_eq!(cfg.ingest.min_markdown_chars, 600);
+        assert_eq!(cfg.ingest.dedup_window_hours, 24);
+        assert!(cfg.ingest.allow_private_hosts.is_empty());
+        assert!(cfg.ingest.host_profiles.is_empty());
+    }
+
+    #[test]
+    fn article_memory_ingest_parses_host_profiles() {
+        let toml = r#"
+            [normalize]
+            [embedding]
+            [ingest]
+            enabled = false
+            max_concurrency = 5
+            allow_private_hosts = ["wiki.internal"]
+            [[ingest.host_profiles]]
+            match = "zhihu.com"
+            profile = "articles-zhihu"
+            source = "zhihu"
+        "#;
+        let cfg: ArticleMemoryConfig = toml::from_str(toml).unwrap();
+        assert!(!cfg.ingest.enabled);
+        assert_eq!(cfg.ingest.max_concurrency, 5);
+        assert_eq!(cfg.ingest.allow_private_hosts, vec!["wiki.internal"]);
+        assert_eq!(cfg.ingest.host_profiles.len(), 1);
+        assert_eq!(cfg.ingest.host_profiles[0].match_suffix, "zhihu.com");
+        assert_eq!(cfg.ingest.host_profiles[0].profile, "articles-zhihu");
+        assert_eq!(cfg.ingest.host_profiles[0].source.as_deref(), Some("zhihu"));
+    }
 }
 
 #[cfg(test)]
