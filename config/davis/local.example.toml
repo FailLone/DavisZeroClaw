@@ -177,3 +177,12 @@ allow_private_hosts = []
 # sitemaps = []
 # search_queries = []            # populated in Phase 2 when Brave is wired
 # enabled = true
+#
+# [article_memory.discovery.search]
+# provider = "brave"
+# api_key_env = "BRAVE_API_KEY"
+# rate_limit_per_min = 60
+# results_per_query = 10
+#
+# # Then per topic:
+# # search_queries = ["async rust tokio", "io_uring rust async"]
