@@ -56,10 +56,16 @@ pub(super) fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
             .arg("fastapi")
             .arg("uvicorn[standard]")
             .arg("pydantic")
+            // trafilatura powers the default extraction engine in
+            // crawl4ai_adapter/engines.py; httpx stays installed so the
+            // adapter venv can run pytest against the openrouter-era test
+            // fixtures and any future HTTP-based engines.
+            .arg("trafilatura")
+            .arg("httpx")
             .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
             .env("PATH", tool_path_env())
             .current_dir(&paths.repo_root),
-        "pip install --upgrade crawl4ai fastapi uvicorn[standard] pydantic",
+        "pip install --upgrade crawl4ai fastapi uvicorn[standard] pydantic trafilatura httpx",
     )?;
 
     println!("Installing Playwright Chromium.");
