@@ -142,23 +142,24 @@ pub fn compute_signals(markdown: &str) -> ContentSignals {
 
 fn count_inline_code_chars(markdown: &str) -> usize {
     let mut total = 0usize;
-    let mut chars = markdown.chars().peekable();
+    let mut chars = markdown.chars();
     let mut in_fence = false;
-    let mut fence_buf = String::new();
+    // 3-char rolling window to detect the ``` fence marker
+    let mut last3: [char; 3] = [' '; 3];
     while let Some(c) = chars.next() {
-        fence_buf.push(c);
-        if fence_buf.ends_with("```") {
+        last3[0] = last3[1];
+        last3[1] = last3[2];
+        last3[2] = c;
+        if last3 == ['`', '`', '`'] {
             in_fence = !in_fence;
-            fence_buf.clear();
-        }
-        if fence_buf.len() > 3 {
-            fence_buf.drain(..1);
+            // Reset window so the closing ``` can't be reread by the next iteration
+            last3 = [' '; 3];
+            continue;
         }
         if in_fence {
             continue;
         }
         if c == '`' {
-            // capture until next `
             let mut run = 0usize;
             for nc in chars.by_ref() {
                 if nc == '`' {
@@ -244,5 +245,24 @@ mod tests {
         let s = compute_signals(md);
         assert!(s.alpha_ratio < 0.1);
         assert!(s.symbol_ratio > 0.1);
+    }
+
+    #[test]
+    fn chinese_markdown_does_not_panic() {
+        // Regression: count_inline_code_chars used byte-indexed String::drain
+        // which split multi-byte UTF-8 codepoints.
+        let md = "请订阅我们的频道。\n\n这是一段测试内容。";
+        let s = compute_signals(md);
+        assert!(s.total_chars > 0);
+        assert!(s.alpha_ratio > 0.0);
+    }
+
+    #[test]
+    fn fenced_code_does_not_leak_into_inline_after_close() {
+        // Regression: ensure closing ``` doesn't get re-detected as open by next char.
+        let md = "prose\n\n```\ncode here\n```\n\nnormal `x` text";
+        let s = compute_signals(md);
+        assert!(s.code_density > 0.0);
+        assert!(s.code_density < 1.0);
     }
 }
