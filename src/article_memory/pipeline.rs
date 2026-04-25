@@ -432,7 +432,15 @@ async fn judge_article_value(
             "Clean report: raw_chars={raw_chars}, normalized_chars={normalized_chars}, kept_ratio={kept_ratio:.2}, risk_flags={risk_flags}\n\n",
             "Judge the article. Reject ads, shallow SEO, misinformation, duplicates, and off-topic content. ",
             "Prefer practical experience, architecture analysis, official docs, source/code analysis, benchmarks, and durable workflows.\n",
-            "Return JSON with keys: decision (save|candidate|reject), value_score (0..1), reasons (array), topic_tags (array), risk_flags (array), translation_needed (boolean).\n\n",
+            "You also act as an extraction-quality judge. Look for:\n",
+            "- Abrupt truncation or missing continuation\n",
+            "- Boilerplate UI text (nav, share, comments, \"related articles\") mixed into body\n",
+            "- Broken or flattened code blocks, lists, tables\n",
+            "- Wrong content region (e.g. only a comment instead of the article body)\n\n",
+            "Also emit: extraction_quality (\"clean\" | \"partial\" | \"poor\"; default \"clean\" unless clearly faulty), ",
+            "extraction_issues (array of short codes like [\"content_truncated\", \"code_block_broken\"]), ",
+            "rule_refinement_hint (brief free-text suggesting a selector or filter change; null when not applicable).\n\n",
+            "Return JSON with keys: decision (save|candidate|reject), value_score (0..1), reasons (array), topic_tags (array), risk_flags (array), translation_needed (boolean), extraction_quality (clean|partial|poor), extraction_issues (array of strings), rule_refinement_hint (string or null).\n\n",
             "Article:\n{article}"
         ),
         topics = config.target_topics.join(", "),
@@ -588,6 +596,22 @@ fn parse_value_judge_response(
         .unwrap_or(config.candidate_threshold as f64)
         .clamp(0.0, 1.0) as f32;
     let decision = normalize_value_decision(&raw_decision, score, config);
+    let extraction_quality = value
+        .get("extraction_quality")
+        .and_then(|v| v.as_str())
+        .unwrap_or("clean")
+        .trim()
+        .to_lowercase();
+    let extraction_quality = match extraction_quality.as_str() {
+        "clean" | "partial" | "poor" => extraction_quality,
+        _ => "clean".to_string(),
+    };
+    let extraction_issues = json_string_array(&value, "extraction_issues");
+    let rule_refinement_hint = value
+        .get("rule_refinement_hint")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     Ok(ArticleValueReport {
         article_id: article.id.clone(),
         title: article.title.clone(),
@@ -604,9 +628,9 @@ fn parse_value_judge_response(
             .and_then(|value| value.as_bool())
             .unwrap_or(false),
         model: None,
-        extraction_quality: "clean".to_string(),
-        extraction_issues: Vec::new(),
-        rule_refinement_hint: None,
+        extraction_quality,
+        extraction_issues,
+        rule_refinement_hint,
     })
 }
 
@@ -664,4 +688,71 @@ fn write_value_report(paths: &RuntimePaths, report: &ArticleValueReport) -> Resu
     fs::write(&path, body)
         .with_context(|| format!("failed to write value report: {}", path.display()))?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_value_config() -> ResolvedArticleValueConfig {
+        ResolvedArticleValueConfig {
+            provider: "openrouter".into(),
+            api_key: "sk-test".into(),
+            base_url: "https://x".into(),
+            model: "gpt-test".into(),
+            llm_judge: true,
+            max_input_chars: 12000,
+            min_normalized_chars: 400,
+            save_threshold: 0.75,
+            candidate_threshold: 0.45,
+            target_topics: vec!["agent".into()],
+        }
+    }
+
+    fn test_article() -> ArticleMemoryRecord {
+        ArticleMemoryRecord {
+            id: "a1".into(),
+            title: "T".into(),
+            url: None,
+            source: "test".into(),
+            language: None,
+            tags: vec![],
+            status: ArticleMemoryRecordStatus::Candidate,
+            value_score: None,
+            captured_at: "2026-04-25T00:00:00Z".into(),
+            updated_at: "2026-04-25T00:00:00Z".into(),
+            content_path: "articles/a1.content".into(),
+            raw_path: None,
+            normalized_path: None,
+            summary_path: None,
+            translation_path: None,
+            notes: None,
+            clean_status: None,
+            clean_profile: None,
+        }
+    }
+
+    #[test]
+    fn parse_value_judge_response_reads_extraction_fields() {
+        let config = test_value_config();
+        let article = test_article();
+        let content = r#"{
+            "decision": "candidate",
+            "value_score": 0.6,
+            "reasons": ["looks ok"],
+            "topic_tags": ["agent"],
+            "risk_flags": [],
+            "translation_needed": false,
+            "extraction_quality": "partial",
+            "extraction_issues": ["boilerplate_mixed_in"],
+            "rule_refinement_hint": "drop .related list"
+        }"#;
+        let report = parse_value_judge_response(content, &config, &article).unwrap();
+        assert_eq!(report.extraction_quality, "partial");
+        assert_eq!(report.extraction_issues, vec!["boilerplate_mixed_in"]);
+        assert_eq!(
+            report.rule_refinement_hint.as_deref(),
+            Some("drop .related list")
+        );
+    }
 }
