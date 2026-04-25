@@ -2,6 +2,7 @@
 .env
 .env.*
 .runtime/
+.crawl4ai/
 node_modules/
 browser-worker/node_modules/
 config/davis/local.toml
