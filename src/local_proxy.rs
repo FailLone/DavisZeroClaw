@@ -205,6 +205,20 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         tracing::info!("article memory ingest disabled by config");
     }
 
+    if local_config.article_memory.discovery.enabled {
+        crate::article_memory::discovery::DiscoveryWorker::spawn(
+            crate::article_memory::discovery::DiscoveryWorkerDeps {
+                paths: paths.clone(),
+                ingest_queue: ingest_queue.clone(),
+                config: Arc::new(local_config.article_memory.discovery.clone()),
+                http: reqwest::Client::new(),
+                search_provider: None, // wired in Phase 2 (Task 11)
+                mempalace_sink: ingest_sink.clone(),
+            },
+        );
+        tracing::info!("discovery worker started");
+    }
+
     let state = AppState::new(
         client,
         mcp_client,
