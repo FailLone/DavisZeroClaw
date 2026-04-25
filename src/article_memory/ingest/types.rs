@@ -87,6 +87,8 @@ pub struct IngestJob {
     pub error: Option<IngestJobError>,
     #[serde(default)]
     pub warnings: Vec<String>,
+    #[serde(default)]
+    pub engine_chain: Vec<String>,
     pub submitted_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,

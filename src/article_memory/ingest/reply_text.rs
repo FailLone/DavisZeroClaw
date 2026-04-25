@@ -57,6 +57,7 @@ mod tests {
             outcome: None,
             error: None,
             warnings: vec![],
+            engine_chain: vec![],
             submitted_at: "t".into(),
             started_at: None,
             finished_at: None,
