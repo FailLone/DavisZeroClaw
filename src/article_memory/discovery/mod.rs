@@ -4,3 +4,6 @@
 // Consumed starting Task 6 (worker.rs); remove allow once the worker lands.
 #[allow(dead_code)]
 pub mod feed_ingestor;
+// Consumed starting Task 6 (worker.rs); remove allow once the worker lands.
+#[allow(dead_code)]
+pub mod search;
