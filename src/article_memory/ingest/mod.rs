@@ -7,6 +7,7 @@ mod quality_gate;
 mod queue;
 pub(super) mod reply_text;
 pub(super) mod report_context;
+mod rule_types;
 mod types;
 mod value_signals;
 mod worker;
@@ -37,5 +38,7 @@ pub use engines::{next_engine, pick_engine, EngineChoice, ExtractEngineConfig};
 pub use llm_extract::llm_html_to_markdown;
 #[allow(unused_imports)]
 pub use quality_gate::{assess as assess_quality, GateResult, QualityGateConfig};
+#[allow(unused_imports)]
+pub use rule_types::{LearnedRule, RuleSample, RuleStats};
 #[allow(unused_imports)]
 pub use value_signals::{deterministic_score, gopher_reject};
