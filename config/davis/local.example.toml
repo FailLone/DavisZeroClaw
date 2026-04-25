@@ -160,3 +160,20 @@ allow_private_hosts = []
 # match = "medium.com"
 # profile = "articles-medium"
 # source = "medium"
+
+# --- Topic-driven URL discovery (MVP Phase 1) -------------------------------
+# [article_memory.discovery]
+# enabled = false
+# interval_secs = 43200          # 12h
+# max_per_cycle = 20
+#
+# [[article_memory.discovery.topics]]
+# slug = "async-rust"
+# keywords = ["async rust", "tokio", "io_uring"]
+# feeds = [
+#   "https://without.boats/index.xml",
+#   "https://lobste.rs/t/rust.rss",
+# ]
+# sitemaps = []
+# search_queries = []            # populated in Phase 2 when Brave is wired
+# enabled = true
