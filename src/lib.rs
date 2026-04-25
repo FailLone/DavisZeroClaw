@@ -26,10 +26,11 @@ pub use advisor::{
     build_replacement_candidates_report, generate_config_report, generate_config_report_with_states,
 };
 pub use app_config::{
-    ArticleMemoryConfig, ArticleMemoryEmbeddingConfig, ArticleMemoryHostProfile,
-    ArticleMemoryIngestConfig, ArticleMemoryNormalizeConfig, Crawl4aiConfig, HomeAssistantConfig,
-    ImessageConfig, LocalConfig, McpConfig, McpServerConfig, McpTransport, ModelProviderConfig,
-    RoutingConfig, RoutingProfileConfig, RoutingProfilesConfig, WebhookConfig,
+    ArticleMemoryConfig, ArticleMemoryEmbeddingConfig, ArticleMemoryExtractConfig,
+    ArticleMemoryHostProfile, ArticleMemoryIngestConfig, ArticleMemoryNormalizeConfig,
+    Crawl4aiConfig, HomeAssistantConfig, ImessageConfig, LocalConfig, McpConfig, McpServerConfig,
+    McpTransport, ModelProviderConfig, OpenRouterLlmEngineConfig, QualityGateToml, RoutingConfig,
+    RoutingProfileConfig, RoutingProfilesConfig, WebhookConfig,
 };
 pub use article_memory::{
     add_article_memory, add_article_memory_override, article_cleaning_preferred_selectors,

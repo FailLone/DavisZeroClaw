@@ -214,6 +214,8 @@ async fn ingest_happy_path_end_to_end() {
             imessage_config: Arc::new(crate::app_config::ImessageConfig {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
+            extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
         },
         1,
     );
@@ -263,6 +265,8 @@ async fn ingest_empty_markdown_rejected() {
             imessage_config: Arc::new(crate::app_config::ImessageConfig {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
+            extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
         },
         1,
     );
@@ -306,6 +310,8 @@ async fn ingest_crawl_server_error_surfaces_issue_type() {
             imessage_config: Arc::new(crate::app_config::ImessageConfig {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
+            extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
         },
         1,
     );
@@ -350,6 +356,8 @@ async fn ingest_same_host_serializes() {
             imessage_config: Arc::new(crate::app_config::ImessageConfig {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
+            extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
         },
         3,
     );
@@ -408,6 +416,8 @@ async fn ingest_different_hosts_parallelize() {
             imessage_config: Arc::new(crate::app_config::ImessageConfig {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
+            extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
         },
         3,
     );
@@ -491,6 +501,8 @@ async fn worker_force_path_reuses_existing_article_id() {
             imessage_config: Arc::new(crate::app_config::ImessageConfig {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
+            extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
         },
         1,
     );
@@ -557,6 +569,8 @@ async fn worker_notify_hook_fires_on_early_return_fetch_failure() {
                 // without actually trying osascript. Proves the hook ran.
                 allowed_contacts: vec![],
             }),
+            extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
         },
         1,
     );
@@ -608,6 +622,8 @@ async fn worker_skips_notify_when_reply_handle_missing() {
             imessage_config: Arc::new(crate::app_config::ImessageConfig {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
+            extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
         },
         1,
     );

@@ -141,6 +141,8 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                 providers: Arc::new(local_config.providers.clone()),
                 ingest_config: ingest_config.clone(),
                 imessage_config: Arc::new(local_config.imessage.clone()),
+                extract_config: Arc::new(local_config.article_memory.extract.clone()),
+                quality_gate_config: Arc::new(local_config.article_memory.quality_gate.clone()),
             },
             ingest_config.max_concurrency,
         );

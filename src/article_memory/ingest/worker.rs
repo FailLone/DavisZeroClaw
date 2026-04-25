@@ -3,7 +3,8 @@ use super::types::{
     IngestJob, IngestJobError, IngestJobStatus, IngestOutcome, IngestOutcomeSummary,
 };
 use crate::app_config::{
-    ArticleMemoryConfig, ArticleMemoryIngestConfig, ImessageConfig, ModelProviderConfig,
+    ArticleMemoryConfig, ArticleMemoryExtractConfig, ArticleMemoryIngestConfig, ImessageConfig,
+    ModelProviderConfig, QualityGateToml,
 };
 use crate::server::Crawl4aiProfileLocks;
 use crate::{
@@ -16,6 +17,10 @@ use crate::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+// `extract_config` and `quality_gate_config` are consumed in T12
+// (engine-ladder loop); carried through the deps plumbing now so callers
+// don't need a second breaking change.
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct IngestWorkerDeps {
     pub paths: RuntimePaths,
@@ -26,6 +31,8 @@ pub struct IngestWorkerDeps {
     pub providers: Arc<Vec<ModelProviderConfig>>,
     pub ingest_config: Arc<ArticleMemoryIngestConfig>,
     pub imessage_config: Arc<ImessageConfig>,
+    pub extract_config: Arc<ArticleMemoryExtractConfig>,
+    pub quality_gate_config: Arc<QualityGateToml>,
 }
 
 pub struct IngestWorkerPool;
