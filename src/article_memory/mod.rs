@@ -461,6 +461,8 @@ pub use embedding::*;
 pub(crate) mod internals;
 use internals::*;
 
+pub(crate) mod llm_client;
+
 mod cleaning_internals;
 use cleaning_internals::*;
 
