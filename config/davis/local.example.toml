@@ -196,3 +196,11 @@ allow_private_hosts = []
 # interval_secs = 300
 # batch_per_cycle = 5
 # # api_key_env = "ZEROCLAW_API_KEY"   # only when zeroclaw daemon requires auth
+
+# --- Evergreen refresh (MVP Phase 4) ----------------------------------------
+# [article_memory.refresh]
+# enabled = false
+# interval_secs = 86400
+# stale_after_days = 30
+# score_delta_threshold = 0.2
+# batch_per_cycle = 20

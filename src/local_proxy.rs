@@ -256,6 +256,17 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         tracing::info!("translate worker started");
     }
 
+    if local_config.article_memory.refresh.enabled {
+        crate::article_memory::refresh::RefreshWorker::spawn(
+            crate::article_memory::refresh::RefreshWorkerDeps {
+                config: Arc::new(local_config.article_memory.refresh.clone()),
+                paths: paths.clone(),
+                mempalace_sink: ingest_sink.clone(),
+            },
+        );
+        tracing::info!("refresh worker started");
+    }
+
     let state = AppState::new(
         client,
         mcp_client,
