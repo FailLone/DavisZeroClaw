@@ -186,3 +186,13 @@ allow_private_hosts = []
 #
 # # Then per topic:
 # # search_queries = ["async rust tokio", "io_uring rust async"]
+
+# --- Translation worker (MVP Phase 3) ---------------------------------------
+# [article_memory.translate]
+# enabled = false
+# target_language = "zh-CN"
+# zeroclaw_base_url = "http://127.0.0.1:3001"
+# budget_scope = "translation:monthly"
+# interval_secs = 300
+# batch_per_cycle = 5
+# # api_key_env = "ZEROCLAW_API_KEY"   # only when zeroclaw daemon requires auth
