@@ -938,6 +938,34 @@ async fn ha_mcp_capabilities(State(state): State<AppState>) -> (StatusCode, Json
 async fn ha_mcp_live_context(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     match state.mcp_client.live_context_report().await {
         Ok(report) => {
+            // Project into MemPalace BEFORE overwriting the snapshot file, so
+            // the diff sees the previous cycle.
+            let prev = std::fs::read_to_string(state.paths.ha_mcp_live_context_path())
+                .ok()
+                .and_then(|raw| {
+                    serde_json::from_str::<crate::ha_mcp::HaMcpLiveContextReport>(&raw).ok()
+                });
+            let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            crate::ha_mcp_projection::emit_state_transitions(
+                prev.as_ref(),
+                &report,
+                &state.mempalace_sink,
+            );
+            crate::ha_mcp_projection::emit_findings_projections(
+                prev.as_ref(),
+                &report,
+                &state.mempalace_sink,
+            );
+            crate::ha_mcp_projection::emit_findings_drawer(
+                &report,
+                &timestamp,
+                &state.mempalace_sink,
+            );
+            crate::ha_mcp_projection::emit_refresh_diary(
+                &report,
+                &timestamp,
+                &state.mempalace_sink,
+            );
             if let Ok(raw) = serde_json::to_vec_pretty(&report) {
                 let _ = std::fs::write(state.paths.ha_mcp_live_context_path(), raw);
             }

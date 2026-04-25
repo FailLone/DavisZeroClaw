@@ -4,6 +4,7 @@ mod control;
 mod crawl4ai;
 mod express;
 mod fixtures;
+mod ha_mcp_projection;
 mod imessage_send;
 mod ingest_http;
 mod mempalace_sink_smoke;

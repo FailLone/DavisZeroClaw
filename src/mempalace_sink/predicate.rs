@@ -114,6 +114,41 @@ impl TripleId {
         Ok(Self(format!("{namespace}_{body}")))
     }
 
+    /// Slugify an arbitrary label into a MemPalace-safe body. Characters
+    /// outside `[A-Za-z0-9._-]` are collapsed into a single `-`; leading and
+    /// trailing non-alphanumerics are stripped. If nothing survives, the
+    /// caller gets back a short deterministic hash of the original, prefixed
+    /// with `x`, so the result is still stable across snapshots.
+    ///
+    /// Use this on human-chosen names like HA entity labels (which are often
+    /// Chinese / mixed script) before feeding them into a `TripleId::*`
+    /// constructor.
+    pub fn safe_slug(raw: &str) -> String {
+        let mut out = String::with_capacity(raw.len());
+        let mut last_was_sep = false;
+        for ch in raw.chars() {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                out.push(ch);
+                last_was_sep = false;
+            } else if !last_was_sep {
+                out.push('-');
+                last_was_sep = true;
+            }
+        }
+        // Strip leading/trailing non-alphanumerics.
+        let trimmed: String = out
+            .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+            .to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+        // Everything was stripped — fall back to a stable short hash prefixed
+        // with "x" so the first character is alphanumeric.
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(raw.as_bytes());
+        format!("x{:x}", digest)[..13].to_string()
+    }
+
     pub fn try_entity(id: &str) -> Result<Self, TripleIdError> {
         Self::build("entity", id)
     }
@@ -353,6 +388,41 @@ mod tests {
                 id.as_str(),
             );
         }
+    }
+
+    #[test]
+    fn safe_slug_preserves_ascii_ish_labels() {
+        assert_eq!(
+            TripleId::safe_slug("light.living_room_main"),
+            "light.living_room_main"
+        );
+        assert_eq!(TripleId::safe_slug("lobste.rs"), "lobste.rs");
+        assert_eq!(TripleId::safe_slug("AC Unit 3"), "AC-Unit-3");
+    }
+
+    #[test]
+    fn safe_slug_collapses_repeated_separators() {
+        assert_eq!(TripleId::safe_slug("a | b | c"), "a-b-c");
+        assert_eq!(TripleId::safe_slug("  foo  "), "foo");
+    }
+
+    #[test]
+    fn safe_slug_falls_back_to_hash_for_all_cjk() {
+        let s = TripleId::safe_slug("客厅主灯");
+        assert!(s.starts_with('x'), "{s}");
+        assert!(safe_name_ok(&s), "{s} must pass SAFE_NAME check");
+        // Deterministic: same input → same output.
+        assert_eq!(s, TripleId::safe_slug("客厅主灯"));
+        // Different inputs differ.
+        assert_ne!(s, TripleId::safe_slug("卧室主灯"));
+    }
+
+    #[test]
+    fn safe_slug_passes_safe_name_check_on_mixed_script() {
+        let out = TripleId::safe_slug("客厅 light 01");
+        assert!(safe_name_ok(&out), "{out} must pass SAFE_NAME");
+        // The ASCII portion should survive.
+        assert!(out.contains("light"), "{out}");
     }
 
     fn safe_name_ok(value: &str) -> bool {
