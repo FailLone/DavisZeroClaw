@@ -10,8 +10,7 @@
 //! We stay Rust-only to keep one LLM client per project.
 
 use crate::app_config::{ModelProviderConfig, OpenRouterLlmEngineConfig};
-use anyhow::{anyhow, bail, Context, Result};
-use serde_json::json;
+use anyhow::Result;
 use std::time::Duration;
 
 const SYSTEM_PROMPT: &str = "You are a precise HTML-to-Markdown converter. \
@@ -28,71 +27,28 @@ pub async fn llm_html_to_markdown(
     engine_cfg: &OpenRouterLlmEngineConfig,
     html: &str,
 ) -> Result<String> {
-    if provider.api_key.trim().is_empty() {
-        bail!(
-            "llm html→markdown: provider '{}' has empty api_key",
-            provider.name
-        );
-    }
-    if provider.base_url.trim().is_empty() {
-        bail!(
-            "llm html→markdown: provider '{}' has empty base_url",
-            provider.name
-        );
-    }
+    use super::super::llm_client::{chat_completion, LlmChatRequest, LlmProvider};
 
-    // Truncate HTML to max_input_chars by CHAR count (not bytes) for
-    // multi-byte safety.
+    // Truncate by chars (UTF-8 safe).
     let truncated: String = html.chars().take(engine_cfg.max_input_chars).collect();
     let user = format!("Convert this HTML to Markdown:\n\n{truncated}");
 
-    let endpoint = format!(
-        "{}/chat/completions",
-        provider.base_url.trim_end_matches('/')
-    );
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(engine_cfg.timeout_secs.max(1)))
-        .build()
-        .context("build reqwest client for llm_html_to_markdown")?;
-
-    let payload = json!({
-        "model": engine_cfg.model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.0,
-    });
-
-    let response = client
-        .post(endpoint)
-        .bearer_auth(&provider.api_key)
-        .json(&payload)
-        .send()
-        .await
-        .context("llm html→markdown request failed")?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| String::from("<failed to read response>"));
-    if !status.is_success() {
-        bail!("llm html→markdown HTTP {status}: {body}");
-    }
-
-    let value: serde_json::Value =
-        serde_json::from_str(&body).context("llm html→markdown response was not valid JSON")?;
-    value
-        .get("choices")
-        .and_then(|c| c.as_array())
-        .and_then(|a| a.first())
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_str())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("llm html→markdown response did not contain non-empty content"))
+    chat_completion(
+        &LlmProvider {
+            name: &provider.name,
+            base_url: &provider.base_url,
+            api_key: &provider.api_key,
+        },
+        &LlmChatRequest {
+            model: &engine_cfg.model,
+            system: SYSTEM_PROMPT,
+            user: &user,
+            temperature: 0.0,
+            max_tokens: None,
+            timeout: Duration::from_secs(engine_cfg.timeout_secs.max(1)),
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
