@@ -461,6 +461,19 @@ pub use embedding::*;
 pub(crate) mod internals;
 use internals::*;
 
+// Public wrappers around the crate-private `internals::{load_index, write_index}`
+// so integration tests (tests/rust/topic_crawl_translate.rs) can seed the
+// article memory index from outside the crate without promoting the raw
+// internals to `pub`. Keeping `internals` at `pub(crate)` preserves the
+// intentional encapsulation for non-test callers.
+pub fn load_article_index(paths: &RuntimePaths) -> Result<ArticleMemoryIndex> {
+    internals::load_index(paths)
+}
+
+pub fn save_article_index(paths: &RuntimePaths, index: &ArticleMemoryIndex) -> Result<()> {
+    internals::write_index(paths, index)
+}
+
 pub(crate) mod llm_client;
 
 mod cleaning_internals;

@@ -8,4 +8,4 @@ mod prompt;
 mod remote_chat;
 pub mod worker;
 
-pub use worker::{TranslateWorker, TranslateWorkerDeps};
+pub use worker::{run_one_cycle, TranslateWorker, TranslateWorkerDeps};

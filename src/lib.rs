@@ -16,7 +16,11 @@ mod ha_mcp;
 pub(crate) mod ha_mcp_projection;
 pub mod imessage_send;
 mod local_proxy;
-mod mempalace_sink;
+// Publicly reachable so integration tests can use `mempalace_sink::testing::NoopSink`
+// to satisfy `TranslateWorkerDeps::mempalace_sink`. Only the items re-exported
+// from `mempalace_sink::mod.rs` are visible — internal structs like
+// `MemPalaceSink` stay `pub(crate)`.
+pub mod mempalace_sink;
 mod model_routing;
 mod models;
 mod observability;
@@ -32,32 +36,34 @@ pub use app_config::{
     ArticleMemoryHostProfile, ArticleMemoryIngestConfig, ArticleMemoryNormalizeConfig,
     Crawl4aiConfig, HomeAssistantConfig, ImessageConfig, LocalConfig, McpConfig, McpServerConfig,
     McpTransport, ModelProviderConfig, OpenRouterLlmEngineConfig, QualityGateToml, RoutingConfig,
-    RoutingProfileConfig, RoutingProfilesConfig, RuleLearningConfig, WebhookConfig,
+    RoutingProfileConfig, RoutingProfilesConfig, RuleLearningConfig, TranslateConfig,
+    WebhookConfig,
 };
 pub use article_memory::discovery::{
     BraveSearch, DiscoveryWorker, DiscoveryWorkerDeps, SearchError, SearchHit, SearchProvider,
 };
-pub use article_memory::translate::{TranslateWorker, TranslateWorkerDeps};
+pub use article_memory::translate::{run_one_cycle, TranslateWorker, TranslateWorkerDeps};
 pub use article_memory::{
     add_article_memory, add_article_memory_override, article_memory_status,
     build_article_strategy_review_input, check_article_cleaning, check_article_memory,
     find_article_by_normalized_url, hybrid_search_article_memory, init_article_memory,
     judge_all_article_value_memory, judge_article_value_memory, list_article_clean_reports,
-    list_article_memory, list_article_value_reports, normalize_all_article_memory,
-    normalize_article_memory, normalize_url, rebuild_article_memory_embeddings,
-    replay_article_cleaning, resolve_article_embedding_config, resolve_article_normalize_config,
-    resolve_article_value_config, resolve_profile, search_article_memory,
-    upsert_article_memory_embedding, validate_url_for_ingest, ArticleCleanAuditResponse,
-    ArticleCleanReport, ArticleCleaningCheckResponse, ArticleCleaningConfig,
-    ArticleCleaningDefaults, ArticleCleaningReplayResponse, ArticleMemoryAddRequest,
-    ArticleMemoryEmbeddingIndex, ArticleMemoryEmbeddingRebuildResponse,
-    ArticleMemoryEmbeddingRecord, ArticleMemoryListResponse, ArticleMemoryNormalizeResponse,
-    ArticleMemoryRecord, ArticleMemoryRecordStatus, ArticleMemorySearchHit,
-    ArticleMemorySearchResponse, ArticleMemoryStatusResponse, ArticleStrategyReviewInputResponse,
-    ArticleValueAuditResponse, ArticleValueConfig, ArticleValueReport, IngestJob, IngestJobError,
-    IngestJobStatus, IngestOutcome, IngestOutcomeSummary, IngestQueue, IngestQueueState,
-    IngestRequest, IngestResponse, IngestSubmitError, IngestWorkerDeps, IngestWorkerPool,
-    ListFilter, NormalizeUrlError, PersistHealth, ResolvedArticleEmbeddingConfig,
+    list_article_memory, list_article_value_reports, load_article_index,
+    normalize_all_article_memory, normalize_article_memory, normalize_url,
+    rebuild_article_memory_embeddings, replay_article_cleaning, resolve_article_embedding_config,
+    resolve_article_normalize_config, resolve_article_value_config, resolve_profile,
+    save_article_index, search_article_memory, upsert_article_memory_embedding,
+    validate_url_for_ingest, ArticleCleanAuditResponse, ArticleCleanReport,
+    ArticleCleaningCheckResponse, ArticleCleaningConfig, ArticleCleaningDefaults,
+    ArticleCleaningReplayResponse, ArticleMemoryAddRequest, ArticleMemoryEmbeddingIndex,
+    ArticleMemoryEmbeddingRebuildResponse, ArticleMemoryEmbeddingRecord, ArticleMemoryIndex,
+    ArticleMemoryListResponse, ArticleMemoryNormalizeResponse, ArticleMemoryRecord,
+    ArticleMemoryRecordStatus, ArticleMemorySearchHit, ArticleMemorySearchResponse,
+    ArticleMemoryStatusResponse, ArticleStrategyReviewInputResponse, ArticleValueAuditResponse,
+    ArticleValueConfig, ArticleValueReport, IngestJob, IngestJobError, IngestJobStatus,
+    IngestOutcome, IngestOutcomeSummary, IngestQueue, IngestQueueState, IngestRequest,
+    IngestResponse, IngestSubmitError, IngestWorkerDeps, IngestWorkerPool, ListFilter,
+    NormalizeUrlError, PersistHealth, ResolvedArticleEmbeddingConfig,
     ResolvedArticleNormalizeConfig, ResolvedArticleValueConfig, ResolvedProfile,
     UrlValidationError,
 };
