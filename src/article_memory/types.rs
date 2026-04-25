@@ -261,8 +261,6 @@ pub struct ArticleCleaningConfig {
     #[serde(default)]
     pub defaults: ArticleCleaningDefaults,
     #[serde(default)]
-    pub sites: Vec<ArticleCleaningSiteStrategy>,
-    #[serde(default)]
     pub value: ArticleValueConfig,
 }
 
@@ -278,31 +276,6 @@ pub struct ArticleCleaningDefaults {
     pub exact_noise_lines: Vec<String>,
     #[serde(default)]
     pub contains_noise_lines: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ArticleCleaningSiteStrategy {
-    pub name: String,
-    #[serde(default = "default_cleaning_strategy_version")]
-    pub version: u32,
-    #[serde(default = "default_cleaning_strategy_status")]
-    pub status: String,
-    #[serde(default)]
-    pub url_patterns: Vec<String>,
-    #[serde(default)]
-    pub source_patterns: Vec<String>,
-    #[serde(default)]
-    pub preferred_selectors: Vec<String>,
-    #[serde(default)]
-    pub start_markers: Vec<String>,
-    #[serde(default)]
-    pub end_markers: Vec<String>,
-    #[serde(default)]
-    pub exact_noise_lines: Vec<String>,
-    #[serde(default)]
-    pub contains_noise_lines: Vec<String>,
-    #[serde(default)]
-    pub line_suffix_noise: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -414,7 +387,6 @@ pub struct ArticleValueReport {
 pub struct ArticleCleaningCheckResponse {
     pub status: String,
     pub config_path: String,
-    pub sites: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -512,12 +484,4 @@ pub(super) fn default_cleaning_max_kept_ratio() -> f32 {
 
 pub(super) fn default_cleaning_min_normalized_chars() -> usize {
     800
-}
-
-pub(super) fn default_cleaning_strategy_version() -> u32 {
-    1
-}
-
-pub(super) fn default_cleaning_strategy_status() -> String {
-    "stable".to_string()
 }

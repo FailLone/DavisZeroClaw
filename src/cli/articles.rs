@@ -245,7 +245,6 @@ pub(super) fn check_article_cleaning_cli(paths: &RuntimePaths) -> Result<()> {
     let response = check_article_cleaning(paths)?;
     println!("Article cleaning strategy {}.", response.status);
     println!("- config: {}", response.config_path);
-    println!("- sites: {}", response.sites.join(", "));
     for warning in response.warnings {
         println!("WARN: {warning}");
     }

@@ -190,14 +190,6 @@ fn render_article_strategy_review_input(
         String::new(),
         format!("- status: {}", cleaning_check.status),
         format!("- config: `{}`", cleaning_check.config_path),
-        format!(
-            "- sites: {}",
-            if cleaning_check.sites.is_empty() {
-                "none".to_string()
-            } else {
-                cleaning_check.sites.join(", ")
-            }
-        ),
     ];
     if cleaning_check.warnings.is_empty() {
         lines.push("- warnings: none".to_string());

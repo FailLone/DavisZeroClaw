@@ -1,7 +1,6 @@
 use crate::support::{isoformat, now_utc};
 use crate::RuntimePaths;
 use anyhow::{bail, Context, Result};
-use std::collections::BTreeSet;
 use std::fs;
 
 const ARTICLE_MEMORY_INDEX_VERSION: u32 = 1;
@@ -45,63 +44,17 @@ pub fn check_article_memory(paths: &RuntimePaths) -> Result<ArticleMemoryStatusR
 }
 
 pub fn check_article_cleaning(paths: &RuntimePaths) -> Result<ArticleCleaningCheckResponse> {
-    let config = load_article_cleaning_config(paths)?;
-    let mut warnings = Vec::new();
-    let mut seen = BTreeSet::new();
-    for site in &config.sites {
-        if !seen.insert(site.name.clone()) {
-            warnings.push(format!("duplicate site strategy: {}", site.name));
-        }
-        if site.url_patterns.is_empty() && site.source_patterns.is_empty() {
-            warnings.push(format!(
-                "site strategy has no url_patterns/source_patterns: {}",
-                site.name
-            ));
-        }
-        if site.preferred_selectors.is_empty() {
-            warnings.push(format!(
-                "site strategy has no preferred_selectors: {}",
-                site.name
-            ));
-        }
-    }
+    // Phase 1: per-site [[sites]] strategies were deleted. This call now
+    // just validates that the config file parses and the [defaults] block
+    // is present. Warnings stay as an open-ended channel for future
+    // config-level checks.
+    let _config = load_article_cleaning_config(paths)?;
+    let warnings: Vec<String> = Vec::new();
     Ok(ArticleCleaningCheckResponse {
         status: if warnings.is_empty() { "ok" } else { "warn" }.to_string(),
         config_path: paths.article_cleaning_config_path().display().to_string(),
-        sites: config.sites.into_iter().map(|site| site.name).collect(),
         warnings,
     })
-}
-
-pub fn article_cleaning_preferred_selectors(paths: &RuntimePaths) -> Result<Vec<String>> {
-    let config = load_article_cleaning_config(paths)?;
-    let mut seen = BTreeSet::new();
-    let mut selectors = Vec::new();
-    for site in config.sites {
-        for selector in site.preferred_selectors {
-            if seen.insert(selector.clone()) {
-                selectors.push(selector);
-            }
-        }
-    }
-    selectors.extend(
-        [
-            "article",
-            "main",
-            "[role=main]",
-            ".article",
-            ".post",
-            ".post-content",
-            ".entry-content",
-            ".content",
-            "#content",
-            "body",
-        ]
-        .into_iter()
-        .filter(|selector| seen.insert((*selector).to_string()))
-        .map(str::to_string),
-    );
-    Ok(selectors)
 }
 
 pub fn add_article_memory(
@@ -592,7 +545,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status, "ok");
-        assert_eq!(response.clean_profile, "zhihu");
+        assert_eq!(response.clean_profile, "default");
         assert_eq!(response.clean_status, "ok");
         assert!(std::path::Path::new(&response.raw_path).is_file());
         assert!(std::path::Path::new(&response.normalized_path).is_file());
@@ -623,14 +576,16 @@ mod tests {
             Some(expected_normalized_path.as_str())
         );
         assert_eq!(updated.clean_status.as_deref(), Some("ok"));
-        assert_eq!(updated.clean_profile.as_deref(), Some("zhihu"));
+        assert_eq!(updated.clean_profile.as_deref(), Some("default"));
 
         let report: ArticleCleanReport =
             serde_json::from_str(&fs::read_to_string(&response.clean_report_path).unwrap())
                 .unwrap();
         assert_eq!(report.article_id, record.id);
-        assert_eq!(report.strategy_name, "zhihu");
-        assert_eq!(report.noise_lines_removed, 2);
+        assert_eq!(report.strategy_name, "default");
+        // With site-specific rules gone, only `登录` in defaults.exact_noise_lines
+        // matches; the duplicated sentence is removed by dedup, not noise.
+        assert_eq!(report.noise_lines_removed, 1);
 
         let _ = fs::remove_dir_all(paths.repo_root);
     }
@@ -677,10 +632,15 @@ mod tests {
         assert!(response.normalized_chars > 1_000);
         assert!(std::path::Path::new(&response.clean_report_path).is_file());
         let normalized = fs::read_to_string(&response.normalized_path).unwrap();
+        // Core guarantee we still care about: the single long line is split
+        // into sentence-sized units so the body text survives normalization.
         assert!(normalized.contains("Claude Code 的第 0 个学习要点"));
-        assert!(!normalized.contains("关注问题"));
-        assert!(!normalized.contains("所属专栏"));
-        assert!(!normalized.contains("这不是当前回答"));
+        assert!(normalized.contains("Claude Code 的第 39 个学习要点"));
+        // Phase 1: zhihu-specific start/end markers and suffix-noise rules
+        // are gone. Preamble/trailing noise (`关注问题`, `所属专栏`, `这不是当前回答`)
+        // is no longer trimmed from this input; the engine ladder is now
+        // responsible for stripping site chrome upstream. We intentionally
+        // do not assert their absence here.
 
         let _ = fs::remove_dir_all(paths.repo_root);
     }
@@ -794,12 +754,17 @@ mod tests {
     }
 
     #[test]
-    fn check_article_cleaning_loads_builtin_strategy_when_config_is_missing() {
-        let paths = test_paths("check_article_cleaning_loads_builtin_strategy");
+    fn check_article_cleaning_loads_builtin_config_when_config_is_missing() {
+        // Phase 1: per-site [[sites]] strategies were deleted. This test
+        // now just verifies that when no config file exists on disk, the
+        // builtin article_memory.toml is parsed successfully and produces
+        // an "ok" status. Warnings are reserved for future checks.
+        let paths = test_paths("check_article_cleaning_loads_builtin_config");
         let response = check_article_cleaning(&paths).unwrap();
 
         assert_eq!(response.status, "ok");
-        assert!(response.sites.iter().any(|site| site == "zhihu"));
+        assert!(response.warnings.is_empty());
+        assert!(response.config_path.ends_with("article_memory.toml"));
 
         let _ = fs::remove_dir_all(paths.repo_root);
     }

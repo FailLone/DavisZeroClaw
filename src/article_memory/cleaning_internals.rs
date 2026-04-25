@@ -6,6 +6,13 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 
+// Phase 1: per-site cleaning strategies ([[sites]] blocks in
+// article_memory.toml) were deleted along with their Rust code paths.
+// Every article now resolves to a single "default" strategy derived from
+// the [defaults] block. The engine ladder + quality gate in
+// `crawl4ai_adapter` handle the per-site adaptation work that hand-written
+// rules used to do; Phase 2 rule learning supersedes this path entirely.
+
 pub(super) fn load_article_cleaning_config(paths: &RuntimePaths) -> Result<ArticleCleaningConfig> {
     let path = paths.article_cleaning_config_path();
     let raw = match fs::read_to_string(&path) {
@@ -26,36 +33,12 @@ pub(super) fn load_article_cleaning_config(paths: &RuntimePaths) -> Result<Artic
         )
     })?;
     normalize_article_cleaning_config(&mut config)?;
-    normalize_article_value_config(&mut config.value);
     Ok(config)
 }
 
 pub(super) fn normalize_article_cleaning_config(config: &mut ArticleCleaningConfig) -> Result<()> {
     normalize_cleaning_defaults(&mut config.defaults);
-    let mut seen = BTreeSet::new();
-    for site in &mut config.sites {
-        site.name = site.name.trim().to_string();
-        if site.name.is_empty() {
-            bail!("article cleaning site name is required");
-        }
-        if !seen.insert(site.name.clone()) {
-            bail!("duplicate article cleaning site strategy: {}", site.name);
-        }
-        if site.version == 0 {
-            site.version = default_cleaning_strategy_version();
-        }
-        site.status = clean_optional(&site.status).unwrap_or_else(default_cleaning_strategy_status);
-        site.url_patterns = normalize_string_list(std::mem::take(&mut site.url_patterns));
-        site.source_patterns = normalize_string_list(std::mem::take(&mut site.source_patterns));
-        site.preferred_selectors =
-            normalize_string_list(std::mem::take(&mut site.preferred_selectors));
-        site.start_markers = normalize_string_list(std::mem::take(&mut site.start_markers));
-        site.end_markers = normalize_string_list(std::mem::take(&mut site.end_markers));
-        site.exact_noise_lines = normalize_string_list(std::mem::take(&mut site.exact_noise_lines));
-        site.contains_noise_lines =
-            normalize_string_list(std::mem::take(&mut site.contains_noise_lines));
-        site.line_suffix_noise = normalize_string_list(std::mem::take(&mut site.line_suffix_noise));
-    }
+    normalize_article_value_config(&mut config.value);
     Ok(())
 }
 
@@ -104,36 +87,14 @@ pub(super) fn normalize_string_list(values: Vec<String>) -> Vec<String> {
 
 pub(super) fn resolve_article_cleaning_strategy(
     config: &ArticleCleaningConfig,
-    article: &ArticleMemoryRecord,
+    _article: &ArticleMemoryRecord,
 ) -> ResolvedArticleCleaningStrategy {
-    if let Some(site) = config
-        .sites
-        .iter()
-        .find(|strategy| article_matches_strategy(article, strategy))
-    {
-        return ResolvedArticleCleaningStrategy {
-            name: site.name.clone(),
-            version: site.version,
-            source: "config/davis/article_memory.toml".to_string(),
-            min_kept_ratio: config.defaults.min_kept_ratio,
-            max_kept_ratio: config.defaults.max_kept_ratio,
-            min_normalized_chars: config.defaults.min_normalized_chars,
-            start_markers: site.start_markers.clone(),
-            end_markers: site.end_markers.clone(),
-            exact_noise_lines: merged_lines(
-                &config.defaults.exact_noise_lines,
-                &site.exact_noise_lines,
-            ),
-            contains_noise_lines: merged_lines(
-                &config.defaults.contains_noise_lines,
-                &site.contains_noise_lines,
-            ),
-            line_suffix_noise: site.line_suffix_noise.clone(),
-        };
-    }
-
+    // Phase 1: site strategies deleted. Every article uses the "default"
+    // strategy derived from the [defaults] block. The engine ladder +
+    // quality gate handle the work that per-site hand-written rules used
+    // to do; Phase 2 rule learning supersedes this path entirely.
     ResolvedArticleCleaningStrategy {
-        name: "generic".to_string(),
+        name: "default".to_string(),
         version: 1,
         source: "config/davis/article_memory.toml".to_string(),
         min_kept_ratio: config.defaults.min_kept_ratio,
@@ -145,61 +106,6 @@ pub(super) fn resolve_article_cleaning_strategy(
         contains_noise_lines: config.defaults.contains_noise_lines.clone(),
         line_suffix_noise: Vec::new(),
     }
-}
-
-pub(super) fn article_matches_strategy(
-    article: &ArticleMemoryRecord,
-    strategy: &ArticleCleaningSiteStrategy,
-) -> bool {
-    let url = article.url.as_deref().unwrap_or_default().to_lowercase();
-    let haystack = format!("{} {}", article.source, article.title).to_lowercase();
-    strategy
-        .url_patterns
-        .iter()
-        .any(|pattern| wildcard_match(&url, &pattern.to_lowercase()))
-        || strategy
-            .source_patterns
-            .iter()
-            .any(|pattern| haystack.contains(&pattern.to_lowercase()))
-}
-
-pub(super) fn wildcard_match(value: &str, pattern: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if !pattern.contains('*') {
-        return value.contains(pattern);
-    }
-    let parts = pattern
-        .split('*')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    if parts.is_empty() {
-        return true;
-    }
-    let mut offset = 0;
-    for part in &parts {
-        let Some(found) = value[offset..].find(part) else {
-            return false;
-        };
-        offset += found + part.len();
-    }
-    true
-}
-
-pub(super) fn merged_lines(defaults: &[String], site: &[String]) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    defaults
-        .iter()
-        .chain(site.iter())
-        .filter_map(|item| {
-            if seen.insert(item.to_lowercase()) {
-                Some(item.clone())
-            } else {
-                None
-            }
-        })
-        .collect()
 }
 
 pub(super) fn normalize_article_text(
