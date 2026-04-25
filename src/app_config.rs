@@ -170,6 +170,104 @@ pub struct ArticleMemoryConfig {
     pub quality_gate: QualityGateToml,
     #[serde(default)]
     pub rule_learning: RuleLearningConfig,
+    #[serde(default)]
+    pub discovery: DiscoveryConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DiscoveryConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_discovery_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "default_discovery_max_per_cycle")]
+    pub max_per_cycle: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<DiscoverySearchConfig>,
+    #[serde(default)]
+    pub topics: Vec<DiscoveryTopicConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryTopicConfig {
+    pub slug: String,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default)]
+    pub feeds: Vec<String>,
+    #[serde(default)]
+    pub sitemaps: Vec<String>,
+    #[serde(default)]
+    pub search_queries: Vec<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoverySearchConfig {
+    #[serde(default = "default_search_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default = "default_search_rate_limit")]
+    pub rate_limit_per_min: u32,
+    #[serde(default = "default_search_results_per_query")]
+    pub results_per_query: usize,
+}
+
+fn default_discovery_interval() -> u64 {
+    43_200
+} // 12h
+fn default_discovery_max_per_cycle() -> usize {
+    20
+}
+fn default_search_provider() -> String {
+    "brave".into()
+}
+fn default_search_rate_limit() -> u32 {
+    60
+}
+fn default_search_results_per_query() -> usize {
+    10
+}
+
+impl DiscoveryConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.interval_secs < 60 {
+            anyhow::bail!(
+                "discovery.interval_secs must be >= 60 (got {})",
+                self.interval_secs
+            );
+        }
+        if self.max_per_cycle == 0 {
+            anyhow::bail!("discovery.max_per_cycle must be > 0");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for topic in &self.topics {
+            if topic.slug.trim().is_empty() {
+                anyhow::bail!("discovery topic has empty slug");
+            }
+            if !seen.insert(topic.slug.clone()) {
+                anyhow::bail!("duplicate discovery topic slug: {}", topic.slug);
+            }
+            if !topic.enabled {
+                continue;
+            }
+            if topic.feeds.is_empty()
+                && topic.sitemaps.is_empty()
+                && topic.search_queries.is_empty()
+            {
+                anyhow::bail!(
+                    "discovery topic '{}' has no feeds, sitemaps, or search queries",
+                    topic.slug
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -869,5 +967,109 @@ mod example_config_tests {
             .expect("local.example.toml must parse against the current LocalConfig schema");
         validate_local_config(parsed)
             .expect("local.example.toml must pass validate_local_config unchanged");
+    }
+}
+
+#[cfg(test)]
+mod discovery_config_tests {
+    use super::*;
+
+    fn sample_topic() -> DiscoveryTopicConfig {
+        DiscoveryTopicConfig {
+            slug: "async-rust".into(),
+            keywords: vec!["async rust".into()],
+            feeds: vec!["https://without.boats/index.xml".into()],
+            sitemaps: vec![],
+            search_queries: vec![],
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn rejects_empty_slug_when_enabled() {
+        let mut topic = sample_topic();
+        topic.slug = "".into();
+        let cfg = DiscoveryConfig {
+            enabled: true,
+            interval_secs: 3600,
+            max_per_cycle: 10,
+            search: None,
+            topics: vec![topic],
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("slug"), "{err}");
+    }
+
+    #[test]
+    fn rejects_duplicate_slug() {
+        let cfg = DiscoveryConfig {
+            enabled: true,
+            interval_secs: 3600,
+            max_per_cycle: 10,
+            search: None,
+            topics: vec![sample_topic(), sample_topic()],
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("duplicate"), "{err}");
+    }
+
+    #[test]
+    fn rejects_interval_below_60_secs() {
+        let cfg = DiscoveryConfig {
+            enabled: true,
+            interval_secs: 30,
+            max_per_cycle: 10,
+            search: None,
+            topics: vec![sample_topic()],
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("interval_secs"), "{err}");
+    }
+
+    #[test]
+    fn accepts_disabled_with_no_topics() {
+        let cfg = DiscoveryConfig {
+            enabled: false,
+            interval_secs: 3600,
+            max_per_cycle: 10,
+            search: None,
+            topics: vec![],
+        };
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn accepts_enabled_topic_with_no_feeds_but_has_search_queries() {
+        let mut topic = sample_topic();
+        topic.feeds = vec![];
+        topic.search_queries = vec!["async rust tokio".into()];
+        let cfg = DiscoveryConfig {
+            enabled: true,
+            interval_secs: 3600,
+            max_per_cycle: 10,
+            search: None,
+            topics: vec![topic],
+        };
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_topic_with_no_signal_sources() {
+        let mut topic = sample_topic();
+        topic.feeds = vec![];
+        topic.sitemaps = vec![];
+        topic.search_queries = vec![];
+        let cfg = DiscoveryConfig {
+            enabled: true,
+            interval_secs: 3600,
+            max_per_cycle: 10,
+            search: None,
+            topics: vec![topic],
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("no feeds, sitemaps, or search queries"),
+            "{err}"
+        );
     }
 }
