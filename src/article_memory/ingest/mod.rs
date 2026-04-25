@@ -1,4 +1,5 @@
 mod content_signals;
+mod engines;
 mod host_profile;
 mod quality_gate;
 mod queue;
@@ -20,5 +21,7 @@ pub use worker::{IngestWorkerDeps, IngestWorkerPool};
 // this module's unit tests.
 #[allow(unused_imports)]
 pub use content_signals::{compute_signals, ContentSignals};
+#[allow(unused_imports)]
+pub use engines::{next_engine, pick_engine, EngineChoice, ExtractEngineConfig};
 #[allow(unused_imports)]
 pub use quality_gate::{assess as assess_quality, GateResult, QualityGateConfig};
