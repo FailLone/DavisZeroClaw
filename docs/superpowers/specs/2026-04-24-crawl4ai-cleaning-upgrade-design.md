@@ -1,6 +1,7 @@
 # crawl4ai Cleaning & Value-Judging Upgrade — Design Spec
 
-- Status: Draft (awaiting user review)
+- Status: Phase 1 Landed on `docs/crawl4ai-plan-slim` (Phase 2 pending)
+- Phase 1 revision: Python openrouter-llm engine rolled back; LLM fallback now runs in Rust (reuses existing chat-completions client pattern) to avoid duplicating HTTP/auth across runtimes — decision logged in architecture memories 2026-04-25
 - Date: 2026-04-24
 - Author: brainstorming session
 - Related specs:
