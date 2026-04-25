@@ -671,3 +671,62 @@ async fn worker_skips_notify_when_reply_handle_missing() {
     assert!(job.reply_handle.is_none());
     assert_eq!(job.status, IngestJobStatus::Saved);
 }
+
+#[tokio::test]
+async fn ingest_fails_when_quality_gate_rejects_and_no_upgrade_path() {
+    // Quality gate ENABLED (unlike other tests that disable it). Mock /crawl
+    // returns short markdown that can't clear the default 500-char minimum.
+    // No openrouter provider is configured, so try_llm_upgrade is a no-op and
+    // the rejection branch surfaces `quality_gate_rejected`. Critically, we
+    // also assert that `engine_chain` reflects the single trafilatura attempt
+    // (i.e., no "openrouter-llm" entry was appended because the upgrade did
+    // not run). This complements `ingest_empty_markdown_rejected` by pinning
+    // down the engine-ladder contract on the reject path.
+    let (_tmp, paths) = test_paths();
+    let mock = MockState::default();
+    *mock.markdown_body.lock().unwrap() = "too short".into();
+    let supervisor = spawn_mock_supervisor(&paths, mock).await;
+    let ingest_cfg = default_ingest_cfg();
+    let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    IngestWorkerPool::spawn(
+        queue.clone(),
+        IngestWorkerDeps {
+            paths: paths.clone(),
+            crawl4ai_config: test_crawl4ai_config(),
+            supervisor,
+            profile_locks: Arc::new(Mutex::new(HashMap::new())),
+            article_memory_config: default_article_memory_cfg(),
+            // Empty provider list → no openrouter fallback → no upgrade path.
+            providers: Arc::new(vec![]),
+            ingest_config: ingest_cfg,
+            imessage_config: Arc::new(crate::app_config::ImessageConfig {
+                allowed_contacts: vec!["+8618672954807".into()],
+            }),
+            extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
+            // KEY: gate ENABLED (default) to exercise the rejection path.
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
+        },
+        1,
+    );
+    let resp = queue
+        .submit(IngestRequest {
+            url: "https://example.com/p/too-short".into(),
+            force: false,
+            title: None,
+            tags: vec![],
+            source_hint: None,
+            reply_handle: None,
+        })
+        .await
+        .unwrap();
+    let job = wait_for_terminal(&queue, &resp.job_id, 10).await;
+    assert_eq!(job.status, IngestJobStatus::Failed);
+    let err = job.error.as_ref().expect("error set on Failed");
+    assert_eq!(err.issue_type, "quality_gate_rejected");
+    assert_eq!(err.stage, "fetching");
+    assert_eq!(
+        job.engine_chain,
+        vec!["trafilatura".to_string()],
+        "engine_chain should be trafilatura only (no upgrade: no openrouter provider configured)",
+    );
+}
