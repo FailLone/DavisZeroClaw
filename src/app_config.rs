@@ -174,6 +174,62 @@ pub struct ArticleMemoryConfig {
     pub discovery: DiscoveryConfig,
     #[serde(default)]
     pub translate: TranslateConfig,
+    #[serde(default)]
+    pub refresh: RefreshConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_refresh_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "default_stale_days")]
+    pub stale_after_days: u64,
+    #[serde(default = "default_score_delta")]
+    pub score_delta_threshold: f32,
+    #[serde(default = "default_refresh_batch")]
+    pub batch_per_cycle: usize,
+}
+
+impl Default for RefreshConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: default_refresh_interval(),
+            stale_after_days: default_stale_days(),
+            score_delta_threshold: default_score_delta(),
+            batch_per_cycle: default_refresh_batch(),
+        }
+    }
+}
+
+fn default_refresh_interval() -> u64 {
+    86_400
+}
+fn default_stale_days() -> u64 {
+    30
+}
+fn default_score_delta() -> f32 {
+    0.2
+}
+fn default_refresh_batch() -> usize {
+    20
+}
+
+impl RefreshConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.stale_after_days == 0 {
+            anyhow::bail!("refresh.stale_after_days must be > 0");
+        }
+        if !(0.0..=1.0).contains(&self.score_delta_threshold) {
+            anyhow::bail!("refresh.score_delta_threshold must be in [0.0, 1.0]");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1171,6 +1227,37 @@ mod translate_config_tests {
             zeroclaw_base_url: "http://127.0.0.1:3001".into(),
             interval_secs: 5,
             ..TranslateConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod refresh_config_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_defaults() {
+        let cfg = RefreshConfig::default();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_threshold_outside_0_1() {
+        let cfg = RefreshConfig {
+            enabled: true,
+            score_delta_threshold: 2.0,
+            ..RefreshConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_stale_days_zero() {
+        let cfg = RefreshConfig {
+            enabled: true,
+            stale_after_days: 0,
+            ..RefreshConfig::default()
         };
         assert!(cfg.validate().is_err());
     }
