@@ -1,8 +1,7 @@
 use super::ingest::{normalize_line_preserving, SlidingDedup};
 use super::*;
 use crate::RuntimePaths;
-use anyhow::{anyhow, bail, Context, Result};
-use serde_json::json;
+use anyhow::Result;
 use std::fs;
 use std::io::ErrorKind;
 
@@ -374,46 +373,24 @@ pub(super) async fn create_chat_completion(
     user: &str,
     max_tokens: usize,
 ) -> Result<String> {
-    let endpoint = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()?;
-    let payload = json!({
-        "model": config.model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ],
-        "temperature": 0.1,
-        "max_tokens": max_tokens
-    });
-    let response = client
-        .post(endpoint)
-        .bearer_auth(&config.api_key)
-        .json(&payload)
-        .send()
-        .await
-        .context("chat completion request failed")?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| String::from("<failed to read response>"));
-    if !status.is_success() {
-        bail!("chat completion failed with HTTP {status}: {body}");
-    }
-    let value: serde_json::Value =
-        serde_json::from_str(&body).context("chat completion response was not valid JSON")?;
-    value
-        .get("choices")
-        .and_then(|choices| choices.as_array())
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .and_then(|content| content.as_str())
-        .map(|content| content.trim().to_string())
-        .filter(|content| !content.is_empty())
-        .ok_or_else(|| anyhow!("chat completion response did not contain message content"))
+    use super::llm_client::{chat_completion, LlmChatRequest, LlmProvider};
+    use std::time::Duration;
+    chat_completion(
+        &LlmProvider {
+            name: &config.provider,
+            base_url: &config.base_url,
+            api_key: &config.api_key,
+        },
+        &LlmChatRequest {
+            model: &config.model,
+            system,
+            user,
+            temperature: 0.1,
+            max_tokens: Some(max_tokens),
+            timeout: Duration::from_secs(120),
+        },
+    )
+    .await
 }
 
 pub(super) async fn create_chat_completion_for_value(
@@ -422,46 +399,24 @@ pub(super) async fn create_chat_completion_for_value(
     user: &str,
     max_tokens: usize,
 ) -> Result<String> {
-    let endpoint = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()?;
-    let payload = json!({
-        "model": config.model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ],
-        "temperature": 0.0,
-        "max_tokens": max_tokens
-    });
-    let response = client
-        .post(endpoint)
-        .bearer_auth(&config.api_key)
-        .json(&payload)
-        .send()
-        .await
-        .context("value judge request failed")?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| String::from("<failed to read response>"));
-    if !status.is_success() {
-        bail!("value judge failed with HTTP {status}: {body}");
-    }
-    let value: serde_json::Value =
-        serde_json::from_str(&body).context("value judge response was not valid JSON")?;
-    value
-        .get("choices")
-        .and_then(|choices| choices.as_array())
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .and_then(|content| content.as_str())
-        .map(|content| content.trim().to_string())
-        .filter(|content| !content.is_empty())
-        .ok_or_else(|| anyhow!("value judge response did not contain message content"))
+    use super::llm_client::{chat_completion, LlmChatRequest, LlmProvider};
+    use std::time::Duration;
+    chat_completion(
+        &LlmProvider {
+            name: &config.provider,
+            base_url: &config.base_url,
+            api_key: &config.api_key,
+        },
+        &LlmChatRequest {
+            model: &config.model,
+            system,
+            user,
+            temperature: 0.0,
+            max_tokens: Some(max_tokens),
+            timeout: Duration::from_secs(60),
+        },
+    )
+    .await
 }
 
 pub(super) fn polished_is_valid(normalized: &str, polished: &str, fallback_min_ratio: f32) -> bool {
