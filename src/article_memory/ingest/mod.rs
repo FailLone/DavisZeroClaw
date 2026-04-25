@@ -10,7 +10,7 @@ pub(super) mod reply_text;
 pub(super) mod report_context;
 mod rule_learning;
 mod rule_learning_worker;
-mod rule_mempalace_projection;
+pub(crate) mod rule_mempalace_projection;
 mod rule_samples;
 mod rule_types;
 mod types;

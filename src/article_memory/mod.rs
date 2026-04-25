@@ -466,8 +466,8 @@ pub(crate) mod llm_client;
 mod cleaning_internals;
 use cleaning_internals::*;
 
-mod ingest;
-mod mempalace_projection;
+pub(crate) mod ingest;
+pub(crate) mod mempalace_projection;
 mod pii_scrub;
 // Consumed starting Task 4; remove allow once consumers land.
 #[allow(unused_imports)]

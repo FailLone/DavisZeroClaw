@@ -13,7 +13,7 @@ mod entity;
 mod express;
 mod ha_client;
 mod ha_mcp;
-mod ha_mcp_projection;
+pub(crate) mod ha_mcp_projection;
 pub mod imessage_send;
 mod local_proxy;
 mod mempalace_sink;
