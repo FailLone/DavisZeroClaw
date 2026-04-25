@@ -5,6 +5,7 @@ mod llm_extract;
 mod quality_gate;
 mod queue;
 pub(super) mod reply_text;
+pub(super) mod report_context;
 mod types;
 mod worker;
 

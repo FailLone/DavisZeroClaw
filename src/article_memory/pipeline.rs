@@ -322,6 +322,11 @@ pub(super) fn build_clean_report(
     normalized_chars: usize,
     final_chars: usize,
 ) -> ArticleCleanReport {
+    let (engine_chain, final_engine) =
+        match crate::article_memory::ingest::report_context::current() {
+            Some(c) => (c.engine_chain, c.final_engine),
+            None => (Vec::new(), None),
+        };
     let kept_ratio = if raw_chars == 0 {
         0.0
     } else {
@@ -370,6 +375,8 @@ pub(super) fn build_clean_report(
         removed_lines_sample: normalized.removed_lines_sample.clone(),
         leftover_noise_candidates: normalized.leftover_noise_candidates.clone(),
         risk_flags,
+        engine_chain,
+        final_engine,
     }
 }
 

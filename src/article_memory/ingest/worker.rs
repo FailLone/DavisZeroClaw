@@ -351,11 +351,17 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
             return;
         }
     };
-    let normalize_response = match normalize_article_memory(
-        &deps.paths,
-        normalize_config.as_ref(),
-        value_config.as_ref(),
-        &record.id,
+    let normalize_response = match super::report_context::with_context(
+        super::report_context::EngineReportContext {
+            engine_chain: attempted.iter().map(|e| e.as_str().to_string()).collect(),
+            final_engine: attempted.last().map(|e| e.as_str().to_string()),
+        },
+        normalize_article_memory(
+            &deps.paths,
+            normalize_config.as_ref(),
+            value_config.as_ref(),
+            &record.id,
+        ),
     )
     .await
     {

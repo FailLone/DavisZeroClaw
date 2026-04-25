@@ -386,6 +386,10 @@ pub struct ArticleCleanReport {
     pub removed_lines_sample: Vec<String>,
     pub leftover_noise_candidates: Vec<String>,
     pub risk_flags: Vec<String>,
+    #[serde(default)]
+    pub engine_chain: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_engine: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
