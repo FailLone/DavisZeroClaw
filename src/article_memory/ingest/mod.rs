@@ -16,27 +16,22 @@ mod types;
 mod value_signals;
 mod worker;
 
-pub use host_profile::{
-    normalize_url, resolve_profile, validate_url_for_ingest, NormalizeUrlError, ResolvedProfile,
-    UrlValidationError,
-};
-pub use queue::{IngestQueue, IngestQueueState, PersistHealth};
-pub use types::{
-    IngestJob, IngestJobError, IngestJobStatus, IngestOutcome, IngestOutcomeSummary, IngestRequest,
-    IngestResponse, IngestSubmitError, ListFilter,
-};
-pub use worker::{IngestWorkerDeps, IngestWorkerPool};
 pub use cleaning_fix::{normalize_line_preserving, SlidingDedup};
 #[allow(unused_imports)]
 pub use content_signals::{compute_signals, ContentSignals};
 #[allow(unused_imports)]
 pub use engines::{pick_engine, EngineChoice, ExtractEngineConfig};
+pub use host_profile::{
+    normalize_url, resolve_profile, validate_url_for_ingest, NormalizeUrlError, ResolvedProfile,
+    UrlValidationError,
+};
 #[allow(unused_imports)]
 pub use learned_rules::{LearnedRuleStore, RuleStatsStore};
 #[allow(unused_imports)]
 pub use llm_extract::llm_html_to_markdown;
 #[allow(unused_imports)]
 pub use quality_gate::{assess as assess_quality, GateResult, QualityGateConfig};
+pub use queue::{IngestQueue, IngestQueueState, PersistHealth};
 #[allow(unused_imports)]
 pub use rule_learning::{
     build_learn_prompt, parse_learn_response, simplify_dom, validate_rule, ValidationResult,
@@ -48,5 +43,10 @@ pub use rule_learning_worker::{RuleLearningDeps, RuleLearningWorker};
 pub use rule_samples::SampleStore;
 #[allow(unused_imports)]
 pub use rule_types::{LearnedRule, RuleSample, RuleStats};
+pub use types::{
+    IngestJob, IngestJobError, IngestJobStatus, IngestOutcome, IngestOutcomeSummary, IngestRequest,
+    IngestResponse, IngestSubmitError, ListFilter,
+};
 #[allow(unused_imports)]
 pub use value_signals::{deterministic_score, gopher_reject};
+pub use worker::{IngestWorkerDeps, IngestWorkerPool};

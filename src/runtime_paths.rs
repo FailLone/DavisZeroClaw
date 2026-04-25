@@ -168,6 +168,16 @@ impl RuntimePaths {
         self.runtime_dir.join("mempalace")
     }
 
+    /// Program path + args for launching the MemPalace MCP server that the
+    /// Davis sink talks to. Returns `(program, args)` so the caller can feed
+    /// them straight into `tokio::process::Command`.
+    pub fn mempalace_mcp_server_cmd(&self) -> (PathBuf, Vec<&'static str>) {
+        (
+            self.mempalace_python_path(),
+            vec!["-m", "mempalace.mcp_server"],
+        )
+    }
+
     pub fn article_memory_dir(&self) -> PathBuf {
         self.runtime_dir.join("article-memory")
     }
@@ -250,5 +260,17 @@ mod tests {
         };
         let got = paths.article_memory_ingest_jobs_path();
         assert_eq!(got, paths.article_memory_dir().join("ingest_jobs.json"));
+    }
+
+    #[test]
+    fn mempalace_mcp_server_cmd_points_into_venv_python() {
+        let paths = RuntimePaths {
+            repo_root: std::path::PathBuf::from("/tmp/repo"),
+            runtime_dir: std::path::PathBuf::from("/tmp/runtime"),
+        };
+        let (program, args) = paths.mempalace_mcp_server_cmd();
+        assert_eq!(program, paths.mempalace_python_path());
+        assert!(program.ends_with("mempalace-venv/bin/python"));
+        assert_eq!(args, vec!["-m", "mempalace.mcp_server"]);
     }
 }

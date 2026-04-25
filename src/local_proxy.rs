@@ -193,6 +193,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         tracing::info!("article memory ingest disabled by config");
     }
 
+    let mempalace_sink = crate::mempalace_sink::MemPalaceSink::spawn(&paths);
     let state = AppState::new(
         client,
         mcp_client,
@@ -208,7 +209,8 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         learned_rules,
         rule_stats,
         sample_store,
-    );
+    )
+    .with_mempalace_sink(mempalace_sink);
     let app = build_app(state.clone());
     let shortcut_bridge_app = build_shortcut_bridge_app(state);
 

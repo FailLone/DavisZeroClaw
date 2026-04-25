@@ -15,6 +15,7 @@ mod ha_client;
 mod ha_mcp;
 pub mod imessage_send;
 mod local_proxy;
+mod mempalace_sink;
 mod model_routing;
 mod models;
 mod observability;

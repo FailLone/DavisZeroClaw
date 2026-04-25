@@ -49,6 +49,18 @@ struct HealthResponse {
     /// succeeded. "degraded" means 3+ consecutive failures — user should
     /// investigate disk space. Mirrors `queue.persist_health()`.
     ingest_persist: crate::article_memory::PersistHealth,
+    /// MemPalace projection sink counters. `status` ∈ {"live","silenced","disabled"}.
+    mempalace: MempalaceHealth,
+}
+
+#[derive(Serialize)]
+struct MempalaceHealth {
+    status: &'static str,
+    sent: u64,
+    dropped: u64,
+    failed: u64,
+    child_restarts: u64,
+    last_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -86,6 +98,10 @@ pub struct AppState {
     pub learned_rules: Arc<crate::article_memory::LearnedRuleStore>,
     pub rule_stats: Arc<crate::article_memory::RuleStatsStore>,
     pub sample_store: Arc<crate::article_memory::SampleStore>,
+    /// Fire-and-forget projection into MemPalace. Defaults to a disabled
+    /// no-op sink; `local_proxy` overrides with the real one via
+    /// `with_mempalace_sink` after constructing `AppState`.
+    pub mempalace_sink: crate::mempalace_sink::MemPalaceSink,
 }
 
 impl AppState {
@@ -121,7 +137,15 @@ impl AppState {
             learned_rules,
             rule_stats,
             sample_store,
+            mempalace_sink: crate::mempalace_sink::MemPalaceSink::disabled(),
         }
+    }
+
+    /// Attach a live MemPalace sink. Call this after `new` when Davis is
+    /// booting; tests leave the default disabled sink.
+    pub fn with_mempalace_sink(mut self, sink: crate::mempalace_sink::MemPalaceSink) -> Self {
+        self.mempalace_sink = sink;
+        self
     }
 
     /// Return the per-profile lock for `profile`, creating it lazily on first
@@ -245,6 +269,22 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "starting"
     };
     let ingest_persist = state.ingest_queue.persist_health();
+    let sink_snapshot = state.mempalace_sink.metrics().await;
+    let mempalace_status: &'static str = if !sink_snapshot.enabled {
+        "disabled"
+    } else if sink_snapshot.silenced {
+        "silenced"
+    } else {
+        "live"
+    };
+    let mempalace = MempalaceHealth {
+        status: mempalace_status,
+        sent: sink_snapshot.sent,
+        dropped: sink_snapshot.dropped,
+        failed: sink_snapshot.failed,
+        child_restarts: sink_snapshot.child_restarts,
+        last_error: sink_snapshot.last_error,
+    };
     Json(
         serde_json::to_value(HealthResponse {
             status: "ok",
@@ -265,9 +305,11 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
                 "ha_mcp_capabilities",
                 "ha_mcp_live_context",
                 "shortcut_bridge",
+                "mempalace_sink",
             ],
             crawl4ai: crawl4ai_state,
             ingest_persist,
+            mempalace,
         })
         .unwrap_or_else(|_| json!({"status":"ok"})),
     )

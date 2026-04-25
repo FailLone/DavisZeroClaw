@@ -37,6 +37,22 @@ async fn health_route_reports_local_proxy_service() {
         .get("features")
         .and_then(Value::as_array)
         .is_some_and(|features| features.iter().any(|feature| feature == "express_packages")));
+    let mempalace = body
+        .get("mempalace")
+        .expect("/health must include mempalace sink section");
+    assert_eq!(
+        mempalace.get("status").and_then(Value::as_str),
+        Some("disabled"),
+        "test AppState should start with disabled sink",
+    );
+    assert_eq!(mempalace.get("sent").and_then(Value::as_u64), Some(0));
+    assert_eq!(mempalace.get("dropped").and_then(Value::as_u64), Some(0));
+    assert_eq!(mempalace.get("failed").and_then(Value::as_u64), Some(0));
+    assert_eq!(
+        mempalace.get("child_restarts").and_then(Value::as_u64),
+        Some(0),
+    );
+    assert!(mempalace.get("last_error").is_some());
 }
 
 #[tokio::test]

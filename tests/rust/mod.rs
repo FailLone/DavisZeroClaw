@@ -6,6 +6,7 @@ mod express;
 mod fixtures;
 mod imessage_send;
 mod ingest_http;
+mod mempalace_sink_smoke;
 mod routes;
 mod support;
 
