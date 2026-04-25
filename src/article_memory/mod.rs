@@ -470,6 +470,7 @@ pub mod discovery;
 pub(crate) mod ingest;
 pub(crate) mod mempalace_projection;
 mod pii_scrub;
+pub mod translate;
 // Consumed starting Task 4; remove allow once consumers land.
 #[allow(unused_imports)]
 pub use ingest::*;
