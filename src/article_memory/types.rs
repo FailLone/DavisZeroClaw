@@ -381,6 +381,18 @@ pub struct ArticleValueReport {
     pub translation_needed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// LLM-reported extraction quality. Defaults to `"clean"` when parsing
+    /// legacy responses that predate this field.
+    #[serde(default = "default_extraction_quality")]
+    pub extraction_quality: String,
+    /// Specific issues flagged by the LLM when extraction_quality !=
+    /// `"clean"`.
+    #[serde(default)]
+    pub extraction_issues: Vec<String>,
+    /// Freeform hint for the rule-learning system when the LLM suggests a
+    /// selector/filter refinement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_refinement_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -456,6 +468,10 @@ impl Default for ArticleValueConfig {
 
 pub(super) fn default_true() -> bool {
     true
+}
+
+pub(super) fn default_extraction_quality() -> String {
+    "clean".to_string()
 }
 
 pub(super) fn default_value_max_input_chars() -> usize {

@@ -540,6 +540,9 @@ fn deterministic_value_report(
             .map(|language| !language.to_lowercase().starts_with("zh"))
             .unwrap_or(false),
         model: None,
+        extraction_quality: "clean".to_string(),
+        extraction_issues: Vec::new(),
+        rule_refinement_hint: None,
     }
 }
 
@@ -601,6 +604,9 @@ fn parse_value_judge_response(
             .and_then(|value| value.as_bool())
             .unwrap_or(false),
         model: None,
+        extraction_quality: "clean".to_string(),
+        extraction_issues: Vec::new(),
+        rule_refinement_hint: None,
     })
 }
 
