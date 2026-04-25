@@ -15,6 +15,15 @@ path = "src/main.rs"
 name = "daviszeroclaw"
 path = "src/bin/daviszeroclaw.rs"
 
+# Standalone integration test. Other tests/rust/*.rs files are compiled
+# into the library's test harness via `#[path]` in `src/lib.rs`; this one
+# is a true integration test that links against the lib as an external
+# crate so it can verify `BraveSearch` is reachable through the public
+# API surface end-to-end.
+[[test]]
+name = "topic_crawl_brave_integration"
+path = "tests/rust/topic_crawl_brave_integration.rs"
+
 [features]
 # Opt-in to `Crawl4aiSupervisor::for_test(...)` from downstream crates
 # (anyone mocking the adapter). Always on in `cargo test`; off in release

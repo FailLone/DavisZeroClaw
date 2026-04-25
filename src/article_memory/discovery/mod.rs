@@ -6,4 +6,5 @@ pub mod search;
 pub mod worker;
 
 pub use search::brave::BraveSearch;
+pub use search::{SearchError, SearchHit, SearchProvider};
 pub use worker::{DiscoveryWorker, DiscoveryWorkerDeps};

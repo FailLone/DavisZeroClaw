@@ -25,7 +25,11 @@ impl BraveSearch {
         }
     }
 
-    #[cfg(test)]
+    /// Dev/test constructor. `new` is the production path; `with_endpoint`
+    /// exists so integration tests can point the client at a local mock
+    /// server. Explicit enough at the call site that we don't gate it
+    /// behind `cfg(test)` — which would also hide it from `tests/*.rs`
+    /// integration tests that link against the non-test lib crate.
     pub fn with_endpoint(http: reqwest::Client, api_key: String, endpoint: String) -> Self {
         Self {
             http,
