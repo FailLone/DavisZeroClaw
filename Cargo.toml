@@ -23,6 +23,9 @@ test-util = []
 
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
+feed-rs = "2"
+thiserror = "2"
 axum = "0.7"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
