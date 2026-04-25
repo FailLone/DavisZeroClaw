@@ -9,6 +9,7 @@ mod queue;
 pub(super) mod reply_text;
 pub(super) mod report_context;
 mod rule_learning;
+mod rule_learning_worker;
 mod rule_samples;
 mod rule_types;
 mod types;
@@ -48,6 +49,8 @@ pub use rule_learning::{
     build_learn_prompt, parse_learn_response, simplify_dom, validate_rule, ValidationResult,
     LEARN_SYSTEM_PROMPT,
 };
+#[allow(unused_imports)]
+pub use rule_learning_worker::{RuleLearningDeps, RuleLearningWorker};
 #[allow(unused_imports)]
 pub use rule_samples::SampleStore;
 #[allow(unused_imports)]

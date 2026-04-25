@@ -130,6 +130,20 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
     let ingest_queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_config.clone()));
 
     if ingest_config.enabled {
+        // Hoist rule-learning arcs so both the ingest worker pool and the
+        // rule-learning worker share the same instances.
+        let learned_rules = Arc::new(crate::article_memory::LearnedRuleStore::load(
+            &paths,
+            Some(
+                &paths
+                    .repo_root
+                    .join("config/davis/article_memory_overrides.toml"),
+            ),
+        )?);
+        let rule_stats = Arc::new(crate::article_memory::RuleStatsStore::load(&paths)?);
+        let sample_store = Arc::new(crate::article_memory::SampleStore::new(&paths));
+        let providers_arc = Arc::new(local_config.providers.clone());
+
         IngestWorkerPool::spawn(
             ingest_queue.clone(),
             IngestWorkerDeps {
@@ -138,21 +152,14 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                 supervisor: crawl4ai_supervisor.clone(),
                 profile_locks: profile_locks.clone(),
                 article_memory_config: Arc::new(local_config.article_memory.clone()),
-                providers: Arc::new(local_config.providers.clone()),
+                providers: providers_arc.clone(),
                 ingest_config: ingest_config.clone(),
                 imessage_config: Arc::new(local_config.imessage.clone()),
                 extract_config: Arc::new(local_config.article_memory.extract.clone()),
                 quality_gate_config: Arc::new(local_config.article_memory.quality_gate.clone()),
-                learned_rules: Arc::new(crate::article_memory::LearnedRuleStore::load(
-                    &paths,
-                    Some(
-                        &paths
-                            .repo_root
-                            .join("config/davis/article_memory_overrides.toml"),
-                    ),
-                )?),
-                rule_stats: Arc::new(crate::article_memory::RuleStatsStore::load(&paths)?),
-                sample_store: Arc::new(crate::article_memory::SampleStore::new(&paths)),
+                learned_rules: learned_rules.clone(),
+                rule_stats: rule_stats.clone(),
+                sample_store: sample_store.clone(),
             },
             ingest_config.max_concurrency,
         );
@@ -160,6 +167,25 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
             workers = ingest_config.max_concurrency,
             "article memory ingest workers started"
         );
+
+        // Spawn the hourly rule-learning worker (noop if disabled in config).
+        let gate_toml = &local_config.article_memory.quality_gate;
+        crate::article_memory::RuleLearningWorker::spawn(crate::article_memory::RuleLearningDeps {
+            paths: paths.clone(),
+            learned_rules,
+            rule_stats,
+            sample_store,
+            providers: providers_arc,
+            config: Arc::new(local_config.article_memory.rule_learning.clone()),
+            quality_gate: Arc::new(crate::article_memory::QualityGateConfig {
+                enabled: gate_toml.enabled,
+                min_markdown_chars: gate_toml.min_markdown_chars,
+                min_kept_ratio: gate_toml.min_kept_ratio,
+                min_paragraphs: gate_toml.min_paragraphs,
+                max_link_density: gate_toml.max_link_density,
+                boilerplate_markers: gate_toml.boilerplate_markers.clone(),
+            }),
+        });
     } else {
         tracing::info!("article memory ingest disabled by config");
     }

@@ -30,7 +30,7 @@ pub use app_config::{
     ArticleMemoryHostProfile, ArticleMemoryIngestConfig, ArticleMemoryNormalizeConfig,
     Crawl4aiConfig, HomeAssistantConfig, ImessageConfig, LocalConfig, McpConfig, McpServerConfig,
     McpTransport, ModelProviderConfig, OpenRouterLlmEngineConfig, QualityGateToml, RoutingConfig,
-    RoutingProfileConfig, RoutingProfilesConfig, WebhookConfig,
+    RoutingProfileConfig, RoutingProfilesConfig, RuleLearningConfig, WebhookConfig,
 };
 pub use article_memory::{
     add_article_memory, add_article_memory_override, article_memory_status,

@@ -168,6 +168,8 @@ pub struct ArticleMemoryConfig {
     pub extract: ArticleMemoryExtractConfig,
     #[serde(default)]
     pub quality_gate: QualityGateToml,
+    #[serde(default)]
+    pub rule_learning: RuleLearningConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -286,6 +288,51 @@ impl Default for QualityGateToml {
             boilerplate_markers: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuleLearningConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_samples_required")]
+    pub samples_required: usize,
+    #[serde(default = "default_stale_after_partial")]
+    pub stale_after_consecutive_issues: u32,
+    #[serde(default = "default_learning_provider")]
+    pub learning_provider: String,
+    #[serde(default = "default_learning_model")]
+    pub learning_model: String,
+    #[serde(default = "default_true")]
+    pub notify_on_quarantine: bool,
+}
+
+impl Default for RuleLearningConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            samples_required: default_samples_required(),
+            stale_after_consecutive_issues: default_stale_after_partial(),
+            learning_provider: default_learning_provider(),
+            learning_model: default_learning_model(),
+            notify_on_quarantine: true,
+        }
+    }
+}
+
+fn default_samples_required() -> usize {
+    3
+}
+
+fn default_stale_after_partial() -> u32 {
+    2
+}
+
+fn default_learning_provider() -> String {
+    "openrouter".to_string()
+}
+
+fn default_learning_model() -> String {
+    "openai/gpt-4o".to_string()
 }
 
 impl Default for ArticleMemoryExtractConfig {
