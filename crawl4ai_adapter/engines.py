@@ -1,8 +1,8 @@
 """Pluggable content-extraction engines used by the /crawl endpoint.
 
 Each engine takes HTML + options and returns an `ExtractResult`. Engines are
-pure functions (no filesystem, no network for trafilatura; one HTTP call for
-openrouter-llm). The dispatcher lives in `server.py`.
+pure functions (no filesystem, no network). The dispatcher lives in
+`server.py`.
 """
 from __future__ import annotations
 
@@ -61,78 +61,5 @@ def extract_trafilatura(html: str) -> ExtractResult:
         markdown=markdown,
         metadata=metadata,
         engine="trafilatura",
-        warnings=warnings,
-    )
-
-
-_OPENROUTER_SYSTEM_PROMPT = (
-    "You are a precise HTML-to-Markdown converter. Given raw HTML, extract ONLY "
-    "the main article body as well-structured Markdown. Preserve: headings "
-    "(use #/##/###), lists, code blocks (use ``` fences with language when "
-    "recognizable), tables, links, block quotes. Remove: navigation, sidebars, "
-    "comments, cookie banners, share buttons, related-article lists, ads, and "
-    "all other UI chrome. Do not summarize. Do not add content. If no article "
-    "body is present, return an empty response."
-)
-
-
-def extract_openrouter_llm(html: str, config: dict[str, Any]) -> ExtractResult:
-    """Call an OpenRouter-hosted LLM to convert HTML to clean Markdown.
-
-    `config` keys: base_url, api_key, model, timeout_secs, max_input_chars (opt).
-    Truncates HTML to `max_input_chars` (default 60_000) to bound cost.
-    """
-    import httpx  # lazy import
-
-    base_url = config["base_url"].rstrip("/")
-    api_key = config["api_key"]
-    model = config["model"]
-    timeout_secs = int(config.get("timeout_secs", 60))
-    max_input_chars = int(config.get("max_input_chars", 60_000))
-
-    truncated = html[:max_input_chars]
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": _OPENROUTER_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Convert this HTML to Markdown:\n\n{truncated}"},
-        ],
-        "temperature": 0.0,
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        with httpx.Client(timeout=timeout_secs) as client:
-            resp = client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception as exc:  # noqa: BLE001 — we want all failure classes surfaced
-        return ExtractResult(
-            markdown="",
-            metadata={},
-            engine="openrouter-llm",
-            warnings=[f"openrouter-llm request failed: {exc}"],
-        )
-
-    try:
-        markdown = data["choices"][0]["message"]["content"] or ""
-    except (KeyError, IndexError, TypeError):
-        return ExtractResult(
-            markdown="",
-            metadata={},
-            engine="openrouter-llm",
-            warnings=["openrouter-llm response missing choices[0].message.content"],
-        )
-
-    warnings: list[str] = []
-    if not markdown.strip():
-        warnings.append("openrouter-llm returned empty content")
-    return ExtractResult(
-        markdown=markdown.strip(),
-        metadata={},
-        engine="openrouter-llm",
         warnings=warnings,
     )

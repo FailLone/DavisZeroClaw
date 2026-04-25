@@ -1,8 +1,5 @@
-from unittest.mock import patch, MagicMock
-
 from crawl4ai_adapter.engines import (
     ExtractResult,
-    extract_openrouter_llm,
     extract_trafilatura,
 )
 
@@ -49,46 +46,3 @@ def test_trafilatura_empty_html_returns_warning():
     r = extract_trafilatura("<html><body></body></html>")
     assert r.is_empty()
     assert r.warnings, "empty extraction should carry a warning"
-
-
-def test_openrouter_llm_returns_markdown_from_choices():
-    fake_response = MagicMock()
-    fake_response.status_code = 200
-    fake_response.json.return_value = {
-        "choices": [{"message": {"content": "# Title\n\nBody text."}}]
-    }
-    fake_response.raise_for_status = lambda: None
-
-    with patch("httpx.Client") as client_cls:
-        client_cls.return_value.__enter__.return_value.post.return_value = fake_response
-        r = extract_openrouter_llm(
-            "<html><body><p>hi</p></body></html>",
-            {
-                "base_url": "https://openrouter.ai/api/v1",
-                "api_key": "sk-test",
-                "model": "google/gemini-2.0-flash-001",
-                "timeout_secs": 30,
-            },
-        )
-    assert r.engine == "openrouter-llm"
-    assert r.markdown.startswith("# Title")
-    assert r.warnings == []
-
-
-def test_openrouter_llm_surfaces_http_failure_as_warning():
-    fake_response = MagicMock()
-    fake_response.status_code = 500
-    fake_response.text = "upstream error"
-    def raise_for_status():
-        import httpx
-        raise httpx.HTTPStatusError("500", request=MagicMock(), response=fake_response)
-    fake_response.raise_for_status = raise_for_status
-
-    with patch("httpx.Client") as client_cls:
-        client_cls.return_value.__enter__.return_value.post.return_value = fake_response
-        r = extract_openrouter_llm(
-            "<html></html>",
-            {"base_url": "x", "api_key": "y", "model": "z", "timeout_secs": 30},
-        )
-    assert r.is_empty()
-    assert any("openrouter-llm" in w for w in r.warnings)
