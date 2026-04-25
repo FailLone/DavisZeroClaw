@@ -144,6 +144,12 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
     let rule_stats = Arc::new(crate::article_memory::RuleStatsStore::load(&paths)?);
     let sample_store = Arc::new(crate::article_memory::SampleStore::new(&paths));
 
+    // Spawn the MemPalace sink up-front so the ingest worker can project into
+    // it. Clone the sink into AppState via `with_mempalace_sink` below.
+    let mempalace_sink = crate::mempalace_sink::MemPalaceSink::spawn(&paths);
+    let ingest_sink: Arc<dyn crate::mempalace_sink::MempalaceEmitter> =
+        Arc::new(mempalace_sink.clone());
+
     if ingest_config.enabled {
         let providers_arc = Arc::new(local_config.providers.clone());
 
@@ -163,6 +169,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                 learned_rules: learned_rules.clone(),
                 rule_stats: rule_stats.clone(),
                 sample_store: sample_store.clone(),
+                mempalace_sink: ingest_sink.clone(),
             },
             ingest_config.max_concurrency,
         );
@@ -193,7 +200,6 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         tracing::info!("article memory ingest disabled by config");
     }
 
-    let mempalace_sink = crate::mempalace_sink::MemPalaceSink::spawn(&paths);
     let state = AppState::new(
         client,
         mcp_client,

@@ -37,6 +37,9 @@ pub struct IngestWorkerDeps {
     pub learned_rules: Arc<LearnedRuleStore>,
     pub rule_stats: Arc<RuleStatsStore>,
     pub sample_store: Arc<SampleStore>,
+    /// Fire-and-forget projection into MemPalace. Defaults to a disabled
+    /// sink in tests; wired to the live sink via `local_proxy`.
+    pub mempalace_sink: Arc<dyn crate::mempalace_sink::MempalaceEmitter>,
 }
 
 pub struct IngestWorkerPool;
@@ -561,6 +564,44 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
             warnings,
         }
     };
+
+    // MemPalace projection: fire-and-forget. Only emit triples + drawer on
+    // Saved; Rejected still gets a diary line so the user can retrace
+    // "why did that ingest get thrown out".
+    let (diary_status, value_decision) = if rejected {
+        (
+            crate::article_memory::mempalace_projection::IngestDiaryStatus::Rejected,
+            Some("reject".to_string()),
+        )
+    } else {
+        (
+            crate::article_memory::mempalace_projection::IngestDiaryStatus::Saved,
+            Some("save".to_string()),
+        )
+    };
+    if !rejected {
+        if let Ok(value_report) = load_latest_value_report(&deps.paths, &record.id) {
+            crate::article_memory::mempalace_projection::emit_article_success(
+                &value_report,
+                deps.mempalace_sink.as_ref(),
+            );
+        }
+    }
+    let diary_entry = crate::article_memory::mempalace_projection::IngestDiaryEntry {
+        timestamp_iso: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        job_id: job.id.clone(),
+        status: diary_status,
+        host: host.clone(),
+        article_id: Some(record.id.clone()),
+        value_decision,
+        value_score: normalize_response.value_score,
+        reason: None,
+    };
+    crate::article_memory::mempalace_projection::emit_ingest_diary(
+        &diary_entry,
+        deps.mempalace_sink.as_ref(),
+    );
+
     queue.finish(&job.id, outcome).await;
 }
 

@@ -240,6 +240,7 @@ async fn ingest_happy_path_end_to_end() {
             learned_rules,
             rule_stats,
             sample_store,
+            mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
         },
         1,
     );
@@ -296,6 +297,7 @@ async fn ingest_empty_markdown_rejected() {
             learned_rules,
             rule_stats,
             sample_store,
+            mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
         },
         1,
     );
@@ -350,6 +352,7 @@ async fn ingest_crawl_server_error_surfaces_issue_type() {
             learned_rules,
             rule_stats,
             sample_store,
+            mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
         },
         1,
     );
@@ -403,6 +406,7 @@ async fn ingest_same_host_serializes() {
             learned_rules,
             rule_stats,
             sample_store,
+            mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
         },
         3,
     );
@@ -470,6 +474,7 @@ async fn ingest_different_hosts_parallelize() {
             learned_rules,
             rule_stats,
             sample_store,
+            mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
         },
         3,
     );
@@ -562,6 +567,7 @@ async fn worker_force_path_reuses_existing_article_id() {
             learned_rules,
             rule_stats,
             sample_store,
+            mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
         },
         1,
     );
@@ -637,6 +643,7 @@ async fn worker_notify_hook_fires_on_early_return_fetch_failure() {
             learned_rules,
             rule_stats,
             sample_store,
+            mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
         },
         1,
     );
@@ -697,6 +704,7 @@ async fn worker_skips_notify_when_reply_handle_missing() {
             learned_rules,
             rule_stats,
             sample_store,
+            mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
         },
         1,
     );
@@ -755,6 +763,7 @@ async fn ingest_fails_when_quality_gate_rejects_and_no_upgrade_path() {
             learned_rules,
             rule_stats,
             sample_store,
+            mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
         },
         1,
     );
