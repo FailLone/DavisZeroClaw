@@ -200,6 +200,11 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
     # Engine dispatch. `pruning` keeps the existing crawl4ai flow (markdown already
     # resolved below). For trafilatura / openrouter-llm, re-run extraction on the
     # raw HTML regardless of crawl4ai's own markdown_generator setting.
+    #
+    # TODO(Phase-2): delete the `pruning` branch once all Rust callers migrate
+    # off `extract_engine="pruning"` and the legacy `markdown_generator: true`
+    # compat mapping is dropped. Trafilatura + Rust-local LLM upgrade cover the
+    # production path now; `pruning` remains only for the in-flight migration.
     response_markdown: Optional[str] = None
     extra_warnings: list[str] = []
     engine_used = req.extract_engine or ("pruning" if req.markdown_generator else None)
