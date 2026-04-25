@@ -1,6 +1,8 @@
 //! Search provider abstraction. Brave is the only real impl in MVP;
 //! mock is available via `#[cfg(test)]`.
 
+pub mod brave;
+
 #[cfg(test)]
 pub mod mock;
 

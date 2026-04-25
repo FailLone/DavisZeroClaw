@@ -1,0 +1,16 @@
+{
+  "web": {
+    "results": [
+      {
+        "title": "Tokio scheduler internals",
+        "url": "https://tokio.rs/blog/2019-10-scheduler",
+        "description": "Explains fair scheduling in Tokio 0.2"
+      },
+      {
+        "title": "io_uring getting started",
+        "url": "https://example.com/io-uring",
+        "description": "Linux async IO primer"
+      }
+    ]
+  }
+}

@@ -5,4 +5,5 @@ pub mod feed_ingestor;
 pub mod search;
 pub mod worker;
 
+pub use search::brave::BraveSearch;
 pub use worker::{DiscoveryWorker, DiscoveryWorkerDeps};

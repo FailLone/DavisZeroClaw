@@ -34,7 +34,7 @@ pub use app_config::{
     McpTransport, ModelProviderConfig, OpenRouterLlmEngineConfig, QualityGateToml, RoutingConfig,
     RoutingProfileConfig, RoutingProfilesConfig, RuleLearningConfig, WebhookConfig,
 };
-pub use article_memory::discovery::{DiscoveryWorker, DiscoveryWorkerDeps};
+pub use article_memory::discovery::{BraveSearch, DiscoveryWorker, DiscoveryWorkerDeps};
 pub use article_memory::{
     add_article_memory, add_article_memory_override, article_memory_status,
     build_article_strategy_review_input, check_article_cleaning, check_article_memory,
