@@ -171,10 +171,21 @@ impl RuntimePaths {
     /// Program path + args for launching the MemPalace MCP server that the
     /// Davis sink talks to. Returns `(program, args)` so the caller can feed
     /// them straight into `tokio::process::Command`.
-    pub fn mempalace_mcp_server_cmd(&self) -> (PathBuf, Vec<&'static str>) {
+    ///
+    /// The `--palace <dir>` argument is CRITICAL: without it MemPalace falls
+    /// back to `~/.mempalace/palace`, which is the user's personal MemPalace.
+    /// Davis must never write its automated projections into the user's
+    /// palace — it uses its own dir under `{runtime}/mempalace/`.
+    pub fn mempalace_mcp_server_cmd(&self) -> (PathBuf, Vec<String>) {
+        let palace = self.mempalace_palace_dir();
         (
             self.mempalace_python_path(),
-            vec!["-m", "mempalace.mcp_server"],
+            vec![
+                "-m".to_string(),
+                "mempalace.mcp_server".to_string(),
+                "--palace".to_string(),
+                palace.to_string_lossy().into_owned(),
+            ],
         )
     }
 
@@ -263,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn mempalace_mcp_server_cmd_points_into_venv_python() {
+    fn mempalace_mcp_server_cmd_points_into_venv_python_and_isolates_palace() {
         let paths = RuntimePaths {
             repo_root: std::path::PathBuf::from("/tmp/repo"),
             runtime_dir: std::path::PathBuf::from("/tmp/runtime"),
@@ -271,6 +282,17 @@ mod tests {
         let (program, args) = paths.mempalace_mcp_server_cmd();
         assert_eq!(program, paths.mempalace_python_path());
         assert!(program.ends_with("mempalace-venv/bin/python"));
-        assert_eq!(args, vec!["-m", "mempalace.mcp_server"]);
+        // --palace is REQUIRED — without it MemPalace writes into the user's
+        // personal palace at ~/.mempalace/palace.
+        let expected_palace = paths.mempalace_palace_dir();
+        assert_eq!(
+            args,
+            vec![
+                "-m".to_string(),
+                "mempalace.mcp_server".to_string(),
+                "--palace".to_string(),
+                expected_palace.to_string_lossy().into_owned(),
+            ],
+        );
     }
 }

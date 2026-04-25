@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
@@ -368,7 +369,58 @@ where
 
 async fn dispatch(client: &McpStdioClient, event: SinkEvent) -> anyhow::Result<()> {
     let (tool, args) = event_to_call(event);
-    client.call_tool(&tool, args).await.map(|_| ())
+    let result = client.call_tool(&tool, args).await?;
+    parse_tool_outcome(&tool, &result)
+}
+
+/// MemPalace returns MCP `result.content[0].text` as a JSON string with a
+/// `success` boolean. The JSON-RPC layer being OK is not enough — a
+/// `{success: false, error: "..."}` payload means Davis's event never
+/// reached the palace. Surface it as an error so metrics/last_error are honest.
+fn parse_tool_outcome(tool: &str, value: &Value) -> anyhow::Result<()> {
+    let Some(text) = value
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|items| items.iter().find_map(|item| item.get("text")))
+        .and_then(Value::as_str)
+    else {
+        // No `content[].text` block — treat as best-effort success. Some
+        // MemPalace tools (e.g. search/status) return structured JSON instead;
+        // our write tools always go through the text channel so hitting this
+        // branch for them would itself be suspicious.
+        tracing::debug!(
+            target: "mempalace_sink",
+            tool,
+            "tool result lacked content[].text payload — assuming success",
+        );
+        return Ok(());
+    };
+
+    let body: Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(_) => {
+            // Unstructured text response (e.g. a status string). MemPalace
+            // write tools are JSON, so log but don't fail.
+            tracing::debug!(
+                target: "mempalace_sink",
+                tool,
+                "tool text was not JSON — assuming success",
+            );
+            return Ok(());
+        }
+    };
+
+    match body.get("success").and_then(Value::as_bool) {
+        Some(false) => {
+            let err_msg = body
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("tool reported success=false without error field");
+            Err(anyhow!("{tool} failed: {err_msg}"))
+        }
+        // success=true or field absent → treat as OK.
+        _ => Ok(()),
+    }
 }
 
 fn event_to_call(event: SinkEvent) -> (String, Value) {
@@ -493,6 +545,53 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(2)).await;
         let m = sink.metrics().await;
         assert!(m.silenced, "sink should be silenced by now: {m:?}");
+    }
+
+    #[test]
+    fn parse_tool_outcome_treats_success_false_as_error() {
+        let result = json!({
+            "content": [{
+                "type": "text",
+                "text": "{\"success\": false, \"error\": \"wing contains invalid characters\"}",
+            }]
+        });
+        let err = parse_tool_outcome("mempalace_add_drawer", &result)
+            .expect_err("expected failure to propagate");
+        let msg = err.to_string();
+        assert!(msg.contains("mempalace_add_drawer"), "{msg}");
+        assert!(msg.contains("wing contains invalid characters"), "{msg}");
+    }
+
+    #[test]
+    fn parse_tool_outcome_accepts_success_true() {
+        let result = json!({
+            "content": [{"type":"text","text":"{\"success\": true, \"drawer_id\": \"abc\"}"}]
+        });
+        assert!(parse_tool_outcome("mempalace_add_drawer", &result).is_ok());
+    }
+
+    #[test]
+    fn parse_tool_outcome_accepts_no_success_field() {
+        // Some tools (status, get_aaak_spec) return structured JSON with no
+        // `success` field. Don't treat that as failure.
+        let result = json!({
+            "content": [{"type":"text","text":"{\"total_drawers\": 0}"}]
+        });
+        assert!(parse_tool_outcome("mempalace_status", &result).is_ok());
+    }
+
+    #[test]
+    fn parse_tool_outcome_accepts_non_json_text() {
+        let result = json!({
+            "content": [{"type":"text","text":"unstructured status line"}]
+        });
+        assert!(parse_tool_outcome("mempalace_status", &result).is_ok());
+    }
+
+    #[test]
+    fn parse_tool_outcome_accepts_missing_content_block() {
+        let result = json!({});
+        assert!(parse_tool_outcome("some_tool", &result).is_ok());
     }
 
     #[tokio::test]

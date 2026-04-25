@@ -9,3 +9,9 @@ mod mcp_stdio;
 mod predicate;
 
 pub(crate) use driver::MemPalaceSink;
+#[cfg(test)]
+pub(crate) use driver::SinkMetrics;
+#[cfg(test)]
+pub(crate) use mcp_stdio::{InitializeParams, McpStdioClient};
+#[cfg(test)]
+pub(crate) use predicate::{Predicate, TripleId};

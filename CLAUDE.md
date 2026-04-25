@@ -84,13 +84,13 @@ Davis runs a long-running Rust bridge that speaks MCP over stdio to MemPalace's 
 ### Wing & room taxonomy
 
 ```
-wing=davis:articles            room=<topic-slug>
-wing=davis:ha                  room=<area-slug>
-wing=davis:routing             room=<profile-slug|budget>
-wing=davis:agent:ingest        diary only
-wing=davis:agent:router        diary only
-wing=davis:agent:ha-analyzer   diary only
-wing=davis:agent:rule-learner  diary only
+wing=davis.articles            room=<topic-slug>
+wing=davis.ha                  room=<area-slug>
+wing=davis.routing             room=<profile-slug|budget>
+wing=davis.agent.ingest        diary only
+wing=davis.agent.router        diary only
+wing=davis.agent.ha-analyzer   diary only
+wing=davis.agent.rule-learner  diary only
 ```
 
 ### KG entity ID scheme
@@ -148,7 +148,7 @@ Fixed `enum Predicate` in `mempalace_sink.rs`. Adding a predicate is a code chan
 - Write failure: drop + tracing warn + metrics; never block Davis path.
 - Davis local JSON is source of truth. MemPalace is eventually consistent. Reconciliation audit CLI comes in Phase 5.
 - PII: scrub drawer content before `add_drawer` (addresses, full names, secrets). KG is safer because it only holds IDs + tags.
-- Drawer retention: 90 days uncompressed; older drawers run through `mempalace compress --wing davis:*` (AAAK lossy — accept).
+- Drawer retention: 90 days uncompressed; older drawers run through `mempalace compress --wing davis.*` (AAAK lossy — accept).
 
 ### Rollout phases (~2–3 weeks)
 

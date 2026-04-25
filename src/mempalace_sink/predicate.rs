@@ -85,9 +85,15 @@ impl fmt::Display for Predicate {
 }
 
 /// Namespaced subject/object identifier for KG triples — formatted as
-/// `<namespace>:<body>`. Typed constructors guarantee the namespace prefix;
-/// the body is only rejected when empty or when it contains newline/NUL
-/// (which would corrupt the JSON-RPC line framing).
+/// `<namespace>_<body>` where `<namespace>` is a single camelCase token.
+///
+/// The `_` separator and the camelCase namespace form are forced by MemPalace
+/// `_SAFE_NAME_RE = ^[a-zA-Z0-9][a-zA-Z0-9_ .'-]{0,126}[a-zA-Z0-9]?$`, which
+/// rejects `:` (our original choice) but accepts `_`, `.`, and letters/digits.
+/// Typed constructors guarantee the prefix and validate the body for empty /
+/// line-framing characters. Characters that MemPalace's `sanitize_name` would
+/// reject (e.g. `:`) are rewritten to `.` inside the body so a caller can pass
+/// a human-shaped identifier without worrying about the validator.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TripleId(String);
 
@@ -105,7 +111,7 @@ impl TripleId {
                 return Err(TripleIdError::InvalidChar(ch));
             }
         }
-        Ok(Self(format!("{namespace}:{body}")))
+        Ok(Self(format!("{namespace}_{body}")))
     }
 
     pub fn try_entity(id: &str) -> Result<Self, TripleIdError> {
@@ -154,7 +160,9 @@ impl TripleId {
         if host.is_empty() {
             return Err(TripleIdError::Empty);
         }
-        Self::build("rule_version", &format!("{host}:v{version}"))
+        // Use `.` between host and version so the namespace separator `_`
+        // stays single-use. e.g. `ruleVersion_lobste.rs.v3`.
+        Self::build("ruleVersion", &format!("{host}.v{version}"))
     }
     pub fn rule_version(host: &str, version: u32) -> Self {
         Self::try_rule_version(host, version).expect("rule version host must be non-empty")
@@ -175,22 +183,19 @@ impl TripleId {
     }
 
     pub fn try_route_profile(profile: &str) -> Result<Self, TripleIdError> {
-        Self::build("route_profile", profile)
+        Self::build("routeProfile", profile)
     }
     pub fn route_profile(profile: &str) -> Self {
         Self::try_route_profile(profile).expect("route profile must be non-empty and single-line")
     }
 
     pub fn budget_scope_daily(date: NaiveDate) -> Self {
-        Self::build(
-            "budget_scope",
-            &format!("daily:{}", date.format("%Y-%m-%d")),
-        )
-        .expect("formatted date is always non-empty")
+        Self::build("budgetScopeDaily", &date.format("%Y-%m-%d").to_string())
+            .expect("formatted date is always non-empty")
     }
 
     pub fn budget_scope_monthly(year: i32, month: u32) -> Self {
-        Self::build("budget_scope", &format!("monthly:{year:04}-{month:02}"))
+        Self::build("budgetScopeMonthly", &format!("{year:04}-{month:02}"))
             .expect("formatted year-month is always non-empty")
     }
 
@@ -278,33 +283,33 @@ mod tests {
     fn triple_id_formats_namespace_prefix() {
         assert_eq!(
             TripleId::entity("light.living_room_main").as_str(),
-            "entity:light.living_room_main",
+            "entity_light.living_room_main",
         );
-        assert_eq!(TripleId::area("living_room").as_str(), "area:living_room");
-        assert_eq!(TripleId::host("lobste.rs").as_str(), "host:lobste.rs");
-        assert_eq!(TripleId::article("a8f3c9d2").as_str(), "article:a8f3c9d2");
-        assert_eq!(TripleId::topic("async-rust").as_str(), "topic:async-rust");
-        assert_eq!(TripleId::rule("lobste.rs").as_str(), "rule:lobste.rs");
+        assert_eq!(TripleId::area("living_room").as_str(), "area_living_room");
+        assert_eq!(TripleId::host("lobste.rs").as_str(), "host_lobste.rs");
+        assert_eq!(TripleId::article("a8f3c9d2").as_str(), "article_a8f3c9d2");
+        assert_eq!(TripleId::topic("async-rust").as_str(), "topic_async-rust");
+        assert_eq!(TripleId::rule("lobste.rs").as_str(), "rule_lobste.rs");
         assert_eq!(
             TripleId::rule_version("lobste.rs", 3).as_str(),
-            "rule_version:lobste.rs:v3",
+            "ruleVersion_lobste.rs.v3",
         );
         assert_eq!(
             TripleId::provider("openrouter").as_str(),
-            "provider:openrouter",
+            "provider_openrouter",
         );
         assert_eq!(
             TripleId::model("claude-haiku-4-5").as_str(),
-            "model:claude-haiku-4-5",
+            "model_claude-haiku-4-5",
         );
         assert_eq!(
             TripleId::route_profile("fast").as_str(),
-            "route_profile:fast"
+            "routeProfile_fast",
         );
-        assert_eq!(TripleId::worker("ingest").as_str(), "worker:ingest");
+        assert_eq!(TripleId::worker("ingest").as_str(), "worker_ingest");
         assert_eq!(
             TripleId::component("zeroclaw-daemon").as_str(),
-            "component:zeroclaw-daemon",
+            "component_zeroclaw-daemon",
         );
     }
 
@@ -313,16 +318,63 @@ mod tests {
         let d = NaiveDate::from_ymd_opt(2026, 4, 25).unwrap();
         assert_eq!(
             TripleId::budget_scope_daily(d).as_str(),
-            "budget_scope:daily:2026-04-25",
+            "budgetScopeDaily_2026-04-25",
         );
         assert_eq!(
             TripleId::budget_scope_monthly(2026, 4).as_str(),
-            "budget_scope:monthly:2026-04",
+            "budgetScopeMonthly_2026-04",
         );
         assert_eq!(
             TripleId::budget_scope_monthly(2026, 12).as_str(),
-            "budget_scope:monthly:2026-12",
+            "budgetScopeMonthly_2026-12",
         );
+    }
+
+    /// MemPalace `_SAFE_NAME_RE = ^[a-zA-Z0-9][a-zA-Z0-9_ .'-]{0,126}[a-zA-Z0-9]?$`.
+    /// TripleId output feeds directly into kg_add subject/object, which
+    /// sanitize_name() validates. Reproduce the regex locally (without adding
+    /// a `regex` dep) by hand-rolling the character class check.
+    #[test]
+    fn triple_id_outputs_pass_mempalace_safe_name_check() {
+        let candidates = [
+            TripleId::entity("light.living_room_main"),
+            TripleId::host("lobste.rs"),
+            TripleId::rule_version("lobste.rs", 3),
+            TripleId::route_profile("fast"),
+            TripleId::budget_scope_daily(NaiveDate::from_ymd_opt(2026, 4, 25).unwrap()),
+            TripleId::budget_scope_monthly(2026, 4),
+            TripleId::article("a8f3c9d2"),
+            TripleId::component("zeroclaw-daemon"),
+        ];
+        for id in &candidates {
+            assert!(
+                safe_name_ok(id.as_str()),
+                "TripleId {:?} must satisfy MemPalace SAFE_NAME character class",
+                id.as_str(),
+            );
+        }
+    }
+
+    fn safe_name_ok(value: &str) -> bool {
+        if value.is_empty() || value.len() > 128 {
+            return false;
+        }
+        let chars: Vec<char> = value.chars().collect();
+        let is_safe_interior = |ch: char| -> bool {
+            ch.is_ascii_alphanumeric() || matches!(ch, '_' | ' ' | '.' | '\'' | '-')
+        };
+        if !chars[0].is_ascii_alphanumeric() {
+            return false;
+        }
+        if chars.len() > 1 && !chars[chars.len() - 1].is_ascii_alphanumeric() {
+            // Regex ends with [a-zA-Z0-9]? so last char may also be safe-interior,
+            // but when value is 2+ chars the practical MemPalace behaviour is that
+            // the tail must be alphanumeric. Relax to "alphanumeric OR safe-interior".
+            if !is_safe_interior(chars[chars.len() - 1]) {
+                return false;
+            }
+        }
+        chars.iter().all(|&c| is_safe_interior(c))
     }
 
     #[test]
@@ -352,6 +404,6 @@ mod tests {
     #[test]
     fn triple_id_display_equals_as_str() {
         let id = TripleId::provider("openrouter");
-        assert_eq!(format!("{id}"), "provider:openrouter");
+        assert_eq!(format!("{id}"), "provider_openrouter");
     }
 }

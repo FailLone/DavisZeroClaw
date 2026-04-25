@@ -165,7 +165,7 @@ async fn call_tool_correlates_requests_and_responses() {
 async fn sink_drops_events_when_child_is_absent_without_blocking() {
     let sink = MemPalaceSink::for_test_missing_child();
     for _ in 0..1000 {
-        sink.add_drawer("davis:articles", "test", "content");
+        sink.add_drawer("davis.articles", "test", "content");
     }
     let metrics = sink.metrics();
     assert_eq!(metrics.sent, 0);
@@ -276,7 +276,7 @@ async fn writes_a_marker_drawer_and_reads_it_back() {
     let Some(venv) = std::env::var_os("DAVIS_MEMPALACE_VENV") else { return };
     let paths = RuntimePaths::with_mempalace_venv(venv);
     let sink = MemPalaceSink::spawn(&paths);
-    sink.add_drawer("davis:test", "smoke", "hello from davis");
+    sink.add_drawer("davis.test", "smoke", "hello from davis");
     tokio::time::sleep(Duration::from_secs(2)).await;
     let metrics = sink.metrics();
     assert!(metrics.sent >= 1);
@@ -401,7 +401,7 @@ fn findings_narrative_is_emitted_per_area() {
     emit_findings_drawer(&findings, &spy);
     let drawers = spy.drawers();
     assert_eq!(drawers.len(), 2);
-    assert_eq!(drawers[0].wing, "davis:ha");
+    assert_eq!(drawers[0].wing, "davis.ha");
     assert!(drawers.iter().any(|d| d.room == "living_room" && d.content.contains("光1")));
 }
 ```
@@ -430,7 +430,7 @@ fn diary_summarizes_refresh_counts() {
     let spy = SpySink::default();
     emit_refresh_diary(&report, &spy);
     let entries = spy.diary_entries();
-    assert_eq!(entries[0].0, "davis:agent:ha-analyzer");
+    assert_eq!(entries[0].0, "davis.agent.ha-analyzer");
     assert!(entries[0].1.contains("unavailable=1"));
 }
 ```
@@ -530,7 +530,7 @@ async fn successful_ingest_emits_scrubbed_value_drawer() {
     …
     run_worker_once(deps, job).await;
     let d = spy.drawers().into_iter().next().unwrap();
-    assert_eq!(d.wing, "davis:articles");
+    assert_eq!(d.wing, "davis.articles");
     assert!(!d.content.contains("@"));
     assert!(d.content.len() <= 500);
 }
@@ -560,7 +560,7 @@ async fn ingest_worker_writes_diary_summary_per_cycle() { … }
 
 - [ ] **Step 2: Implement**
 
-At `IngestWorkerPool::drain_once` end, emit one diary: `"cycle=<ts> ingested=N failed=M avg_quality=X.X hosts=..."`. `wing = "davis:agent:ingest"`.
+At `IngestWorkerPool::drain_once` end, emit one diary: `"cycle=<ts> ingested=N failed=M avg_quality=X.X hosts=..."`. `wing = "davis.agent.ingest"`.
 
 - [ ] **Step 3: Verify**
 
@@ -705,7 +705,7 @@ Compress cadence + wing allow-list + dry-run mode — tested by spy on the compr
 
 - [ ] **Step 2: Implement**
 
-A tokio interval fires `mempalace compress --wing davis:articles --older-than 90d` via the sink (new tool call, not a CLI shell). Accept AAAK lossiness for article drawers only; HA/routing drawers skip compress (they're small and time-sensitive).
+A tokio interval fires `mempalace compress --wing davis.articles --older-than 90d` via the sink (new tool call, not a CLI shell). Accept AAAK lossiness for article drawers only; HA/routing drawers skip compress (they're small and time-sensitive).
 
 - [ ] **Step 3: Verify**
 
@@ -758,7 +758,7 @@ Walk Davis's `article-memory/index.json`; for each article, probe MemPalace for 
 | Wing/room naming typos | `TripleId::try_*` constructors + typed `Wing` / `Room` newtypes for subsystem hooks |
 | User disables MemPalace | `MemPalaceSink::disabled()`; all call sites already fire-and-forget |
 | Write amplification (many triples per article) | mpsc bounded 1024; bridge batches within a single MCP call when queue depth > 8 (Phase 1 stretch) |
-| AAAK lossy compression regresses benchmarks | Compress only `davis:articles` drawers; HA/routing stay verbatim |
+| AAAK lossy compression regresses benchmarks | Compress only `davis.articles` drawers; HA/routing stay verbatim |
 | PII leakage into drawers | `pii_scrub` on every `add_drawer` from Phase 3 onward; KG holds only IDs + tags |
 
 ---
