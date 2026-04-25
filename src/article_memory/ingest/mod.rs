@@ -36,7 +36,7 @@ pub use content_signals::{compute_signals, ContentSignals};
 #[allow(unused_imports)]
 pub use engines::{next_engine, pick_engine, EngineChoice, ExtractEngineConfig};
 #[allow(unused_imports)]
-pub use learned_rules::LearnedRuleStore;
+pub use learned_rules::{LearnedRuleStore, RuleStatsStore};
 #[allow(unused_imports)]
 pub use llm_extract::llm_html_to_markdown;
 #[allow(unused_imports)]

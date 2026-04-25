@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-use super::rule_types::LearnedRule;
+use super::rule_types::{LearnedRule, RuleStats};
 use crate::RuntimePaths;
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -235,5 +235,131 @@ content_selectors = [".hand-written"]
         let s2 = LearnedRuleStore::load(&paths, None).unwrap();
         let got = s2.get("example.com").await.unwrap();
         assert_eq!(got.host, "example.com");
+    }
+}
+
+#[derive(Clone)]
+pub struct RuleStatsStore {
+    path: PathBuf,
+    inner: Arc<RwLock<BTreeMap<String, RuleStats>>>,
+}
+
+impl RuleStatsStore {
+    pub fn load(paths: &RuntimePaths) -> Result<Self> {
+        let path = paths.article_memory_dir().join("learned_rules_stats.json");
+        let map: BTreeMap<String, RuleStats> = if path.exists() {
+            let raw = fs::read_to_string(&path)?;
+            serde_json::from_str(&raw).unwrap_or_default()
+        } else {
+            BTreeMap::new()
+        };
+        Ok(Self {
+            path,
+            inner: Arc::new(RwLock::new(map)),
+        })
+    }
+
+    pub async fn bump_hit(&self, host: &str) -> Result<()> {
+        let mut map = self.inner.write().await;
+        let entry = map.entry(host.to_string()).or_default();
+        entry.hits += 1;
+        entry.consecutive_issues = 0;
+        entry.last_updated = crate::support::isoformat(crate::support::now_utc());
+        let body = serde_json::to_string_pretty(&*map)?;
+        drop(map);
+        self.persist(body).await
+    }
+
+    pub async fn bump_partial(&self, host: &str) -> Result<u32> {
+        let mut map = self.inner.write().await;
+        let entry = map.entry(host.to_string()).or_default();
+        entry.partial += 1;
+        entry.consecutive_issues += 1;
+        entry.last_updated = crate::support::isoformat(crate::support::now_utc());
+        let streak = entry.consecutive_issues;
+        let body = serde_json::to_string_pretty(&*map)?;
+        drop(map);
+        self.persist(body).await?;
+        Ok(streak)
+    }
+
+    pub async fn bump_poor(&self, host: &str) -> Result<()> {
+        let mut map = self.inner.write().await;
+        let entry = map.entry(host.to_string()).or_default();
+        entry.poor += 1;
+        entry.consecutive_issues += 1;
+        entry.last_updated = crate::support::isoformat(crate::support::now_utc());
+        let body = serde_json::to_string_pretty(&*map)?;
+        drop(map);
+        self.persist(body).await
+    }
+
+    pub async fn reset_for_new_rule(&self, host: &str, rule_version: &str) -> Result<()> {
+        let mut map = self.inner.write().await;
+        map.insert(
+            host.to_string(),
+            RuleStats {
+                rule_version: rule_version.to_string(),
+                hits: 0,
+                partial: 0,
+                poor: 0,
+                consecutive_issues: 0,
+                last_relearn_trigger: None,
+                last_updated: crate::support::isoformat(crate::support::now_utc()),
+            },
+        );
+        let body = serde_json::to_string_pretty(&*map)?;
+        drop(map);
+        self.persist(body).await
+    }
+
+    pub async fn get(&self, host: &str) -> Option<RuleStats> {
+        let map = self.inner.read().await;
+        map.get(host).cloned()
+    }
+
+    async fn persist(&self, body: String) -> Result<()> {
+        let tmp = self.path.with_extension("json.tmp");
+        fs::write(&tmp, body)?;
+        fs::rename(&tmp, &self.path)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bump_partial_returns_running_streak() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let paths = RuntimePaths {
+            repo_root: temp.path().to_path_buf(),
+            runtime_dir: temp.path().join("runtime"),
+        };
+        std::fs::create_dir_all(paths.article_memory_dir()).unwrap();
+        let store = RuleStatsStore::load(&paths).unwrap();
+        assert_eq!(store.bump_partial("x.com").await.unwrap(), 1);
+        assert_eq!(store.bump_partial("x.com").await.unwrap(), 2);
+        store.bump_hit("x.com").await.unwrap();
+        assert_eq!(store.bump_partial("x.com").await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn reset_clears_counters() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let paths = RuntimePaths {
+            repo_root: temp.path().to_path_buf(),
+            runtime_dir: temp.path().join("runtime"),
+        };
+        std::fs::create_dir_all(paths.article_memory_dir()).unwrap();
+        let store = RuleStatsStore::load(&paths).unwrap();
+        store.bump_partial("x.com").await.unwrap();
+        store.bump_poor("x.com").await.unwrap();
+        store.reset_for_new_rule("x.com", "v2").await.unwrap();
+        let stats = store.get("x.com").await.unwrap();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.partial, 0);
+        assert_eq!(stats.rule_version, "v2");
     }
 }
