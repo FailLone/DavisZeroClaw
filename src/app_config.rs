@@ -172,6 +172,8 @@ pub struct ArticleMemoryConfig {
     pub rule_learning: RuleLearningConfig,
     #[serde(default)]
     pub discovery: DiscoveryConfig,
+    #[serde(default)]
+    pub translate: TranslateConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -265,6 +267,71 @@ impl DiscoveryConfig {
                     topic.slug
                 );
             }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranslateConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_target_language")]
+    pub target_language: String,
+    #[serde(default = "default_zeroclaw_base_url")]
+    pub zeroclaw_base_url: String,
+    #[serde(default = "default_translate_budget_scope")]
+    pub budget_scope: String,
+    #[serde(default = "default_translate_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "default_translate_batch")]
+    pub batch_per_cycle: usize,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+}
+
+impl Default for TranslateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            target_language: default_target_language(),
+            zeroclaw_base_url: default_zeroclaw_base_url(),
+            budget_scope: default_translate_budget_scope(),
+            interval_secs: default_translate_interval(),
+            batch_per_cycle: default_translate_batch(),
+            api_key_env: None,
+        }
+    }
+}
+
+fn default_target_language() -> String {
+    "zh-CN".into()
+}
+fn default_zeroclaw_base_url() -> String {
+    "http://127.0.0.1:3001".into()
+}
+fn default_translate_budget_scope() -> String {
+    "translation:monthly".into()
+}
+fn default_translate_interval() -> u64 {
+    300
+}
+fn default_translate_batch() -> usize {
+    5
+}
+
+impl TranslateConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        url::Url::parse(&self.zeroclaw_base_url)
+            .map_err(|e| anyhow::anyhow!("translate.zeroclaw_base_url invalid: {e}"))?;
+        if self.interval_secs < 30 {
+            anyhow::bail!("translate.interval_secs must be >= 30");
+        }
+        if self.batch_per_cycle == 0 {
+            anyhow::bail!("translate.batch_per_cycle must be > 0");
         }
         Ok(())
     }
@@ -1071,5 +1138,40 @@ mod discovery_config_tests {
             err.contains("no feeds, sitemaps, or search queries"),
             "{err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod translate_config_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_bad_base_url_when_enabled() {
+        let cfg = TranslateConfig {
+            enabled: true,
+            zeroclaw_base_url: "not a url".into(),
+            ..TranslateConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_disabled() {
+        let cfg = TranslateConfig {
+            enabled: false,
+            ..TranslateConfig::default()
+        };
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_interval_below_30() {
+        let cfg = TranslateConfig {
+            enabled: true,
+            zeroclaw_base_url: "http://127.0.0.1:3001".into(),
+            interval_secs: 5,
+            ..TranslateConfig::default()
+        };
+        assert!(cfg.validate().is_err());
     }
 }
