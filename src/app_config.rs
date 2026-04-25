@@ -164,6 +164,10 @@ pub struct ArticleMemoryConfig {
     pub normalize: ArticleMemoryNormalizeConfig,
     #[serde(default)]
     pub ingest: ArticleMemoryIngestConfig,
+    #[serde(default)]
+    pub extract: ArticleMemoryExtractConfig,
+    #[serde(default)]
+    pub quality_gate: QualityGateToml,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,6 +239,67 @@ pub struct ArticleMemoryHostProfile {
     pub source: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ArticleMemoryExtractConfig {
+    #[serde(default = "default_extract_engine")]
+    pub default_engine: String,
+    #[serde(default = "default_fallback_ladder")]
+    pub fallback_ladder: Vec<String>,
+    #[serde(default)]
+    pub openrouter_llm: OpenRouterLlmEngineConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct OpenRouterLlmEngineConfig {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default = "default_openrouter_llm_model")]
+    pub model: String,
+    #[serde(default = "default_openrouter_llm_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_openrouter_llm_max_input_chars")]
+    pub max_input_chars: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QualityGateToml {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_gate_min_markdown_chars")]
+    pub min_markdown_chars: usize,
+    #[serde(default = "default_gate_min_kept_ratio")]
+    pub min_kept_ratio: f32,
+    #[serde(default = "default_gate_min_paragraphs")]
+    pub min_paragraphs: usize,
+    #[serde(default = "default_gate_max_link_density")]
+    pub max_link_density: f32,
+    #[serde(default)]
+    pub boilerplate_markers: Vec<String>,
+}
+
+impl Default for QualityGateToml {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_markdown_chars: default_gate_min_markdown_chars(),
+            min_kept_ratio: default_gate_min_kept_ratio(),
+            min_paragraphs: default_gate_min_paragraphs(),
+            max_link_density: default_gate_max_link_density(),
+            boilerplate_markers: Vec::new(),
+        }
+    }
+}
+
+impl Default for ArticleMemoryExtractConfig {
+    fn default() -> Self {
+        Self {
+            default_engine: default_extract_engine(),
+            fallback_ladder: default_fallback_ladder(),
+            openrouter_llm: OpenRouterLlmEngineConfig::default(),
+        }
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -293,6 +358,42 @@ fn default_ingest_min_markdown_chars() -> usize {
 
 fn default_ingest_dedup_window_hours() -> u64 {
     24
+}
+
+fn default_extract_engine() -> String {
+    "trafilatura".to_string()
+}
+
+fn default_fallback_ladder() -> Vec<String> {
+    vec!["trafilatura".to_string(), "openrouter-llm".to_string()]
+}
+
+fn default_openrouter_llm_model() -> String {
+    "google/gemini-2.0-flash-001".to_string()
+}
+
+fn default_openrouter_llm_timeout_secs() -> u64 {
+    60
+}
+
+fn default_openrouter_llm_max_input_chars() -> usize {
+    60_000
+}
+
+fn default_gate_min_markdown_chars() -> usize {
+    500
+}
+
+fn default_gate_min_kept_ratio() -> f32 {
+    0.05
+}
+
+fn default_gate_min_paragraphs() -> usize {
+    3
+}
+
+fn default_gate_max_link_density() -> f32 {
+    0.5
 }
 
 impl Default for Crawl4aiConfig {
@@ -637,7 +738,7 @@ fn validate_profile(
 
 #[cfg(test)]
 mod tests {
-    use super::ArticleMemoryConfig;
+    use super::{ArticleMemoryConfig, ArticleMemoryExtractConfig, QualityGateToml};
 
     #[test]
     fn article_memory_ingest_defaults_when_missing() {
@@ -677,6 +778,39 @@ mod tests {
         assert_eq!(cfg.ingest.host_profiles[0].match_suffix, "zhihu.com");
         assert_eq!(cfg.ingest.host_profiles[0].profile, "articles-zhihu");
         assert_eq!(cfg.ingest.host_profiles[0].source.as_deref(), Some("zhihu"));
+    }
+
+    #[test]
+    fn article_memory_extract_defaults_to_trafilatura() {
+        let toml = r#"
+[extract]
+        "#;
+        let cfg: ExtractWrapper = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.extract.default_engine, "trafilatura");
+        assert_eq!(
+            cfg.extract.fallback_ladder,
+            vec!["trafilatura".to_string(), "openrouter-llm".to_string()]
+        );
+    }
+
+    #[test]
+    fn quality_gate_defaults_are_sane() {
+        let toml = "";
+        let cfg: QualityGateWrapper = toml::from_str(toml).unwrap();
+        assert!(cfg.quality_gate.enabled);
+        assert_eq!(cfg.quality_gate.min_markdown_chars, 500);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ExtractWrapper {
+        #[serde(default)]
+        extract: ArticleMemoryExtractConfig,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct QualityGateWrapper {
+        #[serde(default)]
+        quality_gate: QualityGateToml,
     }
 }
 
