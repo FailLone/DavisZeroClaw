@@ -95,3 +95,82 @@ mod tests {
         assert!(out.contains("  indented"));
     }
 }
+
+use std::collections::VecDeque;
+
+/// Near-line deduplicator. Drops a line only if its lowercased form appears
+/// in the most recent `window_size` kept lines. Unlike full-document dedup,
+/// this keeps legitimate cross-section repeats (e.g. "示例:" appearing in
+/// multiple sections) while still removing adjacent template noise.
+pub struct SlidingDedup {
+    window: VecDeque<String>,
+    window_size: usize,
+    /// Lines at least this long are never deduped (long content is never
+    /// accidental repetition).
+    long_line_threshold: usize,
+}
+
+impl SlidingDedup {
+    pub fn new(window_size: usize, long_line_threshold: usize) -> Self {
+        Self {
+            window: VecDeque::with_capacity(window_size.saturating_add(1)),
+            window_size,
+            long_line_threshold,
+        }
+    }
+
+    /// Returns true if the line should be kept; mutates internal window.
+    pub fn accept(&mut self, line: &str) -> bool {
+        if line.chars().count() >= self.long_line_threshold {
+            return true;
+        }
+        let key = line.to_lowercase();
+        if self.window.iter().any(|prev| prev == &key) {
+            return false;
+        }
+        self.window.push_back(key);
+        if self.window.len() > self.window_size {
+            self.window.pop_front();
+        }
+        true
+    }
+}
+
+#[cfg(test)]
+mod dedup_tests {
+    use super::*;
+
+    #[test]
+    fn adjacent_duplicate_dropped() {
+        let mut d = SlidingDedup::new(5, 80);
+        assert!(d.accept("hello"));
+        assert!(!d.accept("hello"));
+    }
+
+    #[test]
+    fn cross_section_repeat_kept_when_beyond_window() {
+        // Window=3; after 3 filler lines, "example:" is eligible again.
+        let mut d = SlidingDedup::new(3, 80);
+        assert!(d.accept("example:"));
+        assert!(d.accept("fill-a"));
+        assert!(d.accept("fill-b"));
+        assert!(d.accept("fill-c"));
+        assert!(d.accept("example:"), "should pass after window shift");
+    }
+
+    #[test]
+    fn long_lines_never_deduped() {
+        let long: String = "x".repeat(100);
+        let mut d = SlidingDedup::new(3, 80);
+        assert!(d.accept(&long));
+        assert!(d.accept(&long), "100-char line bypasses window check");
+    }
+
+    #[test]
+    fn case_insensitive_dedup() {
+        let mut d = SlidingDedup::new(5, 80);
+        assert!(d.accept("Hello"));
+        assert!(!d.accept("hello"));
+        assert!(!d.accept("HELLO"));
+    }
+}
