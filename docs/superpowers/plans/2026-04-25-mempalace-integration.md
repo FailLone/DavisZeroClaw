@@ -775,4 +775,5 @@ Walk Davis's `article-memory/index.json`; for each article, probe MemPalace for 
 
 - Phase 1 landed 2026-04-25 (commit b70a3ba, fixup cd7cf9b).
 - Phase 2 landed 2026-04-25 (commit 5204849).
-- Phases 3-6 pending.
+- Phase 3 landed 2026-04-25 (commit 58c72e9).
+- Phases 4-6 pending.
