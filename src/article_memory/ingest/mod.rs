@@ -1,3 +1,4 @@
+mod content_signals;
 mod host_profile;
 mod queue;
 pub(super) mod reply_text;
@@ -14,3 +15,7 @@ pub use types::{
     IngestResponse, IngestSubmitError, ListFilter,
 };
 pub use worker::{IngestWorkerDeps, IngestWorkerPool};
+// Consumed by T6 (quality gate) and Phase 2 scoring; currently only used in
+// this module's unit tests.
+#[allow(unused_imports)]
+pub use content_signals::{compute_signals, ContentSignals};
