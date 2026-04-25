@@ -1,3 +1,4 @@
+mod cleaning_fix;
 mod content_signals;
 mod engines;
 mod host_profile;
@@ -21,6 +22,8 @@ pub use types::{
 pub use worker::{IngestWorkerDeps, IngestWorkerPool};
 // Consumed by T6 (quality gate) and Phase 2 scoring; currently only used in
 // this module's unit tests.
+#[allow(unused_imports)]
+pub use cleaning_fix::{normalize_line_preserving, normalize_markdown_preserving_structure};
 #[allow(unused_imports)]
 pub use content_signals::{compute_signals, ContentSignals};
 #[allow(unused_imports)]
