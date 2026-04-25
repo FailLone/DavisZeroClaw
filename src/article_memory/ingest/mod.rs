@@ -2,6 +2,7 @@ mod cleaning_fix;
 mod content_signals;
 mod engines;
 mod host_profile;
+mod learned_rules;
 mod llm_extract;
 mod quality_gate;
 mod queue;
@@ -34,6 +35,8 @@ pub use cleaning_fix::{
 pub use content_signals::{compute_signals, ContentSignals};
 #[allow(unused_imports)]
 pub use engines::{next_engine, pick_engine, EngineChoice, ExtractEngineConfig};
+#[allow(unused_imports)]
+pub use learned_rules::LearnedRuleStore;
 #[allow(unused_imports)]
 pub use llm_extract::llm_html_to_markdown;
 #[allow(unused_imports)]
