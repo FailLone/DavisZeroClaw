@@ -456,6 +456,22 @@ async fn judge_article_value(
         Ok(content) => match parse_value_judge_response(&content, config, article) {
             Ok(mut judged) => {
                 judged.model = Some(format!("{}/{}", config.provider, config.model));
+                // Phase 2: when the LLM reports poor extraction, force candidate
+                // regardless of value_score. Stops bad extractions from silently
+                // becoming saved records; rule-learning worker (Phase 2.5) picks
+                // up the HTML sample.
+                if judged.extraction_quality == "poor" && judged.decision == "save" {
+                    tracing::info!(
+                        article_id = %article.id,
+                        value_score = judged.value_score,
+                        issues = ?judged.extraction_issues,
+                        "downgrading save→candidate due to extraction_quality=poor"
+                    );
+                    judged.decision = "candidate".to_string();
+                    judged.reasons.push(
+                        "extraction_quality=poor; downgraded from save to candidate".to_string(),
+                    );
+                }
                 Ok(judged)
             }
             Err(error) => {
@@ -754,5 +770,26 @@ mod tests {
             report.rule_refinement_hint.as_deref(),
             Some("drop .related list")
         );
+    }
+
+    #[test]
+    fn parse_response_with_poor_quality_stays_save_until_consumer_downgrades() {
+        // parse_value_judge_response does NOT downgrade; the consumer does.
+        let config = test_value_config();
+        let article = test_article();
+        let content = r#"{
+            "decision": "save",
+            "value_score": 0.9,
+            "reasons": [],
+            "topic_tags": [],
+            "risk_flags": [],
+            "translation_needed": false,
+            "extraction_quality": "poor",
+            "extraction_issues": ["content_truncated"],
+            "rule_refinement_hint": "selector too narrow"
+        }"#;
+        let report = parse_value_judge_response(content, &config, &article).unwrap();
+        assert_eq!(report.decision, "save"); // parser stays neutral
+        assert_eq!(report.extraction_quality, "poor");
     }
 }
