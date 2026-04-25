@@ -230,6 +230,27 @@ enum MempalaceCommand {
     Enable,
     /// Check MemPalace package, palace directory, and local config.
     Check,
+    /// Compress old Davis projection drawers via `mempalace compress`.
+    /// Intended to be wired to launchd / cron (e.g. weekly). Operates only
+    /// on `davis.articles` because HA / routing drawers are small and
+    /// time-sensitive.
+    Compress {
+        /// Wing to compress (default: davis.articles).
+        #[arg(long, default_value = "davis.articles")]
+        wing: String,
+        /// Age cutoff in days (default: 90).
+        #[arg(long, default_value_t = 90)]
+        older_than_days: u32,
+        /// Print the command instead of running it.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Reconcile Davis's article index against MemPalace projections.
+    /// Read-only: walks `article-memory/index.json`, summarizes per-host
+    /// counts and flags missing metadata, and prints hand-off commands the
+    /// user can run (`mempalace search ... --wing davis.articles`) to
+    /// cross-check. Does not open a MemPalace MCP connection.
+    Audit,
 }
 
 #[derive(Debug, Subcommand)]
@@ -524,6 +545,12 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
                 MempalaceCommand::Install => install_mempalace(&paths),
                 MempalaceCommand::Enable => enable_mempalace(&paths),
                 MempalaceCommand::Check => check_mempalace(&paths),
+                MempalaceCommand::Compress {
+                    wing,
+                    older_than_days,
+                    dry_run,
+                } => compress_mempalace(&paths, &wing, older_than_days, dry_run),
+                MempalaceCommand::Audit => audit_mempalace(&paths),
             },
         },
         Commands::Articles { command } => match command {

@@ -241,6 +241,9 @@ async fn ingest_happy_path_end_to_end() {
             rule_stats,
             sample_store,
             mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
+            worker_health_debouncer: std::sync::Arc::new(
+                crate::mempalace_sink::SampleDebouncer::new(2),
+            ),
         },
         1,
     );
@@ -298,6 +301,9 @@ async fn ingest_empty_markdown_rejected() {
             rule_stats,
             sample_store,
             mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
+            worker_health_debouncer: std::sync::Arc::new(
+                crate::mempalace_sink::SampleDebouncer::new(2),
+            ),
         },
         1,
     );
@@ -353,6 +359,9 @@ async fn ingest_crawl_server_error_surfaces_issue_type() {
             rule_stats,
             sample_store,
             mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
+            worker_health_debouncer: std::sync::Arc::new(
+                crate::mempalace_sink::SampleDebouncer::new(2),
+            ),
         },
         1,
     );
@@ -407,6 +416,9 @@ async fn ingest_same_host_serializes() {
             rule_stats,
             sample_store,
             mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
+            worker_health_debouncer: std::sync::Arc::new(
+                crate::mempalace_sink::SampleDebouncer::new(2),
+            ),
         },
         3,
     );
@@ -475,6 +487,9 @@ async fn ingest_different_hosts_parallelize() {
             rule_stats,
             sample_store,
             mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
+            worker_health_debouncer: std::sync::Arc::new(
+                crate::mempalace_sink::SampleDebouncer::new(2),
+            ),
         },
         3,
     );
@@ -568,6 +583,9 @@ async fn worker_force_path_reuses_existing_article_id() {
             rule_stats,
             sample_store,
             mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
+            worker_health_debouncer: std::sync::Arc::new(
+                crate::mempalace_sink::SampleDebouncer::new(2),
+            ),
         },
         1,
     );
@@ -644,6 +662,9 @@ async fn worker_notify_hook_fires_on_early_return_fetch_failure() {
             rule_stats,
             sample_store,
             mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
+            worker_health_debouncer: std::sync::Arc::new(
+                crate::mempalace_sink::SampleDebouncer::new(2),
+            ),
         },
         1,
     );
@@ -705,6 +726,9 @@ async fn worker_skips_notify_when_reply_handle_missing() {
             rule_stats,
             sample_store,
             mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
+            worker_health_debouncer: std::sync::Arc::new(
+                crate::mempalace_sink::SampleDebouncer::new(2),
+            ),
         },
         1,
     );
@@ -764,6 +788,9 @@ async fn ingest_fails_when_quality_gate_rejects_and_no_upgrade_path() {
             rule_stats,
             sample_store,
             mempalace_sink: std::sync::Arc::new(crate::mempalace_sink::SpySink::default()),
+            worker_health_debouncer: std::sync::Arc::new(
+                crate::mempalace_sink::SampleDebouncer::new(2),
+            ),
         },
         1,
     );

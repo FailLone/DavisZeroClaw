@@ -773,8 +773,21 @@ Walk Davis's `article-memory/index.json`; for each article, probe MemPalace for 
 
 ## Status
 
-- Phase 1 landed 2026-04-25 (commit b70a3ba, fixup cd7cf9b).
-- Phase 2 landed 2026-04-25 (commit 5204849).
-- Phase 3 landed 2026-04-25 (commit 58c72e9).
-- Phase 4 landed 2026-04-25 (rule-learning slice only; routing predicates deferred — see CLAUDE.md).
-- Phases 5-6 pending.
+All phases landed 2026-04-25.
+
+- Phase 1 — commit b70a3ba (fixup cd7cf9b).
+- Phase 2 — commit 5204849.
+- Phase 3 — commit 58c72e9.
+- Phase 4 — commit 52dd3a8 (rule-learning slice only; routing predicates deferred — see CLAUDE.md).
+- Phase 5+6 — this commit.
+
+Deferred for a later phase: `ProviderHealth`, `RouteResolvedTo`,
+`BudgetEvent`, router diary. Those signals live in zeroclaw daemon
+(CostTracker, route resolution, provider fallback); Davis is a config
+renderer, not a runtime router.
+
+Smoke tests exercise Phase 1 + Phase 2 tool mappings against a real
+MemPalace venv. Phase 3-5 projections are covered by 20+ SpySink unit
+tests; a future commit can extend `tests/rust/mempalace_sink_smoke.rs`
+to drive an ingest cycle + HA refresh end-to-end once we want higher
+defence.

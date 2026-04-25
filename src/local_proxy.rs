@@ -149,6 +149,9 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
     let mempalace_sink = crate::mempalace_sink::MemPalaceSink::spawn(&paths);
     let ingest_sink: Arc<dyn crate::mempalace_sink::MempalaceEmitter> =
         Arc::new(mempalace_sink.clone());
+    // Two consecutive degraded-persist samples are enough — each ingest cycle
+    // is minutes long, so two in a row is already ~10 minutes of trouble.
+    let worker_health_debouncer = Arc::new(crate::mempalace_sink::SampleDebouncer::new(2));
 
     if ingest_config.enabled {
         let providers_arc = Arc::new(local_config.providers.clone());
@@ -170,6 +173,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                 rule_stats: rule_stats.clone(),
                 sample_store: sample_store.clone(),
                 mempalace_sink: ingest_sink.clone(),
+                worker_health_debouncer: worker_health_debouncer.clone(),
             },
             ingest_config.max_concurrency,
         );

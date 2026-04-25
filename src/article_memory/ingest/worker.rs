@@ -40,6 +40,10 @@ pub struct IngestWorkerDeps {
     /// Fire-and-forget projection into MemPalace. Defaults to a disabled
     /// sink in tests; wired to the live sink via `local_proxy`.
     pub mempalace_sink: Arc<dyn crate::mempalace_sink::MempalaceEmitter>,
+    /// Debouncer for the `WorkerHealth` predicate. Every completed job
+    /// records one sample (healthy / backlogged) keyed by `worker:ingest`;
+    /// the debouncer emits only after `flip_after` consecutive samples.
+    pub worker_health_debouncer: Arc<crate::mempalace_sink::SampleDebouncer>,
 }
 
 pub struct IngestWorkerPool;
@@ -90,6 +94,18 @@ async fn execute_job(queue: &IngestQueue, deps: &IngestWorkerDeps, job: IngestJo
     // `execute_job_core` (fetch / markdown / cleaning / judging errors) are
     // now covered alongside the main Saved/Rejected path.
     maybe_notify_terminal(queue, deps, &job).await;
+    // Record a worker-health sample. Tie the sample to the queue's persist
+    // health — sustained persist failures indicate a backlogged/stalled
+    // worker that the user cares about ("ingest worker 今天卡过吗").
+    let unhealthy = queue.is_degraded();
+    deps.worker_health_debouncer.record(
+        "ingest",
+        &crate::mempalace_sink::TripleId::worker("ingest"),
+        crate::mempalace_sink::Predicate::WorkerHealth,
+        &crate::mempalace_sink::TripleId::entity("state.backlogged"),
+        unhealthy,
+        deps.mempalace_sink.as_ref(),
+    );
 }
 
 async fn maybe_notify_terminal(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &IngestJob) {

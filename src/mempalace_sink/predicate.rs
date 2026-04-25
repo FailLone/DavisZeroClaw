@@ -319,6 +319,24 @@ mod tests {
     }
 
     #[test]
+    fn claude_md_predicate_table_matches_predicate_all_variants() {
+        // The CLAUDE.md §MemPalace integration plan table is the doc
+        // contract; Predicate::ALL is the code contract. They must stay in
+        // sync — if you added a row in one, add the other in the same commit.
+        let root = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let claude = std::fs::read_to_string(format!("{root}/CLAUDE.md"))
+            .expect("CLAUDE.md must exist at the crate root");
+        for variant in Predicate::ALL {
+            let marker = format!("`{:?}`", variant);
+            assert!(
+                claude.contains(&marker),
+                "CLAUDE.md is missing predicate `{:?}` (looked for {marker})",
+                variant
+            );
+        }
+    }
+
+    #[test]
     fn predicate_all_contains_fourteen_distinct_variants() {
         assert_eq!(Predicate::ALL.len(), 14);
         let wire: Vec<&'static str> = Predicate::ALL.iter().map(|p| p.as_str()).collect();

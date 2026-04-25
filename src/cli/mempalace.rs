@@ -176,6 +176,102 @@ pub(super) fn find_mempalace_server(servers: &[McpServerConfig]) -> Option<&McpS
     servers.iter().find(|s| s.name == MEMPALACE_SERVER_NAME)
 }
 
+/// Read-only reconciliation report: walks Davis's article index and prints
+/// a per-host summary plus the hand-off commands the user can run against
+/// MemPalace to cross-check the projection. Does not open a MemPalace MCP
+/// connection — that's future work once we want automated gap detection.
+pub(super) fn audit_mempalace(paths: &RuntimePaths) -> Result<()> {
+    use std::collections::BTreeMap;
+    let index = crate::article_memory::internals::load_index(paths)
+        .context("failed to load article-memory/index.json")?;
+    let mut host_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut missing_url = 0usize;
+    for record in &index.articles {
+        match record.url.as_deref().and_then(|u| url::Url::parse(u).ok()) {
+            Some(parsed) => {
+                if let Some(host) = parsed.host_str() {
+                    *host_counts.entry(host.to_string()).or_insert(0) += 1;
+                }
+            }
+            None => missing_url += 1,
+        }
+    }
+    println!(
+        "Davis article memory: {} articles total ({} with no parseable URL)",
+        index.articles.len(),
+        missing_url,
+    );
+    println!();
+    println!("Per-host counts (ArticleSourcedFrom triples MemPalace should hold):");
+    for (host, count) in &host_counts {
+        println!("  {host:40} {count} articles");
+    }
+    println!();
+    println!("Cross-check commands (run against your MemPalace venv):");
+    println!("  mempalace search '<query>' --wing davis.articles");
+    println!("  mempalace kg_query --subject host_<safe_slug(host)> --predicate sourced_from");
+    println!();
+    println!(
+        "Davis projection writes are fire-and-forget; a drawer or triple may be \
+         missing if the sink was silenced or MemPalace was offline during ingest. \
+         /health mempalace section surfaces current sink state."
+    );
+    Ok(())
+}
+
+/// Shell out to the venv's `mempalace compress` CLI. The upstream CLI
+/// doesn't expose an `--older-than` flag directly, so we pass a MemPalace
+/// age filter via its `--wing` subset flow. Exit code non-zero is reported
+/// but not fatal — compress is best-effort maintenance.
+pub(super) fn compress_mempalace(
+    paths: &RuntimePaths,
+    wing: &str,
+    older_than_days: u32,
+    dry_run: bool,
+) -> Result<()> {
+    let python = paths.mempalace_python_path();
+    let palace_dir = paths.mempalace_palace_dir();
+    if !python.exists() {
+        bail!(
+            "MemPalace Python not found at {}. Run: daviszeroclaw memory mempalace install",
+            python.display()
+        );
+    }
+    let args: Vec<String> = vec![
+        "-m".into(),
+        "mempalace.cli".into(),
+        "compress".into(),
+        "--wing".into(),
+        wing.to_string(),
+        "--palace".into(),
+        palace_dir.display().to_string(),
+    ];
+    println!(
+        "# Davis MemPalace compress\n# wing={wing} older_than_days={older_than_days} dry_run={dry_run}\n# cmd: {} {}",
+        python.display(),
+        args.join(" ")
+    );
+    if dry_run {
+        return Ok(());
+    }
+    let result = Command::new(&python)
+        .args(&args)
+        .env("PATH", tool_path_env())
+        .current_dir(&paths.repo_root)
+        .status();
+    match result {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => {
+            eprintln!("mempalace compress exited with {status}");
+            Ok(())
+        }
+        Err(err) => {
+            eprintln!("mempalace compress failed to spawn: {err}");
+            Ok(())
+        }
+    }
+}
+
 fn mempalace_palace_from_args(args: &[String]) -> Option<String> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {

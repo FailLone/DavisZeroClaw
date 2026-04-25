@@ -8,6 +8,7 @@ mod driver;
 mod emitter;
 mod mcp_stdio;
 mod predicate;
+mod worker_health;
 
 pub(crate) use driver::MemPalaceSink;
 #[cfg(test)]
@@ -18,3 +19,4 @@ pub(crate) use emitter::SpySink;
 #[cfg(test)]
 pub(crate) use mcp_stdio::{InitializeParams, McpStdioClient};
 pub(crate) use predicate::{Predicate, TripleId};
+pub(crate) use worker_health::{SampleDebouncer, TimeDebouncer};

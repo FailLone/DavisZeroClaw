@@ -102,6 +102,10 @@ pub struct AppState {
     /// no-op sink; `local_proxy` overrides with the real one via
     /// `with_mempalace_sink` after constructing `AppState`.
     pub mempalace_sink: crate::mempalace_sink::MemPalaceSink,
+    /// Debouncer for `ComponentReachability(component:ha-mcp, …)`. Shared
+    /// across handlers so the 30-second sustained-failure window survives
+    /// per-request state. `TimeDebouncer::new(Duration::from_secs(30))`.
+    pub component_reachability_debouncer: Arc<crate::mempalace_sink::TimeDebouncer>,
 }
 
 impl AppState {
@@ -138,6 +142,9 @@ impl AppState {
             rule_stats,
             sample_store,
             mempalace_sink: crate::mempalace_sink::MemPalaceSink::disabled(),
+            component_reachability_debouncer: Arc::new(crate::mempalace_sink::TimeDebouncer::new(
+                std::time::Duration::from_secs(30),
+            )),
         }
     }
 
@@ -935,8 +942,22 @@ async fn ha_mcp_capabilities(State(state): State<AppState>) -> (StatusCode, Json
     }
 }
 
+fn record_ha_mcp_reachability(state: &AppState, unhealthy: bool) {
+    state.component_reachability_debouncer.record(
+        "ha-mcp",
+        &crate::mempalace_sink::TripleId::component("ha-mcp"),
+        crate::mempalace_sink::Predicate::ComponentReachability,
+        &crate::mempalace_sink::TripleId::entity("state.unreachable"),
+        unhealthy,
+        std::time::Instant::now(),
+        &state.mempalace_sink,
+    );
+}
+
 async fn ha_mcp_live_context(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
-    match state.mcp_client.live_context_report().await {
+    let call_result = state.mcp_client.live_context_report().await;
+    record_ha_mcp_reachability(&state, call_result.is_err());
+    match call_result {
         Ok(report) => {
             // Project into MemPalace BEFORE overwriting the snapshot file, so
             // the diff sees the previous cycle.
