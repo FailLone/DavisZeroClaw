@@ -121,6 +121,7 @@ Fixed `enum Predicate` in `mempalace_sink.rs`. Adding a predicate is a code chan
 | `ArticleCites` | article → article | extracted from body / value report | never invalidate | "这篇之后谁跟进了" |
 | `ArticleSourcedFrom` | article → host | ingest success | never invalidate | "最近 lobste.rs 进了什么" |
 | `ArticleDiscoveredFrom` | article → source tag (`feed:<host>` / `sitemap:<host>` / `search:brave`) | discovery worker submits a new candidate | never invalidate | "这篇怎么发现的 / 这个 feed 这个月进了多少篇" |
+| `ArticleTranslated` | article → language tag (`lang:zh-CN`) | translate worker writes translation.md | never invalidate | "这篇翻译过没 / 最近翻了几篇" |
 | `RuleActiveFor` | host → rule_version | new version lands (old version invalidated) | immediate | "这条规则改过几次" |
 | `RuleQuarantinedBy` | rule_version → reason tag | quality < threshold / repeated fails | immediate | "为什么这条规则不生效" |
 | `ProviderHealth` | provider → health label | **deferred** — zeroclaw daemon owns per-call provider metrics; Davis would have to tap zeroclaw's `/api/cost` or logs to get the signal. Phase 5+ if demand warrants. | — | "openrouter 最近挂过吗" |
