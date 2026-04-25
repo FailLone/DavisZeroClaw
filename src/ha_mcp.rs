@@ -1089,17 +1089,10 @@ fn push_unique(items: &mut Vec<String>, value: &str) {
 }
 
 #[cfg(not(test))]
-#[allow(dead_code)]
 fn load_previous_live_context_report() -> Option<HaMcpLiveContextReport> {
     let path = live_context_state_path();
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str::<HaMcpLiveContextReport>(&raw).ok()
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn load_previous_live_context_report() -> Option<HaMcpLiveContextReport> {
-    None
 }
 
 #[cfg(not(test))]

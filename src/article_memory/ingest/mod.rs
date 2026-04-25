@@ -26,18 +26,11 @@ pub use types::{
     IngestResponse, IngestSubmitError, ListFilter,
 };
 pub use worker::{IngestWorkerDeps, IngestWorkerPool};
-// Consumed by T3 (cleaning_internals::normalize_article_text); the two
-// structure-preserving helpers are now on the hot path for every normalized
-// article. `normalize_markdown_preserving_structure` is held for T6 / Phase 2,
-// hence the targeted `unused_imports` allow.
-#[allow(unused_imports)]
-pub use cleaning_fix::{
-    normalize_line_preserving, normalize_markdown_preserving_structure, SlidingDedup,
-};
+pub use cleaning_fix::{normalize_line_preserving, SlidingDedup};
 #[allow(unused_imports)]
 pub use content_signals::{compute_signals, ContentSignals};
 #[allow(unused_imports)]
-pub use engines::{next_engine, pick_engine, EngineChoice, ExtractEngineConfig};
+pub use engines::{pick_engine, EngineChoice, ExtractEngineConfig};
 #[allow(unused_imports)]
 pub use learned_rules::{LearnedRuleStore, RuleStatsStore};
 #[allow(unused_imports)]

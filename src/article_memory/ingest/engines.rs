@@ -84,14 +84,6 @@ pub fn pick_engine(config: &ExtractEngineConfig) -> EngineChoice {
     }
 }
 
-/// Given the current engine and the ladder, return the next engine to try,
-/// or `None` if exhausted.
-#[allow(dead_code)] // worker uses its own iteration; kept for tests + future use
-pub fn next_engine(current: &EngineChoice, ladder: &[EngineChoice]) -> Option<EngineChoice> {
-    let pos = ladder.iter().position(|e| e == current)?;
-    ladder.get(pos + 1).cloned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,22 +120,6 @@ mod tests {
             fallback_ladder: vec![EngineChoice::Trafilatura, EngineChoice::OpenRouterLlm],
         };
         assert_eq!(pick_engine(&c), EngineChoice::Trafilatura);
-    }
-
-    #[test]
-    fn next_engine_walks_ladder() {
-        let ladder = vec![EngineChoice::Trafilatura, EngineChoice::OpenRouterLlm];
-        assert_eq!(
-            next_engine(&EngineChoice::Trafilatura, &ladder),
-            Some(EngineChoice::OpenRouterLlm)
-        );
-        assert_eq!(next_engine(&EngineChoice::OpenRouterLlm, &ladder), None);
-    }
-
-    #[test]
-    fn next_engine_missing_returns_none() {
-        let ladder = vec![EngineChoice::Trafilatura];
-        assert_eq!(next_engine(&EngineChoice::OpenRouterLlm, &ladder), None);
     }
 
     #[test]

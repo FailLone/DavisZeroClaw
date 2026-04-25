@@ -1071,17 +1071,8 @@ async fn rules_mark_stale_handler(
     Ok(Json(serde_json::json!({"status": "ok"})))
 }
 
-#[derive(serde::Deserialize)]
-#[allow(dead_code)]
-struct WarmupPayload {
-    hosts: Option<Vec<String>>,
-    per_host: Option<usize>,
-    from_existing: Option<bool>,
-}
-
 async fn rules_warmup_handler(
     State(_state): State<AppState>,
-    Json(_payload): Json<WarmupPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     Err((
         StatusCode::NOT_IMPLEMENTED,
