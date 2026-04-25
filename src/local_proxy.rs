@@ -244,6 +244,18 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         tracing::info!("discovery worker started");
     }
 
+    if local_config.article_memory.translate.enabled {
+        crate::article_memory::translate::TranslateWorker::spawn(
+            crate::article_memory::translate::TranslateWorkerDeps {
+                config: Arc::new(local_config.article_memory.translate.clone()),
+                http: reqwest::Client::new(),
+                paths: paths.clone(),
+                mempalace_sink: ingest_sink.clone(),
+            },
+        );
+        tracing::info!("translate worker started");
+    }
+
     let state = AppState::new(
         client,
         mcp_client,
