@@ -133,6 +133,8 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
             wait_for: None,
             js_code: None,
             markdown: true,
+            extract_engine: None,
+            openrouter_config: None,
         },
     )
     .await

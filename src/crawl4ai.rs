@@ -10,7 +10,14 @@ pub struct Crawl4aiPageRequest {
     pub wait_for: Option<String>,
     pub js_code: Option<String>,
     /// When true, request crawl4ai to produce fit-filtered Markdown.
+    /// Deprecated: set `extract_engine = Some("pruning")` instead. Kept for
+    /// backward-compat during Phase 1 migration.
     pub markdown: bool,
+    /// Explicit engine selection; overrides `markdown`. Values:
+    /// `"pruning"` | `"trafilatura"` | `"openrouter-llm"`.
+    pub extract_engine: Option<String>,
+    /// Required when `extract_engine == Some("openrouter-llm")`.
+    pub openrouter_config: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +48,10 @@ struct CrawlRequestBody<'a> {
     enable_stealth: bool,
     markdown_generator: bool,
     content_filter: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extract_engine: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    openrouter_config: Option<&'a serde_json::Value>,
 }
 
 #[tracing::instrument(
@@ -67,6 +78,13 @@ pub async fn crawl4ai_crawl(
         details: format!("create profile dir {}: {err}", profile_dir.display()),
     })?;
 
+    let (markdown_generator, content_filter, extract_engine) =
+        match request.extract_engine.as_deref() {
+            Some(engine) => (true, None, Some(engine)),
+            None if request.markdown => (true, Some("pruning"), Some("pruning")),
+            None => (false, None, None),
+        };
+
     let body = CrawlRequestBody {
         profile_path: profile_dir.display().to_string(),
         url: &request.url,
@@ -79,12 +97,10 @@ pub async fn crawl4ai_crawl(
         override_navigator: config.override_navigator,
         remove_overlay_elements: config.remove_overlay_elements,
         enable_stealth: config.enable_stealth,
-        markdown_generator: request.markdown,
-        content_filter: if request.markdown {
-            Some("pruning")
-        } else {
-            None
-        },
+        markdown_generator,
+        content_filter,
+        extract_engine,
+        openrouter_config: request.openrouter_config.as_ref(),
     };
 
     let base = supervisor.base_url().await;

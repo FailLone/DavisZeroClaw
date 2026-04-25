@@ -280,6 +280,8 @@ async fn crawl_source_payload(
             wait_for: Some(source_wait_for(source).to_string()),
             js_code: Some(script),
             markdown: false,
+            extract_engine: None,
+            openrouter_config: None,
         },
     )
     .await?;

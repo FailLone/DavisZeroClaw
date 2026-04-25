@@ -191,6 +191,8 @@ async fn probe_crawl4ai_runtime(
                 wait_for: None,
                 js_code: None,
                 markdown: false,
+                extract_engine: None,
+                openrouter_config: None,
             };
             match crawl4ai_crawl(paths, config, &supervisor, request).await {
                 Ok(page) => {
