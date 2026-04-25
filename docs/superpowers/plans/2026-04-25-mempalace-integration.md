@@ -771,4 +771,4 @@ Walk Davis's `article-memory/index.json`; for each article, probe MemPalace for 
 - MemPalace is strictly a projection; Davis local JSON remains source of truth.
 - Per-agent diaries land from the very first subsystem (HA in Phase 2) — no "defer diaries" option.
 
-## Status: NOT STARTED
+## Status: Phase 1 landed 2026-04-25 (commit b70a3ba); Phases 2-6 pending
