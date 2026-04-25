@@ -1,4 +1,4 @@
-use super::engines::{EngineChoice, ExtractEngineConfig};
+use super::engines::{pick_engine, EngineChoice, ExtractEngineConfig};
 use super::llm_extract::llm_html_to_markdown;
 use super::quality_gate::{assess as assess_quality, GateResult, QualityGateConfig};
 use super::queue::IngestQueue;
@@ -132,15 +132,7 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
     let engine_cfg = engine_config_from_toml(&deps.extract_config);
     let gate_cfg = quality_gate_config_from_toml(&deps.quality_gate_config);
 
-    // Determine the primary fetch engine. OpenRouterLlm is never sent to
-    // the Python adapter (the adapter rejects it now). If the operator
-    // configures default_engine="openrouter-llm" we still need to fetch
-    // HTML first — fall back to trafilatura for the fetch, then let the
-    // upgrade path do its thing.
-    let fetch_engine = match &engine_cfg.default_engine {
-        EngineChoice::OpenRouterLlm => EngineChoice::Trafilatura,
-        other => other.clone(),
-    };
+    let fetch_engine = pick_engine(&engine_cfg);
     let mut attempted: Vec<EngineChoice> = vec![fetch_engine.clone()];
 
     let mut page = match crawl4ai_crawl(

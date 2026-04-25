@@ -57,10 +57,24 @@ impl Default for ExtractEngineConfig {
     }
 }
 
-/// Pick the starting engine. Phase 1: always the config default. Phase 2
-/// will add learned-rules lookup before falling through.
+/// Pick the starting engine. Rules:
+/// 1. If `default_engine` is OpenRouterLlm, we still need HTML first —
+///    Phase 1 worker code already falls back to Trafilatura for fetch.
+/// 2. Otherwise return `default_engine` if it appears in the ladder,
+///    else the head of the ladder.
 pub fn pick_engine(config: &ExtractEngineConfig) -> EngineChoice {
-    config.default_engine.clone()
+    if matches!(config.default_engine, EngineChoice::OpenRouterLlm) {
+        return EngineChoice::Trafilatura;
+    }
+    if config.fallback_ladder.contains(&config.default_engine) {
+        config.default_engine.clone()
+    } else {
+        config
+            .fallback_ladder
+            .first()
+            .cloned()
+            .unwrap_or(EngineChoice::Trafilatura)
+    }
 }
 
 /// Given the current engine and the ladder, return the next engine to try,
@@ -77,6 +91,24 @@ mod tests {
     #[test]
     fn pick_engine_returns_default() {
         let c = ExtractEngineConfig::default();
+        assert_eq!(pick_engine(&c), EngineChoice::Trafilatura);
+    }
+
+    #[test]
+    fn pick_engine_openrouter_default_falls_back_to_trafilatura() {
+        let c = ExtractEngineConfig {
+            default_engine: EngineChoice::OpenRouterLlm,
+            fallback_ladder: vec![EngineChoice::Trafilatura, EngineChoice::OpenRouterLlm],
+        };
+        assert_eq!(pick_engine(&c), EngineChoice::Trafilatura);
+    }
+
+    #[test]
+    fn pick_engine_defaults_to_ladder_head_when_default_missing() {
+        let c = ExtractEngineConfig {
+            default_engine: EngineChoice::Pruning,
+            fallback_ladder: vec![EngineChoice::Trafilatura, EngineChoice::OpenRouterLlm],
+        };
         assert_eq!(pick_engine(&c), EngineChoice::Trafilatura);
     }
 
