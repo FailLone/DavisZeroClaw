@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Sample</title>
+    <link>https://example.com</link>
+    <description>Sample</description>
+    <item>
+      <title>Async Rust patterns</title>
+      <link>https://example.com/async-rust-patterns</link>
+      <description>A deep dive into tokio scheduling</description>
+      <pubDate>Thu, 01 Jan 2026 00:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Unrelated cooking post</title>
+      <link>https://example.com/cooking</link>
+      <description>Braised short ribs</description>
+      <pubDate>Thu, 01 Jan 2026 00:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

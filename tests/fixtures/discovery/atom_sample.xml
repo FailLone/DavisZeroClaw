@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Sample Atom</title>
+  <id>urn:uuid:sample</id>
+  <updated>2026-01-01T00:00:00Z</updated>
+  <entry>
+    <title>io_uring explained</title>
+    <id>urn:uuid:entry-1</id>
+    <link href="https://example.com/io-uring"/>
+    <updated>2026-01-01T00:00:00Z</updated>
+    <summary>How io_uring works</summary>
+  </entry>
+</feed>

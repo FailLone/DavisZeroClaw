@@ -466,6 +466,7 @@ pub(crate) mod llm_client;
 mod cleaning_internals;
 use cleaning_internals::*;
 
+pub mod discovery;
 pub(crate) mod ingest;
 pub(crate) mod mempalace_projection;
 mod pii_scrub;
