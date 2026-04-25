@@ -41,8 +41,10 @@ class CrawlRequest(BaseModel):
     markdown_generator: bool = False
     content_filter: Optional[str] = None
     # NEW — Phase 1
-    extract_engine: Optional[str] = None  # "pruning" | "trafilatura" | "openrouter-llm"
+    extract_engine: Optional[str] = None  # "pruning" | "trafilatura" | "openrouter-llm" | "learned-rules"
     openrouter_config: Optional[dict[str, Any]] = None  # required when engine=openrouter-llm
+    # NEW — Phase 2
+    learned_rule: Optional[dict[str, Any]] = None  # required when engine=learned-rules
 
 
 class CrawlResponse(BaseModel):
@@ -221,6 +223,18 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
         from crawl4ai_adapter.engines import extract_trafilatura
         raw_html = getattr(result, "html", None) or ""
         er = extract_trafilatura(raw_html)
+        response_markdown = er.markdown or None
+        extra_warnings.extend(er.warnings)
+    elif engine_used == "learned-rules":
+        from crawl4ai_adapter.engines import extract_learned_rules
+        raw_html = getattr(result, "html", None) or ""
+        rule = req.learned_rule or {}
+        if not rule.get("content_selectors"):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "missing_learned_rule", "engine": engine_used},
+            )
+        er = extract_learned_rules(raw_html, rule)
         response_markdown = er.markdown or None
         extra_warnings.extend(er.warnings)
     elif engine_used is not None:

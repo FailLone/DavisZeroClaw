@@ -1,5 +1,6 @@
 from crawl4ai_adapter.engines import (
     ExtractResult,
+    extract_learned_rules,
     extract_trafilatura,
 )
 
@@ -46,3 +47,37 @@ def test_trafilatura_empty_html_returns_warning():
     r = extract_trafilatura("<html><body></body></html>")
     assert r.is_empty()
     assert r.warnings, "empty extraction should carry a warning"
+
+
+LEARNED_SAMPLE = """<!DOCTYPE html>
+<html><head><title>T</title></head>
+<body>
+  <nav>nav ignore</nav>
+  <article class="post">
+    <h1 class="post-title">My Post</h1>
+    <p>First paragraph.</p>
+    <p>Second paragraph.</p>
+    <div class="related"><h2>Related</h2><ul><li>x</li></ul></div>
+  </article>
+</body></html>"""
+
+
+def test_learned_rules_extracts_content_and_drops_noise():
+    rule = {
+        "content_selectors": ["article.post"],
+        "remove_selectors": [".related"],
+        "title_selector": "h1.post-title",
+    }
+    r = extract_learned_rules(LEARNED_SAMPLE, rule)
+    assert r.engine == "learned-rules"
+    assert "My Post" in r.markdown
+    assert "First paragraph" in r.markdown
+    assert "Related" not in r.markdown
+    assert "nav ignore" not in r.markdown
+
+
+def test_learned_rules_empty_selector_returns_warning():
+    rule = {"content_selectors": ["article.nonexistent"]}
+    r = extract_learned_rules(LEARNED_SAMPLE, rule)
+    assert r.is_empty()
+    assert r.warnings
