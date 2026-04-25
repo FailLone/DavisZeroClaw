@@ -472,40 +472,47 @@ fn deterministic_value_report(
     clean_report: &ArticleCleanReport,
     normalized: &str,
 ) -> ArticleValueReport {
+    use super::ingest::{compute_signals, deterministic_score, gopher_reject};
+
+    let signals = compute_signals(normalized);
     let mut reasons = Vec::new();
     let mut risk_flags = Vec::new();
     let matched_topics = matched_value_topics(config, article, normalized);
     let mut deterministic_reject = false;
-    let mut score: f32 = 0.55;
+
+    // Gopher-style hard rejects, before any other analysis.
+    if let Some(reason) = gopher_reject(&signals) {
+        deterministic_reject = true;
+        risk_flags.push(reason.to_string());
+        reasons.push(format!("gopher-rule rejection: {reason}"));
+    }
 
     if clean_report.clean_status == "fallback_raw" {
         deterministic_reject = true;
-        score = 0.10;
         risk_flags.push("fallback_raw".to_string());
         reasons.push("cleaning fell back to raw content".to_string());
     }
+
     if clean_report.normalized_chars < config.min_normalized_chars {
         deterministic_reject = true;
-        score = score.min(0.20);
         risk_flags.push("normalized_too_short".to_string());
         reasons.push("normalized article is too short".to_string());
     }
+
     if matched_topics.is_empty() && !config.target_topics.is_empty() {
         deterministic_reject = true;
-        score = score.min(0.25);
         risk_flags.push("off_topic".to_string());
         reasons.push("no target topic matched the article".to_string());
     }
+
+    // Multi-dim score (even if rejecting, so callers see a number).
+    let score = deterministic_score(&signals, matched_topics.len());
+
     if !clean_report.risk_flags.is_empty() {
         risk_flags.extend(clean_report.risk_flags.clone());
     }
     if reasons.is_empty() {
         reasons.push("passed deterministic value prefilter".to_string());
-        score = if matched_topics.len() >= 2 {
-            0.65
-        } else {
-            0.55
-        };
     }
     let decision = if deterministic_reject {
         "reject".to_string()
