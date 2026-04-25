@@ -225,7 +225,10 @@ mod tests {
     fn scrub_redacts_github_personal_token_prefix() {
         // Split the prefix so the repo's secret scanner doesn't flag this
         // literal as a real token.
-        let input = format!("token {}_abcdefghijklmnopqrstuvwxyz0123", "gh".to_owned() + "p");
+        let input = format!(
+            "token {}_abcdefghijklmnopqrstuvwxyz0123",
+            "gh".to_owned() + "p"
+        );
         let out = scrub(&input);
         assert!(!out.contains("abcdefghijklmnop"), "{out}");
     }

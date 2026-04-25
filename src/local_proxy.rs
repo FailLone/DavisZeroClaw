@@ -195,6 +195,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                 max_link_density: gate_toml.max_link_density,
                 boilerplate_markers: gate_toml.boilerplate_markers.clone(),
             }),
+            mempalace_sink: ingest_sink.clone(),
         });
     } else {
         tracing::info!("article memory ingest disabled by config");

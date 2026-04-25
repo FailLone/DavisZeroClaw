@@ -58,7 +58,7 @@ Six phases. Each phase leaves a green tree; you can stop after any phase without
 - **Phase 1** (Tasks 1–6): Infrastructure — sink module, MCP stdio client, driver, health surface, `CLAUDE.md` alignment.
 - **Phase 2** (Tasks 7–10): HA integration — 4 predicates + findings drawer + `ha-analyzer` diary.
 - **Phase 3** (Tasks 11–14): Articles — 3 predicates + value drawer + PII scrub + `ingest` diary.
-- **Phase 4** (Tasks 15–18): Routing + rules — 5 predicates + `router` diary + `rule-learner` diary.
+- **Phase 4** (Tasks 15–18): Rules — `RuleActiveFor` + `RuleQuarantinedBy` + `rule-learner` diary. Routing predicates (`ProviderHealth`, `RouteResolvedTo`, `BudgetEvent`, router diary) deferred because Davis is a config renderer, not a runtime router; those signals live in zeroclaw. See CLAUDE.md predicate table for the `deferred` rows.
 - **Phase 5** (Tasks 19–22): Governance — `WorkerHealth` + `ComponentReachability` + periodic compress + `davis articles mempalace-audit` CLI.
 - **Phase 6** (Task 23): Final verification — predicate vocab matches CLAUDE.md, integration smoke, spec status.
 
@@ -776,4 +776,5 @@ Walk Davis's `article-memory/index.json`; for each article, probe MemPalace for 
 - Phase 1 landed 2026-04-25 (commit b70a3ba, fixup cd7cf9b).
 - Phase 2 landed 2026-04-25 (commit 5204849).
 - Phase 3 landed 2026-04-25 (commit 58c72e9).
-- Phases 4-6 pending.
+- Phase 4 landed 2026-04-25 (rule-learning slice only; routing predicates deferred — see CLAUDE.md).
+- Phases 5-6 pending.

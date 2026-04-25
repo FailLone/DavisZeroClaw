@@ -122,9 +122,9 @@ Fixed `enum Predicate` in `mempalace_sink.rs`. Adding a predicate is a code chan
 | `ArticleSourcedFrom` | article → host | ingest success | never invalidate | "最近 lobste.rs 进了什么" |
 | `RuleActiveFor` | host → rule_version | new version lands (old version invalidated) | immediate | "这条规则改过几次" |
 | `RuleQuarantinedBy` | rule_version → reason tag | quality < threshold / repeated fails | immediate | "为什么这条规则不生效" |
-| `ProviderHealth` | provider → health label | 5-min success-rate threshold cross | 2-window hysteresis | "openrouter 最近挂过吗" |
-| `RouteResolvedTo` | route_profile → model | every switch (old invalidated) | immediate | "那天 fast 档为什么切 haiku" |
-| `BudgetEvent` | budget_scope → event tag | 80% / 100% line cross | once per day/month | "最近什么时候超预算" |
+| `ProviderHealth` | provider → health label | **deferred** — zeroclaw daemon owns per-call provider metrics; Davis would have to tap zeroclaw's `/api/cost` or logs to get the signal. Phase 5+ if demand warrants. | — | "openrouter 最近挂过吗" |
+| `RouteResolvedTo` | route_profile → model | **deferred** — Davis's `model_routing.rs` is a config renderer, not a runtime router. Route-switching events happen inside zeroclaw. | — | "那天 fast 档为什么切 haiku" |
+| `BudgetEvent` | budget_scope → event tag | **deferred** — budget tracking is zeroclaw's `CostTracker`; Davis does not see per-call cost. | — | "最近什么时候超预算" |
 | `WorkerHealth` | worker → status | backlog/failures sustained | sustained trigger | "ingest worker 今天卡过吗" |
 | `ComponentReachability` | component → label | failure persists ≥ 30s | anti-flapping | "zeroclaw 最近挂过多久" |
 
@@ -140,7 +140,7 @@ Fixed `enum Predicate` in `mempalace_sink.rs`. Adding a predicate is a code chan
 - `article_memory/ingest/worker.rs` end-of-cycle — `add_drawer(articles/<topic>)` + `kg_add(ArticleDiscusses|Cites|SourcedFrom)` + ingest diary.
 - `article_memory/ingest/rule_learning_worker.rs` — `RuleActiveFor` / `RuleQuarantinedBy` on promotions/demotions + rule-learner diary.
 - `ha_mcp.rs` live-context refresh — diff previous snapshot → `EntityHasState` / `EntityReplacementFor` / `EntityNameIssue` / `EntityLocatedIn` + HA findings narrative drawer + ha-analyzer diary.
-- `advisor.rs` / `control/` — `ProviderHealth`, `RouteResolvedTo`, `BudgetEvent` on threshold events + router diary.
+- Router / budget hooks: deliberately absent. Davis doesn't own those signals — see the three `deferred` rows in the predicate table above.
 - `crawl4ai` / `imessage` / `express` / `ha_client` — no MemPalace hooks.
 
 ### Failure & governance

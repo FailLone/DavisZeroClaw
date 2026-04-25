@@ -28,6 +28,7 @@ pub struct RuleLearningDeps {
     pub providers: Arc<Vec<ModelProviderConfig>>,
     pub config: Arc<RuleLearningConfig>,
     pub quality_gate: Arc<QualityGateConfig>,
+    pub mempalace_sink: Arc<dyn crate::mempalace_sink::MempalaceEmitter>,
 }
 
 pub struct RuleLearningWorker;
@@ -114,6 +115,7 @@ async fn learn_one_host(deps: &RuleLearningDeps, host: &str) -> Result<()> {
         .context("parse learning LLM response")?;
 
     let validation = validate_rule(&rule, &samples, &deps.quality_gate);
+    let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     if !validation.ok {
         write_quarantine(&deps.paths, host, &rule, &validation)?;
         if deps.config.notify_on_quarantine {
@@ -123,9 +125,32 @@ async fn learn_one_host(deps: &RuleLearningDeps, host: &str) -> Result<()> {
                 "learning rule failed validation; quarantined"
             );
         }
+        let reason = validation
+            .errors
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "validation_failed".to_string());
+        crate::article_memory::ingest::rule_mempalace_projection::emit_rule_quarantined(
+            host,
+            &rule,
+            &reason,
+            deps.mempalace_sink.as_ref(),
+        );
+        crate::article_memory::ingest::rule_mempalace_projection::emit_rule_learner_diary(
+            &crate::article_memory::ingest::rule_mempalace_projection::RuleLearnerDiaryEntry {
+                timestamp_iso: now_iso,
+                host: host.to_string(),
+                outcome: crate::article_memory::ingest::rule_mempalace_projection::RuleLearnerOutcome::Quarantined,
+                version: Some(rule.version.clone()),
+                sample_count: Some(samples.len()),
+                reason: Some(reason),
+            },
+            deps.mempalace_sink.as_ref(),
+        );
         return Ok(());
     }
 
+    let previous = deps.learned_rules.get(host).await;
     deps.learned_rules.upsert(rule.clone()).await?;
     deps.rule_stats
         .reset_for_new_rule(host, &rule.version)
@@ -134,6 +159,24 @@ async fn learn_one_host(deps: &RuleLearningDeps, host: &str) -> Result<()> {
     tracing::info!(
         host = %host, version = %rule.version, confidence = rule.confidence,
         "learned rule saved"
+    );
+    crate::article_memory::ingest::rule_mempalace_projection::emit_rule_promoted(
+        host,
+        &rule,
+        previous.as_ref(),
+        deps.mempalace_sink.as_ref(),
+    );
+    crate::article_memory::ingest::rule_mempalace_projection::emit_rule_learner_diary(
+        &crate::article_memory::ingest::rule_mempalace_projection::RuleLearnerDiaryEntry {
+            timestamp_iso: now_iso,
+            host: host.to_string(),
+            outcome:
+                crate::article_memory::ingest::rule_mempalace_projection::RuleLearnerOutcome::Saved,
+            version: Some(rule.version.clone()),
+            sample_count: Some(samples.len()),
+            reason: None,
+        },
+        deps.mempalace_sink.as_ref(),
     );
     Ok(())
 }

@@ -203,6 +203,25 @@ impl TripleId {
         Self::try_rule_version(host, version).expect("rule version host must be non-empty")
     }
 
+    /// String-valued rule version (the learning worker stamps versions with
+    /// an RFC3339 timestamp, not an incrementing integer). The version is
+    /// slugged so timestamps like `2026-04-25T12:00:00Z` survive the
+    /// MemPalace SAFE_NAME validator.
+    pub fn try_rule_version_str(host: &str, version: &str) -> Result<Self, TripleIdError> {
+        if host.is_empty() || version.is_empty() {
+            return Err(TripleIdError::Empty);
+        }
+        let slug = Self::safe_slug(version);
+        if slug.is_empty() {
+            return Err(TripleIdError::Empty);
+        }
+        Self::build("ruleVersion", &format!("{host}.{slug}"))
+    }
+    pub fn rule_version_str(host: &str, version: &str) -> Self {
+        Self::try_rule_version_str(host, version)
+            .expect("rule version host+version must be non-empty")
+    }
+
     pub fn try_provider(name: &str) -> Result<Self, TripleIdError> {
         Self::build("provider", name)
     }
