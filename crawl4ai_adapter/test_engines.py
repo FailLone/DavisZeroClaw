@@ -1,4 +1,3 @@
-import pytest
 from crawl4ai_adapter.engines import ExtractResult, extract_trafilatura
 
 
