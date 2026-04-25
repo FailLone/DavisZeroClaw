@@ -285,6 +285,26 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
 
     // If still failing after any upgrade attempt, reject.
     if !gate.pass {
+        // Capture HTML sample for rule learning (T25 worker consumes from this pool).
+        if !gate.hard_fail_reasons.is_empty() {
+            if let Some(ref h) = host {
+                let html = page.html.clone().unwrap_or_default();
+                if let Err(err) = deps.sample_store.push(
+                    h,
+                    &job.id,
+                    &job.url,
+                    &html,
+                    &markdown,
+                    "hard_fail",
+                    gate.hard_fail_reasons
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                ) {
+                    tracing::warn!(host = %h, error = %err, "failed to push rule sample");
+                }
+            }
+        }
         queue
             .attach_engine_chain(
                 &job.id,
@@ -340,7 +360,7 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
         source,
         language: None,
         tags: job.tags.clone(),
-        content: markdown,
+        content: markdown.clone(),
         summary: None,
         translation: None,
         status: ArticleMemoryRecordStatus::Candidate,
@@ -450,6 +470,46 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
             return;
         }
     };
+
+    // Apply extraction_quality feedback to learned-rules / stats.
+    if let Some(ref h) = host {
+        if let Ok(value_report) = load_latest_value_report(&deps.paths, &record.id) {
+            match value_report.extraction_quality.as_str() {
+                "poor" => {
+                    let _ = deps.rule_stats.bump_poor(h).await;
+                    let _ = deps
+                        .learned_rules
+                        .mark_stale(h, "extraction_quality=poor")
+                        .await;
+                    // Save HTML sample — page.html was captured during Stage 1.
+                    if let Some(ref html) = page.html {
+                        let _ = deps.sample_store.push(
+                            h,
+                            &job.id,
+                            &job.url,
+                            html,
+                            &markdown,
+                            "llm_poor",
+                            value_report.extraction_issues.clone(),
+                        );
+                    }
+                }
+                "partial" => {
+                    if let Ok(streak) = deps.rule_stats.bump_partial(h).await {
+                        if streak >= 2 {
+                            let _ = deps
+                                .learned_rules
+                                .mark_stale(h, "consecutive_partial")
+                                .await;
+                        }
+                    }
+                }
+                _ => {
+                    let _ = deps.rule_stats.bump_hit(h).await;
+                }
+            }
+        }
+    }
 
     let rejected = normalize_response.value_decision.as_deref() == Some("reject");
 
@@ -576,4 +636,15 @@ fn extract_host(url_str: &str) -> Option<String> {
         .ok()?
         .host_str()
         .map(|s| s.to_lowercase())
+}
+
+fn load_latest_value_report(
+    paths: &RuntimePaths,
+    article_id: &str,
+) -> anyhow::Result<crate::article_memory::ArticleValueReport> {
+    let p = paths
+        .article_memory_value_reports_dir()
+        .join(format!("{article_id}.json"));
+    let raw = std::fs::read_to_string(&p)?;
+    Ok(serde_json::from_str(&raw)?)
 }
