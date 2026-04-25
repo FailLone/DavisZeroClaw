@@ -1,6 +1,7 @@
 //! Search provider abstraction. Brave is the only real impl in MVP;
 //! mock is available via `#[cfg(test)]`.
 
+#[cfg(test)]
 pub mod mock;
 
 use async_trait::async_trait;

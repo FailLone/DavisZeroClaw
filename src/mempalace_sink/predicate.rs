@@ -269,6 +269,18 @@ impl TripleId {
     pub fn component(name: &str) -> Self {
         Self::try_component(name).expect("component name must be non-empty and single-line")
     }
+
+    /// Compound descriptor used as the object of `ArticleDiscoveredFrom`.
+    /// The raw tag is slugified (colons, spaces, and other MemPalace-unsafe
+    /// characters collapse to `-`) so callers can pass structured hints like
+    /// `"discovery:async-rust:feed:lobste.rs"` without pre-massaging them.
+    pub fn try_tag(raw: &str) -> Result<Self, TripleIdError> {
+        let slug = Self::safe_slug(raw);
+        Self::build("tag", &slug)
+    }
+    pub fn tag(raw: &str) -> Self {
+        Self::try_tag(raw).expect("tag body must produce a non-empty slug")
+    }
 }
 
 impl fmt::Display for TripleId {
@@ -387,6 +399,16 @@ mod tests {
             TripleId::component("zeroclaw-daemon").as_str(),
             "component_zeroclaw-daemon",
         );
+    }
+
+    #[test]
+    fn triple_id_tag_slugifies_compound_discovery_hints() {
+        // Colons and other MemPalace-unsafe chars collapse to `-` via safe_slug.
+        assert_eq!(
+            TripleId::tag("discovery:async-rust:feed:lobste.rs").as_str(),
+            "tag_discovery-async-rust-feed-lobste.rs",
+        );
+        assert_eq!(TripleId::tag("simple").as_str(), "tag_simple");
     }
 
     #[test]
