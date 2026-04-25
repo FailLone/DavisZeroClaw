@@ -218,17 +218,14 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
         er = extract_trafilatura(raw_html)
         response_markdown = er.markdown or None
         extra_warnings.extend(er.warnings)
-    elif engine_used == "openrouter-llm":
-        from crawl4ai_adapter.engines import extract_openrouter_llm
-        raw_html = getattr(result, "html", None) or ""
-        if not req.openrouter_config:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "missing_openrouter_config", "engine": engine_used},
-            )
-        er = extract_openrouter_llm(raw_html, req.openrouter_config)
-        response_markdown = er.markdown or None
-        extra_warnings.extend(er.warnings)
+    elif engine_used is not None:
+        # pruning/trafilatura are the only engines served by the adapter.
+        # openrouter-llm now runs directly in Rust (reuses create_chat_completion);
+        # future engines may land here.
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "engine_not_supported_by_adapter", "engine": engine_used},
+        )
     # engine_used is None → no markdown requested, leave response_markdown=None
 
     response_metadata = getattr(result, "metadata", None)
