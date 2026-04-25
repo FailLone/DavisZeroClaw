@@ -39,7 +39,10 @@ class CrawlRequest(BaseModel):
     remove_overlay_elements: bool = True
     enable_stealth: bool = True
     markdown_generator: bool = False
-    content_filter: Optional[str] = None  # "pruning" | "bm25" | None
+    content_filter: Optional[str] = None
+    # NEW — Phase 1
+    extract_engine: Optional[str] = None  # "pruning" | "trafilatura" | "openrouter-llm"
+    openrouter_config: Optional[dict[str, Any]] = None  # required when engine=openrouter-llm
 
 
 class CrawlResponse(BaseModel):
@@ -53,6 +56,8 @@ class CrawlResponse(BaseModel):
     error_message: Optional[str] = None
     markdown: Optional[str] = None
     metadata: Optional[dict[str, Any]] = None
+    engine: Optional[str] = None       # NEW
+    warnings: list[str] = []            # NEW
 
 
 def _collect_versions() -> dict[str, str]:
@@ -192,8 +197,14 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
             detail={"error": "crawl_failed", "details": str(exc)},
         )
 
-    response_markdown = None
-    if req.markdown_generator:
+    # Engine dispatch. `pruning` keeps the existing crawl4ai flow (markdown already
+    # resolved below). For trafilatura / openrouter-llm, re-run extraction on the
+    # raw HTML regardless of crawl4ai's own markdown_generator setting.
+    response_markdown: Optional[str] = None
+    extra_warnings: list[str] = []
+    engine_used = req.extract_engine or ("pruning" if req.markdown_generator else None)
+
+    if engine_used == "pruning":
         markdown_v2 = getattr(result, "markdown_v2", None)
         if markdown_v2 is not None:
             response_markdown = getattr(markdown_v2, "fit_markdown", None) or getattr(
@@ -201,6 +212,24 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
             )
         if response_markdown is None:
             response_markdown = getattr(result, "markdown", None)
+    elif engine_used == "trafilatura":
+        from crawl4ai_adapter.engines import extract_trafilatura
+        raw_html = getattr(result, "html", None) or ""
+        er = extract_trafilatura(raw_html)
+        response_markdown = er.markdown or None
+        extra_warnings.extend(er.warnings)
+    elif engine_used == "openrouter-llm":
+        from crawl4ai_adapter.engines import extract_openrouter_llm
+        raw_html = getattr(result, "html", None) or ""
+        if not req.openrouter_config:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "missing_openrouter_config", "engine": engine_used},
+            )
+        er = extract_openrouter_llm(raw_html, req.openrouter_config)
+        response_markdown = er.markdown or None
+        extra_warnings.extend(er.warnings)
+    # engine_used is None → no markdown requested, leave response_markdown=None
 
     response_metadata = getattr(result, "metadata", None)
     if not isinstance(response_metadata, dict):
@@ -217,4 +246,6 @@ async def crawl(req: CrawlRequest) -> CrawlResponse:
         error_message=getattr(result, "error_message", None),
         markdown=response_markdown,
         metadata=response_metadata,
+        engine=engine_used,
+        warnings=extra_warnings,
     )
