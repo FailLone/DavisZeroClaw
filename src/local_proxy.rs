@@ -212,7 +212,32 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                 ingest_queue: ingest_queue.clone(),
                 config: Arc::new(local_config.article_memory.discovery.clone()),
                 http: reqwest::Client::new(),
-                search_provider: None, // wired in Phase 2 (Task 11)
+                search_provider: local_config
+                    .article_memory
+                    .discovery
+                    .search
+                    .as_ref()
+                    .and_then(|sc| {
+                        if sc.provider != "brave" {
+                            tracing::warn!(provider = %sc.provider, "unsupported search provider, skipping");
+                            return None;
+                        }
+                        let env_name = sc.api_key_env.as_deref().unwrap_or("BRAVE_API_KEY");
+                        match std::env::var(env_name) {
+                            Ok(key) if !key.is_empty() => {
+                                // reqwest client built inline — see DiscoveryWorker for matching pattern
+                                let brave = crate::article_memory::discovery::search::brave::BraveSearch::new(
+                                    reqwest::Client::new(),
+                                    key,
+                                );
+                                Some(Arc::new(brave) as Arc<dyn crate::article_memory::discovery::search::SearchProvider>)
+                            }
+                            _ => {
+                                tracing::warn!(env = %env_name, "brave api key missing; search disabled");
+                                None
+                            }
+                        }
+                    }),
                 mempalace_sink: ingest_sink.clone(),
             },
         );
