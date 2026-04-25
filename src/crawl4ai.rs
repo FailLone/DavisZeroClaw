@@ -18,6 +18,8 @@ pub struct Crawl4aiPageRequest {
     pub extract_engine: Option<String>,
     /// Required when `extract_engine == Some("openrouter-llm")`.
     pub openrouter_config: Option<serde_json::Value>,
+    /// Required when `extract_engine == Some("learned-rules")`.
+    pub learned_rule: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +54,8 @@ struct CrawlRequestBody<'a> {
     extract_engine: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     openrouter_config: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    learned_rule: Option<&'a serde_json::Value>,
 }
 
 #[tracing::instrument(
@@ -101,6 +105,7 @@ pub async fn crawl4ai_crawl(
         content_filter,
         extract_engine,
         openrouter_config: request.openrouter_config.as_ref(),
+        learned_rule: request.learned_rule.as_ref(),
     };
 
     let base = supervisor.base_url().await;

@@ -228,6 +228,7 @@ async fn crawl4ai_503_maps_to_server_unavailable() {
             markdown: false,
             extract_engine: None,
             openrouter_config: None,
+            learned_rule: None,
         },
     )
     .await

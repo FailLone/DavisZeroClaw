@@ -12,6 +12,7 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineChoice {
+    LearnedRules,
     Trafilatura,
     OpenRouterLlm,
     Pruning, // deprecated; retained for migration window
@@ -20,6 +21,7 @@ pub enum EngineChoice {
 impl EngineChoice {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::LearnedRules => "learned-rules",
             Self::Trafilatura => "trafilatura",
             Self::OpenRouterLlm => "openrouter-llm",
             Self::Pruning => "pruning",
@@ -28,6 +30,7 @@ impl EngineChoice {
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
+            "learned-rules" => Some(Self::LearnedRules),
             "trafilatura" => Some(Self::Trafilatura),
             "openrouter-llm" => Some(Self::OpenRouterLlm),
             "pruning" => Some(Self::Pruning),
@@ -131,6 +134,7 @@ mod tests {
     #[test]
     fn engine_choice_roundtrip() {
         for e in [
+            EngineChoice::LearnedRules,
             EngineChoice::Trafilatura,
             EngineChoice::OpenRouterLlm,
             EngineChoice::Pruning,

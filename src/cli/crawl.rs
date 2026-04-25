@@ -62,10 +62,11 @@ pub(super) fn install_crawl4ai(paths: &RuntimePaths) -> Result<()> {
             // fixtures and any future HTTP-based engines.
             .arg("trafilatura")
             .arg("httpx")
+            .arg("beautifulsoup4")
             .env("CRAWL4_AI_BASE_DIRECTORY", &crawl4ai_base_dir)
             .env("PATH", tool_path_env())
             .current_dir(&paths.repo_root),
-        "pip install --upgrade crawl4ai fastapi uvicorn[standard] pydantic trafilatura httpx",
+        "pip install --upgrade crawl4ai fastapi uvicorn[standard] pydantic trafilatura httpx beautifulsoup4",
     )?;
 
     println!("Installing Playwright Chromium.");
@@ -199,6 +200,7 @@ async fn probe_crawl4ai_runtime(
                 markdown: false,
                 extract_engine: None,
                 openrouter_config: None,
+                learned_rule: None,
             };
             match crawl4ai_crawl(paths, config, &supervisor, request).await {
                 Ok(page) => {

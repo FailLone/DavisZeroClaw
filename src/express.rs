@@ -282,6 +282,7 @@ async fn crawl_source_payload(
             markdown: false,
             extract_engine: None,
             openrouter_config: None,
+            learned_rule: None,
         },
     )
     .await?;

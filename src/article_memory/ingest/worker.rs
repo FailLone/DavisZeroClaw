@@ -147,6 +147,7 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
             markdown: false,
             extract_engine: Some(fetch_engine.as_str().to_string()),
             openrouter_config: None,
+            learned_rule: None,
         },
     )
     .await
