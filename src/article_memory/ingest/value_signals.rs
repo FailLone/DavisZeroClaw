@@ -4,8 +4,6 @@
 //! 0.55 baseline. Reads content signals already computed by `ContentSignals`
 //! + topic matches, returns a score in [0.0, 1.0].
 
-#![allow(dead_code)]
-
 use super::content_signals::ContentSignals;
 
 /// Score components: base 0.5 + topic bonus (max +0.15) + code density bonus

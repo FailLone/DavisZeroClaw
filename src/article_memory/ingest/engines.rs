@@ -4,10 +4,6 @@
 //! `pruning` is recognised to stay compatible with callers that still request
 //! it, but is deprecated and removed in Phase 2.
 
-// Consumers land in T12 (worker engine-ladder loop); until then the public
-// surface is exercised only by unit tests in this file.
-#![allow(dead_code)]
-
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +86,7 @@ pub fn pick_engine(config: &ExtractEngineConfig) -> EngineChoice {
 
 /// Given the current engine and the ladder, return the next engine to try,
 /// or `None` if exhausted.
+#[allow(dead_code)] // worker uses its own iteration; kept for tests + future use
 pub fn next_engine(current: &EngineChoice, ladder: &[EngineChoice]) -> Option<EngineChoice> {
     let pos = ladder.iter().position(|e| e == current)?;
     ladder.get(pos + 1).cloned()

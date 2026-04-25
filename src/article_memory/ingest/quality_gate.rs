@@ -7,10 +7,6 @@
 //! Soft-fails: structural signs (code flattened, no headings when HTML
 //! had them). Triggers engine upgrade only.
 
-// Consumers land in T12 (worker engine-ladder loop); until then the
-// public surface is exercised only by unit tests here.
-#![allow(dead_code)]
-
 use super::content_signals::{compute_signals, ContentSignals};
 
 #[derive(Debug, Clone, PartialEq)]

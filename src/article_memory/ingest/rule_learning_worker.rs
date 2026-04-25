@@ -4,8 +4,6 @@
 //! writes passing rules to `learned_rules.json`. Failing rules land in
 //! `quarantine_rules/` with validation errors attached.
 
-#![allow(dead_code)]
-
 use super::learned_rules::{LearnedRuleStore, RuleStatsStore};
 use super::quality_gate::QualityGateConfig;
 use super::rule_learning::{

@@ -7,8 +7,6 @@
 //! them. Callers supply `LlmChatRequest` describing their specific call
 //! shape (system/user/temperature/max_tokens/timeout).
 
-#![allow(dead_code)]
-
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
 use std::time::Duration;

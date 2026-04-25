@@ -2,8 +2,6 @@
 //! overrides file (`config/davis/article_memory_overrides.toml`) which takes
 //! precedence over learned entries.
 
-#![allow(dead_code)]
-
 use super::rule_types::{LearnedRule, RuleStats};
 use crate::RuntimePaths;
 use anyhow::{Context, Result};

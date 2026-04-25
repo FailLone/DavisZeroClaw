@@ -1,8 +1,6 @@
 //! DOM simplification (token-efficient input for the learning LLM) +
 //! prompt building + rule validation (re-extracting on samples).
 
-#![allow(dead_code)]
-
 use super::rule_types::{LearnedRule, RuleSample};
 
 /// Simplify HTML into a textual tree outline: tag + id + first 2 classes +

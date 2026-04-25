@@ -1,7 +1,5 @@
 //! Per-host accumulator for HTML samples awaiting a rule-learning round.
 
-#![allow(dead_code)]
-
 use super::rule_types::RuleSample;
 use crate::RuntimePaths;
 use anyhow::{Context, Result};

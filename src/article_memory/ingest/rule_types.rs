@@ -1,7 +1,5 @@
 //! Data shapes for the rule-learning subsystem.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 /// LLM-generated per-host extraction rule (learned or hand-overridden).

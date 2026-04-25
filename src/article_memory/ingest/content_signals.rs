@@ -3,10 +3,6 @@
 //! Phase 1 uses these only inside the quality gate. Phase 2 will also feed
 //! them into the deterministic value score.
 
-// Consumers (quality gate, value scorer) land in later tasks; until then
-// these items are exercised only by the unit tests in this file.
-#![allow(dead_code)]
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContentSignals {
     pub total_chars: usize,
