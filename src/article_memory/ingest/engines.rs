@@ -54,19 +54,27 @@ pub struct ExtractEngineConfig {
 impl Default for ExtractEngineConfig {
     fn default() -> Self {
         Self {
-            default_engine: EngineChoice::Trafilatura,
+            // Aspirational default: the worker will attempt learned-rules per
+            // host; when no rule exists (or fails), `pick_engine` falls this
+            // back to Trafilatura so the engine-ladder still starts from a
+            // concrete HTML-fetching engine.
+            default_engine: EngineChoice::LearnedRules,
             fallback_ladder: vec![EngineChoice::Trafilatura, EngineChoice::OpenRouterLlm],
         }
     }
 }
 
 /// Pick the starting engine. Rules:
-/// 1. If `default_engine` is OpenRouterLlm, we still need HTML first —
-///    Phase 1 worker code already falls back to Trafilatura for fetch.
+/// 1. If `default_engine` is OpenRouterLlm or LearnedRules, we still need
+///    HTML first — the worker invokes learned-rules explicitly per host, and
+///    openrouter-llm needs HTML from Trafilatura before it can rewrite.
 /// 2. Otherwise return `default_engine` if it appears in the ladder,
 ///    else the head of the ladder.
 pub fn pick_engine(config: &ExtractEngineConfig) -> EngineChoice {
-    if matches!(config.default_engine, EngineChoice::OpenRouterLlm) {
+    if matches!(
+        config.default_engine,
+        EngineChoice::OpenRouterLlm | EngineChoice::LearnedRules
+    ) {
         return EngineChoice::Trafilatura;
     }
     if config.fallback_ladder.contains(&config.default_engine) {
@@ -93,7 +101,17 @@ mod tests {
 
     #[test]
     fn pick_engine_returns_default() {
+        // With the Phase 2 default (`LearnedRules`), `pick_engine` falls back
+        // to Trafilatura because the worker handles per-host learned-rules
+        // selection explicitly before consulting the ladder.
         let c = ExtractEngineConfig::default();
+        assert_eq!(pick_engine(&c), EngineChoice::Trafilatura);
+    }
+
+    #[test]
+    fn pick_engine_learned_rules_default_falls_back_to_trafilatura() {
+        let c = ExtractEngineConfig::default();
+        assert_eq!(c.default_engine, EngineChoice::LearnedRules);
         assert_eq!(pick_engine(&c), EngineChoice::Trafilatura);
     }
 

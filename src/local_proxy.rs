@@ -143,6 +143,16 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                 imessage_config: Arc::new(local_config.imessage.clone()),
                 extract_config: Arc::new(local_config.article_memory.extract.clone()),
                 quality_gate_config: Arc::new(local_config.article_memory.quality_gate.clone()),
+                learned_rules: Arc::new(crate::article_memory::LearnedRuleStore::load(
+                    &paths,
+                    Some(
+                        &paths
+                            .repo_root
+                            .join("config/davis/article_memory_overrides.toml"),
+                    ),
+                )?),
+                rule_stats: Arc::new(crate::article_memory::RuleStatsStore::load(&paths)?),
+                sample_store: Arc::new(crate::article_memory::SampleStore::new(&paths)),
             },
             ingest_config.max_concurrency,
         );

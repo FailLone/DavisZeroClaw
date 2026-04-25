@@ -152,6 +152,24 @@ fn default_article_memory_cfg() -> Arc<ArticleMemoryConfig> {
     Arc::new(ArticleMemoryConfig::default())
 }
 
+/// Build the three learned-rules plumbing stores that `IngestWorkerDeps`
+/// requires. Tests that don't exercise the rule path still need valid
+/// (empty) stores so the worker can noop-check them.
+fn test_rule_stores(
+    paths: &RuntimePaths,
+) -> (
+    Arc<crate::article_memory::LearnedRuleStore>,
+    Arc<crate::article_memory::RuleStatsStore>,
+    Arc<crate::article_memory::SampleStore>,
+) {
+    std::fs::create_dir_all(paths.article_memory_dir()).unwrap();
+    (
+        Arc::new(crate::article_memory::LearnedRuleStore::load(paths, None).unwrap()),
+        Arc::new(crate::article_memory::RuleStatsStore::load(paths).unwrap()),
+        Arc::new(crate::article_memory::SampleStore::new(paths)),
+    )
+}
+
 /// Body containing target-topic keywords so the deterministic value prefilter
 /// lands on `candidate`/`save` (not `reject`). Target topics are configured
 /// in the built-in `article_memory.toml` and include "agent", "memory",
@@ -200,6 +218,7 @@ async fn ingest_happy_path_end_to_end() {
     let supervisor = spawn_mock_supervisor(&paths, mock.clone()).await;
     let ingest_cfg = default_ingest_cfg();
     let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    let (learned_rules, rule_stats, sample_store) = test_rule_stores(&paths);
     IngestWorkerPool::spawn(
         queue.clone(),
         IngestWorkerDeps {
@@ -218,6 +237,9 @@ async fn ingest_happy_path_end_to_end() {
                 enabled: false,
                 ..crate::app_config::QualityGateToml::default()
             }),
+            learned_rules,
+            rule_stats,
+            sample_store,
         },
         1,
     );
@@ -255,6 +277,7 @@ async fn ingest_empty_markdown_rejected() {
     let supervisor = spawn_mock_supervisor(&paths, mock).await;
     let ingest_cfg = default_ingest_cfg();
     let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    let (learned_rules, rule_stats, sample_store) = test_rule_stores(&paths);
     IngestWorkerPool::spawn(
         queue.clone(),
         IngestWorkerDeps {
@@ -270,6 +293,9 @@ async fn ingest_empty_markdown_rejected() {
             }),
             extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
             quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
+            learned_rules,
+            rule_stats,
+            sample_store,
         },
         1,
     );
@@ -302,6 +328,7 @@ async fn ingest_crawl_server_error_surfaces_issue_type() {
     let supervisor = spawn_mock_supervisor(&paths, mock).await;
     let ingest_cfg = default_ingest_cfg();
     let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    let (learned_rules, rule_stats, sample_store) = test_rule_stores(&paths);
     IngestWorkerPool::spawn(
         queue.clone(),
         IngestWorkerDeps {
@@ -320,6 +347,9 @@ async fn ingest_crawl_server_error_surfaces_issue_type() {
                 enabled: false,
                 ..crate::app_config::QualityGateToml::default()
             }),
+            learned_rules,
+            rule_stats,
+            sample_store,
         },
         1,
     );
@@ -351,6 +381,7 @@ async fn ingest_same_host_serializes() {
     let supervisor = spawn_mock_supervisor(&paths, mock.clone()).await;
     let ingest_cfg = default_ingest_cfg();
     let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    let (learned_rules, rule_stats, sample_store) = test_rule_stores(&paths);
     IngestWorkerPool::spawn(
         queue.clone(),
         IngestWorkerDeps {
@@ -369,6 +400,9 @@ async fn ingest_same_host_serializes() {
                 enabled: false,
                 ..crate::app_config::QualityGateToml::default()
             }),
+            learned_rules,
+            rule_stats,
+            sample_store,
         },
         3,
     );
@@ -414,6 +448,7 @@ async fn ingest_different_hosts_parallelize() {
     let supervisor = spawn_mock_supervisor(&paths, mock.clone()).await;
     let ingest_cfg = default_ingest_cfg();
     let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    let (learned_rules, rule_stats, sample_store) = test_rule_stores(&paths);
     IngestWorkerPool::spawn(
         queue.clone(),
         IngestWorkerDeps {
@@ -432,6 +467,9 @@ async fn ingest_different_hosts_parallelize() {
                 enabled: false,
                 ..crate::app_config::QualityGateToml::default()
             }),
+            learned_rules,
+            rule_stats,
+            sample_store,
         },
         3,
     );
@@ -502,6 +540,7 @@ async fn worker_force_path_reuses_existing_article_id() {
     let supervisor = spawn_mock_supervisor(&paths, mock.clone()).await;
     let ingest_cfg = default_ingest_cfg();
     let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    let (learned_rules, rule_stats, sample_store) = test_rule_stores(&paths);
     IngestWorkerPool::spawn(
         queue.clone(),
         IngestWorkerDeps {
@@ -520,6 +559,9 @@ async fn worker_force_path_reuses_existing_article_id() {
                 enabled: false,
                 ..crate::app_config::QualityGateToml::default()
             }),
+            learned_rules,
+            rule_stats,
+            sample_store,
         },
         1,
     );
@@ -571,6 +613,7 @@ async fn worker_notify_hook_fires_on_early_return_fetch_failure() {
     let supervisor = spawn_mock_supervisor(&paths, mock.clone()).await;
     let ingest_cfg = default_ingest_cfg();
     let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    let (learned_rules, rule_stats, sample_store) = test_rule_stores(&paths);
     IngestWorkerPool::spawn(
         queue.clone(),
         IngestWorkerDeps {
@@ -591,6 +634,9 @@ async fn worker_notify_hook_fires_on_early_return_fetch_failure() {
                 enabled: false,
                 ..crate::app_config::QualityGateToml::default()
             }),
+            learned_rules,
+            rule_stats,
+            sample_store,
         },
         1,
     );
@@ -629,6 +675,7 @@ async fn worker_skips_notify_when_reply_handle_missing() {
     let supervisor = spawn_mock_supervisor(&paths, mock.clone()).await;
     let ingest_cfg = default_ingest_cfg();
     let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    let (learned_rules, rule_stats, sample_store) = test_rule_stores(&paths);
     IngestWorkerPool::spawn(
         queue.clone(),
         IngestWorkerDeps {
@@ -647,6 +694,9 @@ async fn worker_skips_notify_when_reply_handle_missing() {
                 enabled: false,
                 ..crate::app_config::QualityGateToml::default()
             }),
+            learned_rules,
+            rule_stats,
+            sample_store,
         },
         1,
     );
@@ -684,6 +734,7 @@ async fn ingest_fails_when_quality_gate_rejects_and_no_upgrade_path() {
     let supervisor = spawn_mock_supervisor(&paths, mock).await;
     let ingest_cfg = default_ingest_cfg();
     let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
+    let (learned_rules, rule_stats, sample_store) = test_rule_stores(&paths);
     IngestWorkerPool::spawn(
         queue.clone(),
         IngestWorkerDeps {
@@ -701,6 +752,9 @@ async fn ingest_fails_when_quality_gate_rejects_and_no_upgrade_path() {
             extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
             // KEY: gate ENABLED (default) to exercise the rejection path.
             quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
+            learned_rules,
+            rule_stats,
+            sample_store,
         },
         1,
     );

@@ -1,7 +1,9 @@
 use super::engines::{pick_engine, EngineChoice, ExtractEngineConfig};
+use super::learned_rules::{LearnedRuleStore, RuleStatsStore};
 use super::llm_extract::llm_html_to_markdown;
 use super::quality_gate::{assess as assess_quality, GateResult, QualityGateConfig};
 use super::queue::IngestQueue;
+use super::rule_samples::SampleStore;
 use super::types::{
     IngestJob, IngestJobError, IngestJobStatus, IngestOutcome, IngestOutcomeSummary,
 };
@@ -32,6 +34,9 @@ pub struct IngestWorkerDeps {
     pub imessage_config: Arc<ImessageConfig>,
     pub extract_config: Arc<ArticleMemoryExtractConfig>,
     pub quality_gate_config: Arc<QualityGateToml>,
+    pub learned_rules: Arc<LearnedRuleStore>,
+    pub rule_stats: Arc<RuleStatsStore>,
+    pub sample_store: Arc<SampleStore>,
 }
 
 pub struct IngestWorkerPool;
@@ -128,83 +133,155 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
     let profile_lock = acquire_profile_lock(&deps.profile_locks, &job.profile_name).await;
     let _guard = profile_lock.lock().await;
 
-    // Stage 1: fetch + quality gate + Rust-local LLM upgrade
+    // Stage 1: fetch + quality gate, with optional learned-rules priority.
     let engine_cfg = engine_config_from_toml(&deps.extract_config);
     let gate_cfg = quality_gate_config_from_toml(&deps.quality_gate_config);
+    let host = extract_host(&job.url);
 
-    let fetch_engine = pick_engine(&engine_cfg);
-    let mut attempted: Vec<EngineChoice> = vec![fetch_engine.clone()];
+    let mut attempted: Vec<EngineChoice> = Vec::new();
+    let mut page: Option<crate::Crawl4aiPageResult> = None;
+    let mut markdown = String::new();
+    let mut gate: Option<GateResult> = None;
 
-    let mut page = match crawl4ai_crawl(
-        &deps.paths,
-        &deps.crawl4ai_config,
-        &deps.supervisor,
-        Crawl4aiPageRequest {
+    // 1a. Try the learned-rules engine first if we have a non-stale rule for
+    // this host. On success (page fetched AND quality gate passes) we skip
+    // the Trafilatura ladder entirely. On any failure (crawl error, stale
+    // output, gate fail) we log and fall through.
+    let learned = match &host {
+        Some(h) => deps.learned_rules.get(h).await,
+        None => None,
+    };
+    if let Some(rule) = learned.as_ref().filter(|r| !r.stale) {
+        attempted.push(EngineChoice::LearnedRules);
+        let rule_json = serde_json::to_value(rule).ok();
+        let req = Crawl4aiPageRequest {
             profile_name: job.profile_name.clone(),
             url: job.url.clone(),
             wait_for: None,
             js_code: None,
             markdown: false,
-            extract_engine: Some(fetch_engine.as_str().to_string()),
+            extract_engine: Some(EngineChoice::LearnedRules.as_str().to_string()),
             openrouter_config: None,
-            learned_rule: None,
-        },
-    )
-    .await
-    {
-        Ok(p) => p,
-        Err(err) => {
-            let issue_type = err.issue_type().to_string();
-            let message = err.to_string();
-            queue
-                .attach_engine_chain(
-                    &job.id,
-                    attempted.iter().map(|e| e.as_str().to_string()).collect(),
-                )
-                .await;
-            queue
-                .finish(
-                    &job.id,
-                    IngestOutcome::Failed(IngestJobError {
-                        issue_type,
-                        message,
-                        stage: "fetching".into(),
-                    }),
-                )
-                .await;
-            return;
+            learned_rule: rule_json,
+        };
+        match crawl4ai_crawl(&deps.paths, &deps.crawl4ai_config, &deps.supervisor, req).await {
+            Ok(p) => {
+                let md = p.markdown.clone().unwrap_or_default();
+                let html_chars = p.html.as_ref().map(|h| h.chars().count()).unwrap_or(0);
+                let gr = assess_quality(&md, html_chars, &gate_cfg);
+                if gr.pass {
+                    markdown = md;
+                    gate = Some(gr);
+                    page = Some(p);
+                } else {
+                    tracing::info!(
+                        host = ?host,
+                        hard = ?gr.hard_fail_reasons,
+                        soft = ?gr.soft_fail_reasons,
+                        "learned-rules gate failed; falling through to trafilatura"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    host = ?host,
+                    error = %err,
+                    "learned-rules crawl failed; falling through to trafilatura"
+                );
+            }
         }
-    };
+    }
 
-    let html_chars = page.html.as_ref().map(|h| h.chars().count()).unwrap_or(0);
-    let mut markdown = page.markdown.clone().unwrap_or_default();
-    let mut gate: GateResult = assess_quality(&markdown, html_chars, &gate_cfg);
-
-    // If gate failed, try Rust-local LLM upgrade.
-    if !gate.pass {
-        let html_for_llm = page.html.as_deref().unwrap_or("");
-        if let Some(new_md) = try_llm_upgrade(
-            &engine_cfg,
-            &deps.extract_config.openrouter_llm,
-            &deps.providers,
-            html_for_llm,
+    // 1b. If learned-rules didn't produce a passing page, run the Phase 1
+    // ladder (Trafilatura, optionally upgraded to openrouter-llm).
+    if page.is_none() {
+        let fetch_engine = pick_engine(&engine_cfg);
+        attempted.push(fetch_engine.clone());
+        let fetched = match crawl4ai_crawl(
+            &deps.paths,
+            &deps.crawl4ai_config,
+            &deps.supervisor,
+            Crawl4aiPageRequest {
+                profile_name: job.profile_name.clone(),
+                url: job.url.clone(),
+                wait_for: None,
+                js_code: None,
+                markdown: false,
+                extract_engine: Some(fetch_engine.as_str().to_string()),
+                openrouter_config: None,
+                learned_rule: None,
+            },
         )
         .await
         {
-            attempted.push(EngineChoice::OpenRouterLlm);
-            tracing::info!(
-                job_id = %job.id,
-                from = %fetch_engine,
-                to = "openrouter-llm",
-                hard = ?gate.hard_fail_reasons,
-                soft = ?gate.soft_fail_reasons,
-                "upgrading extraction engine after gate failure"
-            );
-            markdown = new_md.clone();
-            page.markdown = Some(new_md);
-            gate = assess_quality(&markdown, html_chars, &gate_cfg);
+            Ok(p) => p,
+            Err(err) => {
+                let issue_type = err.issue_type().to_string();
+                let message = err.to_string();
+                queue
+                    .attach_engine_chain(
+                        &job.id,
+                        attempted.iter().map(|e| e.as_str().to_string()).collect(),
+                    )
+                    .await;
+                queue
+                    .finish(
+                        &job.id,
+                        IngestOutcome::Failed(IngestJobError {
+                            issue_type,
+                            message,
+                            stage: "fetching".into(),
+                        }),
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        let html_chars = fetched
+            .html
+            .as_ref()
+            .map(|h| h.chars().count())
+            .unwrap_or(0);
+        let mut md = fetched.markdown.clone().unwrap_or_default();
+        let mut gr = assess_quality(&md, html_chars, &gate_cfg);
+        let mut fetched = fetched;
+
+        // If gate failed, try Rust-local LLM upgrade.
+        if !gr.pass {
+            let html_for_llm = fetched.html.as_deref().unwrap_or("");
+            if let Some(new_md) = try_llm_upgrade(
+                &engine_cfg,
+                &deps.extract_config.openrouter_llm,
+                &deps.providers,
+                html_for_llm,
+            )
+            .await
+            {
+                attempted.push(EngineChoice::OpenRouterLlm);
+                tracing::info!(
+                    job_id = %job.id,
+                    from = %fetch_engine,
+                    to = "openrouter-llm",
+                    hard = ?gr.hard_fail_reasons,
+                    soft = ?gr.soft_fail_reasons,
+                    "upgrading extraction engine after gate failure"
+                );
+                md = new_md.clone();
+                fetched.markdown = Some(new_md);
+                gr = assess_quality(&md, html_chars, &gate_cfg);
+            }
         }
+
+        markdown = md;
+        gate = Some(gr);
+        page = Some(fetched);
     }
+
+    // One of the paths above must have set `page` + `gate`, or the function
+    // already returned. Unwrap under that invariant.
+    let page = page.expect("page must be set before exiting Stage 1");
+    let gate = gate.expect("gate must be set before exiting Stage 1");
 
     // If still failing after any upgrade attempt, reject.
     if !gate.pass {
@@ -490,4 +567,13 @@ async fn try_llm_upgrade(
             None
         }
     }
+}
+
+/// Parse the URL and return the lowercase host, if any. Used to look up
+/// learned rules keyed by host.
+fn extract_host(url_str: &str) -> Option<String> {
+    url::Url::parse(url_str)
+        .ok()?
+        .host_str()
+        .map(|s| s.to_lowercase())
 }
