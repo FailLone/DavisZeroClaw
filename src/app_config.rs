@@ -220,8 +220,6 @@ pub struct ArticleMemoryIngestConfig {
     pub max_concurrency: usize,
     #[serde(default = "default_ingest_default_profile")]
     pub default_profile: String,
-    #[serde(default = "default_ingest_min_markdown_chars")]
-    pub min_markdown_chars: usize,
     #[serde(default = "default_ingest_dedup_window_hours")]
     pub dedup_window_hours: u64,
     #[serde(default)]
@@ -352,10 +350,6 @@ fn default_ingest_default_profile() -> String {
     "articles-generic".to_string()
 }
 
-fn default_ingest_min_markdown_chars() -> usize {
-    600
-}
-
 fn default_ingest_dedup_window_hours() -> u64 {
     24
 }
@@ -449,7 +443,6 @@ impl Default for ArticleMemoryIngestConfig {
             enabled: default_ingest_enabled(),
             max_concurrency: default_ingest_max_concurrency(),
             default_profile: default_ingest_default_profile(),
-            min_markdown_chars: default_ingest_min_markdown_chars(),
             dedup_window_hours: default_ingest_dedup_window_hours(),
             allow_private_hosts: Vec::new(),
             host_profiles: Vec::new(),
@@ -750,7 +743,6 @@ mod tests {
         assert!(cfg.ingest.enabled);
         assert_eq!(cfg.ingest.max_concurrency, 3);
         assert_eq!(cfg.ingest.default_profile, "articles-generic");
-        assert_eq!(cfg.ingest.min_markdown_chars, 600);
         assert_eq!(cfg.ingest.dedup_window_hours, 24);
         assert!(cfg.ingest.allow_private_hosts.is_empty());
         assert!(cfg.ingest.host_profiles.is_empty());

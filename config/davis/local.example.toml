@@ -133,10 +133,6 @@ max_concurrency = 3
 # with `daviszeroclaw crawl profile login articles-generic` if you want
 # cookies persisted.
 default_profile = "articles-generic"
-# Reject pages whose extracted Markdown is shorter than this. 600 chars
-# roughly matches the value-judge floor; shorter pages are usually 403s,
-# SPA skeletons, or login walls.
-min_markdown_chars = 600
 # Resubmitting a URL that was Saved within this window returns HTTP 409
 # instead of re-crawling. Set to 0 to disable dedup.
 dedup_window_hours = 24

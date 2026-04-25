@@ -559,7 +559,6 @@ mod tests {
             enabled: true,
             max_concurrency: 3,
             default_profile: "articles-generic".into(),
-            min_markdown_chars: 600,
             dedup_window_hours: 24,
             allow_private_hosts: vec![],
             host_profiles: vec![],

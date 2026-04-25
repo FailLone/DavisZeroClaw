@@ -127,7 +127,6 @@ fn default_ingest_cfg() -> Arc<ArticleMemoryIngestConfig> {
     Arc::new(ArticleMemoryIngestConfig {
         enabled: true,
         max_concurrency: 3,
-        min_markdown_chars: 100,
         host_profiles: vec![
             ArticleMemoryHostProfile {
                 match_suffix: "zhihu.com".into(),
@@ -254,10 +253,7 @@ async fn ingest_empty_markdown_rejected() {
     let mock = MockState::default();
     *mock.markdown_body.lock().unwrap() = "too short".into();
     let supervisor = spawn_mock_supervisor(&paths, mock).await;
-    let ingest_cfg = Arc::new(ArticleMemoryIngestConfig {
-        min_markdown_chars: 600,
-        ..(*default_ingest_cfg()).clone()
-    });
+    let ingest_cfg = default_ingest_cfg();
     let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_cfg.clone()));
     IngestWorkerPool::spawn(
         queue.clone(),
