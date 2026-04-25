@@ -226,3 +226,180 @@ mod tests {
         assert!(parse_learn_response("x.com", content, 1).is_err());
     }
 }
+
+use super::quality_gate::{assess, QualityGateConfig};
+
+/// Try applying `rule.content_selectors[0]` (and remove_selectors) to `html`.
+/// Returns the extracted text on success, or None if no match.
+fn apply_rule(rule: &LearnedRule, html: &str) -> Option<String> {
+    use scraper::{Html, Selector};
+
+    let doc = Html::parse_document(html);
+    for selector_str in &rule.content_selectors {
+        let Ok(sel) = Selector::parse(selector_str) else {
+            continue;
+        };
+        if let Some(elem) = doc.select(&sel).next() {
+            let mut text = elem.text().collect::<Vec<_>>().join("\n");
+            // Apply remove_selectors by rebuilding without those subtrees.
+            for rs in &rule.remove_selectors {
+                if let Ok(rsel) = Selector::parse(rs) {
+                    for junk in elem.select(&rsel) {
+                        let junk_text = junk.text().collect::<Vec<_>>().join("\n");
+                        text = text.replace(&junk_text, "");
+                    }
+                }
+            }
+            // Apply start/end markers.
+            if let Some(marker) = rule
+                .start_markers
+                .iter()
+                .find(|m| text.contains(m.as_str()))
+            {
+                if let Some(pos) = text.find(marker.as_str()) {
+                    text = text[pos + marker.len()..].to_string();
+                }
+            }
+            if let Some(marker) = rule.end_markers.iter().find(|m| text.contains(m.as_str())) {
+                if let Some(pos) = text.find(marker.as_str()) {
+                    text.truncate(pos);
+                }
+            }
+            return Some(text.trim().to_string());
+        }
+    }
+    None
+}
+
+pub struct ValidationResult {
+    pub ok: bool,
+    pub errors: Vec<String>,
+    pub extracted_chars_median: usize,
+}
+
+/// Run the proposed rule against each sample's HTML; require:
+///  - all samples yield non-empty extraction
+///  - at least 2/3 pass the quality gate
+///  - median extracted chars >= 1500
+pub fn validate_rule(
+    rule: &LearnedRule,
+    samples: &[(RuleSample, String)],
+    gate: &QualityGateConfig,
+) -> ValidationResult {
+    let mut errors = Vec::new();
+    let mut char_counts = Vec::new();
+    let mut gate_passes = 0usize;
+
+    for (i, (_s, html)) in samples.iter().enumerate() {
+        match apply_rule(rule, html) {
+            Some(extracted) if !extracted.is_empty() => {
+                char_counts.push(extracted.chars().count());
+                let html_chars = html.chars().count();
+                let gr = assess(&extracted, html_chars, gate);
+                if gr.pass {
+                    gate_passes += 1;
+                }
+            }
+            _ => {
+                errors.push(format!("sample {i} yielded no extraction"));
+                char_counts.push(0);
+            }
+        }
+    }
+
+    let median = if char_counts.is_empty() {
+        0
+    } else {
+        let mut sorted = char_counts.clone();
+        sorted.sort_unstable();
+        sorted[sorted.len() / 2]
+    };
+
+    let ok = errors.is_empty() && gate_passes >= (samples.len() * 2 / 3).max(1) && median >= 1500;
+    if !ok && errors.is_empty() {
+        errors.push(format!(
+            "gate_passes={gate_passes}/{total}, median_chars={median} < 1500",
+            total = samples.len()
+        ));
+    }
+    ValidationResult {
+        ok,
+        errors,
+        extracted_chars_median: median,
+    }
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
+
+    fn sample_with_html(html: &str) -> (RuleSample, String) {
+        let s = RuleSample {
+            url: "u".into(),
+            job_id: "j".into(),
+            captured_at: "t".into(),
+            html_snapshot_path: "p".into(),
+            markdown_from_engine: "".into(),
+            failure_reason: "hard_fail".into(),
+            failure_details: vec![],
+        };
+        (s, html.to_string())
+    }
+
+    fn big_html(body_chars: usize) -> String {
+        // Split the body into 3 blank-line-separated chunks so the quality
+        // gate's paragraph_count (split on "\n\n") sees 3 paragraphs.
+        let per = body_chars / 9; // each chunk ~= body_chars/3 chars of "A. "
+        let chunk_a = "A. ".repeat(per);
+        let chunk_b = "B. ".repeat(per);
+        let chunk_c = "C. ".repeat(per);
+        let body = format!("{chunk_a}\n\n{chunk_b}\n\n{chunk_c}");
+        format!("<html><body><article class=\"post\">{body}</article></body></html>")
+    }
+
+    #[test]
+    fn rule_hits_all_samples_and_passes() {
+        let rule = LearnedRule {
+            host: "x.com".into(),
+            version: "v1".into(),
+            content_selectors: vec!["article.post".into()],
+            remove_selectors: vec![],
+            title_selector: None,
+            start_markers: vec![],
+            end_markers: vec![],
+            confidence: 0.9,
+            reasoning: "".into(),
+            learned_from_sample_count: 3,
+            stale: false,
+        };
+        let samples = vec![
+            sample_with_html(&big_html(2000)),
+            sample_with_html(&big_html(2000)),
+            sample_with_html(&big_html(2000)),
+        ];
+        let gate = QualityGateConfig::default();
+        let r = validate_rule(&rule, &samples, &gate);
+        assert!(r.ok, "errors: {:?}", r.errors);
+    }
+
+    #[test]
+    fn rule_misses_samples_fails_validation() {
+        let rule = LearnedRule {
+            host: "x.com".into(),
+            version: "v1".into(),
+            content_selectors: vec!["div.nonexistent".into()],
+            remove_selectors: vec![],
+            title_selector: None,
+            start_markers: vec![],
+            end_markers: vec![],
+            confidence: 0.5,
+            reasoning: "".into(),
+            learned_from_sample_count: 1,
+            stale: false,
+        };
+        let samples = vec![sample_with_html(&big_html(2000))];
+        let gate = QualityGateConfig::default();
+        let r = validate_rule(&rule, &samples, &gate);
+        assert!(!r.ok);
+    }
+}

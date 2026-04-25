@@ -45,7 +45,8 @@ pub use llm_extract::llm_html_to_markdown;
 pub use quality_gate::{assess as assess_quality, GateResult, QualityGateConfig};
 #[allow(unused_imports)]
 pub use rule_learning::{
-    build_learn_prompt, parse_learn_response, simplify_dom, LEARN_SYSTEM_PROMPT,
+    build_learn_prompt, parse_learn_response, simplify_dom, validate_rule, ValidationResult,
+    LEARN_SYSTEM_PROMPT,
 };
 #[allow(unused_imports)]
 pub use rule_samples::SampleStore;
