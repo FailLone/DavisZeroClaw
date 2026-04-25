@@ -1,10 +1,13 @@
+use super::engines::{EngineChoice, ExtractEngineConfig};
+use super::llm_extract::llm_html_to_markdown;
+use super::quality_gate::{assess as assess_quality, GateResult, QualityGateConfig};
 use super::queue::IngestQueue;
 use super::types::{
     IngestJob, IngestJobError, IngestJobStatus, IngestOutcome, IngestOutcomeSummary,
 };
 use crate::app_config::{
     ArticleMemoryConfig, ArticleMemoryExtractConfig, ArticleMemoryIngestConfig, ImessageConfig,
-    ModelProviderConfig, QualityGateToml,
+    ModelProviderConfig, OpenRouterLlmEngineConfig, QualityGateToml,
 };
 use crate::server::Crawl4aiProfileLocks;
 use crate::{
@@ -17,10 +20,6 @@ use crate::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// `extract_config` and `quality_gate_config` are consumed in T12
-// (engine-ladder loop); carried through the deps plumbing now so callers
-// don't need a second breaking change.
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct IngestWorkerDeps {
     pub paths: RuntimePaths,
@@ -129,8 +128,22 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
     let profile_lock = acquire_profile_lock(&deps.profile_locks, &job.profile_name).await;
     let _guard = profile_lock.lock().await;
 
-    // Stage 1: fetch
-    let page = match crawl4ai_crawl(
+    // Stage 1: fetch + quality gate + Rust-local LLM upgrade
+    let engine_cfg = engine_config_from_toml(&deps.extract_config);
+    let gate_cfg = quality_gate_config_from_toml(&deps.quality_gate_config);
+
+    // Determine the primary fetch engine. OpenRouterLlm is never sent to
+    // the Python adapter (the adapter rejects it now). If the operator
+    // configures default_engine="openrouter-llm" we still need to fetch
+    // HTML first — fall back to trafilatura for the fetch, then let the
+    // upgrade path do its thing.
+    let fetch_engine = match &engine_cfg.default_engine {
+        EngineChoice::OpenRouterLlm => EngineChoice::Trafilatura,
+        other => other.clone(),
+    };
+    let mut attempted: Vec<EngineChoice> = vec![fetch_engine.clone()];
+
+    let mut page = match crawl4ai_crawl(
         &deps.paths,
         &deps.crawl4ai_config,
         &deps.supervisor,
@@ -139,17 +152,23 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
             url: job.url.clone(),
             wait_for: None,
             js_code: None,
-            markdown: true,
-            extract_engine: None,
+            markdown: false,
+            extract_engine: Some(fetch_engine.as_str().to_string()),
             openrouter_config: None,
         },
     )
     .await
     {
-        Ok(page) => page,
+        Ok(p) => p,
         Err(err) => {
             let issue_type = err.issue_type().to_string();
             let message = err.to_string();
+            queue
+                .attach_engine_chain(
+                    &job.id,
+                    attempted.iter().map(|e| e.as_str().to_string()).collect(),
+                )
+                .await;
             queue
                 .finish(
                     &job.id,
@@ -164,32 +183,52 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
         }
     };
 
-    let markdown = match page.markdown.as_deref() {
-        Some(m) => m.to_string(),
-        None => {
-            queue
-                .finish(
-                    &job.id,
-                    IngestOutcome::Failed(IngestJobError {
-                        issue_type: "empty_content".into(),
-                        message: "crawl4ai returned no markdown field".into(),
-                        stage: "fetching".into(),
-                    }),
-                )
-                .await;
-            return;
+    let html_chars = page.html.as_ref().map(|h| h.chars().count()).unwrap_or(0);
+    let mut markdown = page.markdown.clone().unwrap_or_default();
+    let mut gate: GateResult = assess_quality(&markdown, html_chars, &gate_cfg);
+
+    // If gate failed, try Rust-local LLM upgrade.
+    if !gate.pass {
+        let html_for_llm = page.html.as_deref().unwrap_or("");
+        if let Some(new_md) = try_llm_upgrade(
+            &engine_cfg,
+            &deps.extract_config.openrouter_llm,
+            &deps.providers,
+            html_for_llm,
+        )
+        .await
+        {
+            attempted.push(EngineChoice::OpenRouterLlm);
+            tracing::info!(
+                job_id = %job.id,
+                from = %fetch_engine,
+                to = "openrouter-llm",
+                hard = ?gate.hard_fail_reasons,
+                soft = ?gate.soft_fail_reasons,
+                "upgrading extraction engine after gate failure"
+            );
+            markdown = new_md.clone();
+            page.markdown = Some(new_md);
+            gate = assess_quality(&markdown, html_chars, &gate_cfg);
         }
-    };
-    if markdown.chars().count() < deps.ingest_config.min_markdown_chars {
+    }
+
+    // If still failing after any upgrade attempt, reject.
+    if !gate.pass {
+        queue
+            .attach_engine_chain(
+                &job.id,
+                attempted.iter().map(|e| e.as_str().to_string()).collect(),
+            )
+            .await;
         queue
             .finish(
                 &job.id,
                 IngestOutcome::Failed(IngestJobError {
-                    issue_type: "empty_content".into(),
+                    issue_type: "quality_gate_rejected".into(),
                     message: format!(
-                        "markdown length {} below min_markdown_chars {}",
-                        markdown.chars().count(),
-                        deps.ingest_config.min_markdown_chars
+                        "quality gate failed; hard={:?} soft={:?}",
+                        gate.hard_fail_reasons, gate.soft_fail_reasons
                     ),
                     stage: "fetching".into(),
                 }),
@@ -197,6 +236,13 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
             .await;
         return;
     }
+
+    queue
+        .attach_engine_chain(
+            &job.id,
+            attempted.iter().map(|e| e.as_str().to_string()).collect(),
+        )
+        .await;
 
     // Stage 2: cleaning
     if let Err(e) = queue.mark_status(&job.id, IngestJobStatus::Cleaning).await {
@@ -380,4 +426,69 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
         }
     };
     queue.finish(&job.id, outcome).await;
+}
+
+fn engine_config_from_toml(extract: &ArticleMemoryExtractConfig) -> ExtractEngineConfig {
+    let default_engine =
+        EngineChoice::from_str(&extract.default_engine).unwrap_or(EngineChoice::Trafilatura);
+    let ladder: Vec<EngineChoice> = extract
+        .fallback_ladder
+        .iter()
+        .filter_map(|s| EngineChoice::from_str(s))
+        .collect();
+    ExtractEngineConfig {
+        default_engine,
+        fallback_ladder: if ladder.is_empty() {
+            vec![EngineChoice::Trafilatura, EngineChoice::OpenRouterLlm]
+        } else {
+            ladder
+        },
+    }
+}
+
+fn quality_gate_config_from_toml(gate: &QualityGateToml) -> QualityGateConfig {
+    QualityGateConfig {
+        enabled: gate.enabled,
+        min_markdown_chars: gate.min_markdown_chars,
+        min_kept_ratio: gate.min_kept_ratio,
+        min_paragraphs: gate.min_paragraphs,
+        max_link_density: gate.max_link_density,
+        boilerplate_markers: gate.boilerplate_markers.clone(),
+    }
+}
+
+fn find_provider<'a>(
+    providers: &'a [ModelProviderConfig],
+    name: &str,
+) -> Option<&'a ModelProviderConfig> {
+    if name.is_empty() {
+        return None;
+    }
+    providers.iter().find(|p| p.name == name)
+}
+
+/// If gate fails and the ladder permits upgrading to openrouter-llm, try a
+/// Rust-local LLM pass over the already-fetched HTML. Returns `Some(new_markdown)`
+/// if the LLM produced output (even if it doesn't pass the gate — caller re-runs).
+async fn try_llm_upgrade(
+    engine_cfg: &ExtractEngineConfig,
+    llm_engine: &OpenRouterLlmEngineConfig,
+    providers: &[ModelProviderConfig],
+    html: &str,
+) -> Option<String> {
+    let ladder_allows = engine_cfg
+        .fallback_ladder
+        .iter()
+        .any(|e| matches!(e, EngineChoice::OpenRouterLlm));
+    if !ladder_allows {
+        return None;
+    }
+    let provider = find_provider(providers, &llm_engine.provider)?;
+    match llm_html_to_markdown(provider, llm_engine, html).await {
+        Ok(md) => Some(md),
+        Err(err) => {
+            tracing::warn!(error = %err, "llm upgrade failed; staying with trafilatura output");
+            None
+        }
+    }
 }

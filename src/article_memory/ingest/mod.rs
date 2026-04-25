@@ -1,6 +1,7 @@
 mod content_signals;
 mod engines;
 mod host_profile;
+mod llm_extract;
 mod quality_gate;
 mod queue;
 pub(super) mod reply_text;
@@ -23,5 +24,7 @@ pub use worker::{IngestWorkerDeps, IngestWorkerPool};
 pub use content_signals::{compute_signals, ContentSignals};
 #[allow(unused_imports)]
 pub use engines::{next_engine, pick_engine, EngineChoice, ExtractEngineConfig};
+#[allow(unused_imports)]
+pub use llm_extract::llm_html_to_markdown;
 #[allow(unused_imports)]
 pub use quality_gate::{assess as assess_quality, GateResult, QualityGateConfig};

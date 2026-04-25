@@ -379,6 +379,17 @@ impl IngestQueue {
         }
     }
 
+    pub async fn attach_engine_chain(&self, job_id: &str, chain: Vec<String>) {
+        let mut state = self.inner.lock().await;
+        if let Some(job) = state.jobs.get_mut(job_id) {
+            job.engine_chain = chain;
+            state.updated_at = isoformat(now_utc());
+            if let Err(e) = self.persist_locked(&state) {
+                tracing::error!(job_id = %job_id, error = %e, "failed to persist attach_engine_chain");
+            }
+        }
+    }
+
     /// Atomically transition a job to a terminal state. Replaces the prior
     /// three separate `finish_*` methods — one lock acquisition, one
     /// persist, so the disk and in-memory views can never disagree about

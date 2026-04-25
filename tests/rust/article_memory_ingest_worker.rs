@@ -215,7 +215,10 @@ async fn ingest_happy_path_end_to_end() {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
             extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
-            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml {
+                enabled: false,
+                ..crate::app_config::QualityGateToml::default()
+            }),
         },
         1,
     );
@@ -243,6 +246,10 @@ async fn ingest_happy_path_end_to_end() {
 
 #[tokio::test]
 async fn ingest_empty_markdown_rejected() {
+    // Short markdown is now caught by the QualityGate (min_markdown_chars +
+    // min_paragraphs), which subsumed the old ingest-level min_markdown_chars
+    // check. Engine ladder with no providers wired → LLM upgrade is a no-op,
+    // so the gate-rejected branch surfaces `quality_gate_rejected`.
     let (_tmp, paths) = test_paths();
     let mock = MockState::default();
     *mock.markdown_body.lock().unwrap() = "too short".into();
@@ -283,7 +290,9 @@ async fn ingest_empty_markdown_rejected() {
         .unwrap();
     let job = wait_for_terminal(&queue, &resp.job_id, 10).await;
     assert_eq!(job.status, IngestJobStatus::Failed);
-    assert_eq!(job.error.unwrap().issue_type, "empty_content");
+    let err = job.error.unwrap();
+    assert_eq!(err.issue_type, "quality_gate_rejected");
+    assert_eq!(err.stage, "fetching");
 }
 
 #[tokio::test]
@@ -311,7 +320,10 @@ async fn ingest_crawl_server_error_surfaces_issue_type() {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
             extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
-            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml {
+                enabled: false,
+                ..crate::app_config::QualityGateToml::default()
+            }),
         },
         1,
     );
@@ -357,7 +369,10 @@ async fn ingest_same_host_serializes() {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
             extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
-            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml {
+                enabled: false,
+                ..crate::app_config::QualityGateToml::default()
+            }),
         },
         3,
     );
@@ -417,7 +432,10 @@ async fn ingest_different_hosts_parallelize() {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
             extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
-            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml {
+                enabled: false,
+                ..crate::app_config::QualityGateToml::default()
+            }),
         },
         3,
     );
@@ -502,7 +520,10 @@ async fn worker_force_path_reuses_existing_article_id() {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
             extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
-            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml {
+                enabled: false,
+                ..crate::app_config::QualityGateToml::default()
+            }),
         },
         1,
     );
@@ -570,7 +591,10 @@ async fn worker_notify_hook_fires_on_early_return_fetch_failure() {
                 allowed_contacts: vec![],
             }),
             extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
-            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml {
+                enabled: false,
+                ..crate::app_config::QualityGateToml::default()
+            }),
         },
         1,
     );
@@ -623,7 +647,10 @@ async fn worker_skips_notify_when_reply_handle_missing() {
                 allowed_contacts: vec!["+8618672954807".into()],
             }),
             extract_config: Arc::new(crate::app_config::ArticleMemoryExtractConfig::default()),
-            quality_gate_config: Arc::new(crate::app_config::QualityGateToml::default()),
+            quality_gate_config: Arc::new(crate::app_config::QualityGateToml {
+                enabled: false,
+                ..crate::app_config::QualityGateToml::default()
+            }),
         },
         1,
     );
