@@ -42,6 +42,7 @@ pub use app_config::{
 pub use article_memory::discovery::{
     BraveSearch, DiscoveryWorker, DiscoveryWorkerDeps, SearchError, SearchHit, SearchProvider,
 };
+pub use article_memory::refresh::{RefreshWorker, RefreshWorkerDeps};
 pub use article_memory::translate::{run_one_cycle, TranslateWorker, TranslateWorkerDeps};
 pub use article_memory::{
     add_article_memory, add_article_memory_override, article_memory_status,

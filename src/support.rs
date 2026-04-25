@@ -19,6 +19,13 @@ pub(crate) fn parse_time(value: &str) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+/// RFC3339 → `DateTime<Utc>` — public wrapper around `parse_time` so the
+/// evergreen refresh worker (and future out-of-crate callers) can decode
+/// `ArticleMemoryRecord::updated_at` without reaching into internals.
+pub fn parse_iso(raw: &str) -> Option<DateTime<Utc>> {
+    parse_time(raw)
+}
+
 pub(crate) fn now_utc() -> DateTime<Utc> {
     Utc::now()
 }
