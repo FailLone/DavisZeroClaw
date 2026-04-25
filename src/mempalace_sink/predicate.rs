@@ -22,6 +22,7 @@ pub enum Predicate {
     ArticleDiscusses,
     ArticleCites,
     ArticleSourcedFrom,
+    ArticleDiscoveredFrom,
 
     // Rules (Phase 4)
     RuleActiveFor,
@@ -48,6 +49,7 @@ impl Predicate {
             Self::ArticleDiscusses => "discusses",
             Self::ArticleCites => "cites",
             Self::ArticleSourcedFrom => "sourced_from",
+            Self::ArticleDiscoveredFrom => "discovered_from",
             Self::RuleActiveFor => "rule_active_for",
             Self::RuleQuarantinedBy => "rule_quarantined_by",
             Self::ProviderHealth => "provider_health",
@@ -60,7 +62,7 @@ impl Predicate {
 
     /// Every variant, in declaration order. Used by the sync check in
     /// Phase 6 and by tests to assert coverage.
-    pub const ALL: [Predicate; 14] = [
+    pub const ALL: [Predicate; 15] = [
         Predicate::EntityHasState,
         Predicate::EntityReplacementFor,
         Predicate::EntityLocatedIn,
@@ -68,6 +70,7 @@ impl Predicate {
         Predicate::ArticleDiscusses,
         Predicate::ArticleCites,
         Predicate::ArticleSourcedFrom,
+        Predicate::ArticleDiscoveredFrom,
         Predicate::RuleActiveFor,
         Predicate::RuleQuarantinedBy,
         Predicate::ProviderHealth,
@@ -306,6 +309,7 @@ mod tests {
         assert_eq!(Predicate::ArticleDiscusses.as_str(), "discusses");
         assert_eq!(Predicate::ArticleCites.as_str(), "cites");
         assert_eq!(Predicate::ArticleSourcedFrom.as_str(), "sourced_from");
+        assert_eq!(Predicate::ArticleDiscoveredFrom.as_str(), "discovered_from",);
         assert_eq!(Predicate::RuleActiveFor.as_str(), "rule_active_for");
         assert_eq!(Predicate::RuleQuarantinedBy.as_str(), "rule_quarantined_by");
         assert_eq!(Predicate::ProviderHealth.as_str(), "provider_health");
@@ -337,8 +341,8 @@ mod tests {
     }
 
     #[test]
-    fn predicate_all_contains_fourteen_distinct_variants() {
-        assert_eq!(Predicate::ALL.len(), 14);
+    fn predicate_all_contains_fifteen_distinct_variants() {
+        assert_eq!(Predicate::ALL.len(), 15);
         let wire: Vec<&'static str> = Predicate::ALL.iter().map(|p| p.as_str()).collect();
         let mut uniq = wire.clone();
         uniq.sort_unstable();
@@ -512,5 +516,11 @@ mod tests {
     fn triple_id_display_equals_as_str() {
         let id = TripleId::provider("openrouter");
         assert_eq!(format!("{id}"), "provider_openrouter");
+    }
+
+    #[test]
+    fn article_discovered_from_wire_format() {
+        assert_eq!(Predicate::ArticleDiscoveredFrom.as_str(), "discovered_from");
+        assert!(Predicate::ALL.contains(&Predicate::ArticleDiscoveredFrom));
     }
 }
