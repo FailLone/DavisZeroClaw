@@ -20,10 +20,14 @@ pub use types::{
     IngestResponse, IngestSubmitError, ListFilter,
 };
 pub use worker::{IngestWorkerDeps, IngestWorkerPool};
-// Consumed by T6 (quality gate) and Phase 2 scoring; currently only used in
-// this module's unit tests.
+// Consumed by T3 (cleaning_internals::normalize_article_text); the two
+// structure-preserving helpers are now on the hot path for every normalized
+// article. `normalize_markdown_preserving_structure` is held for T6 / Phase 2,
+// hence the targeted `unused_imports` allow.
 #[allow(unused_imports)]
-pub use cleaning_fix::{normalize_line_preserving, normalize_markdown_preserving_structure};
+pub use cleaning_fix::{
+    normalize_line_preserving, normalize_markdown_preserving_structure, SlidingDedup,
+};
 #[allow(unused_imports)]
 pub use content_signals::{compute_signals, ContentSignals};
 #[allow(unused_imports)]

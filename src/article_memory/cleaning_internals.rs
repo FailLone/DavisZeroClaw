@@ -1,8 +1,8 @@
+use super::ingest::{normalize_line_preserving, SlidingDedup};
 use super::*;
 use crate::RuntimePaths;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 
@@ -114,12 +114,26 @@ pub(super) fn normalize_article_text(
     strategy: &ResolvedArticleCleaningStrategy,
 ) -> NormalizedArticleText {
     let mut lines = Vec::new();
-    let mut seen = BTreeSet::new();
+    let mut dedup = SlidingDedup::new(50, 80);
+    let mut in_fence = false;
     let mut noise_lines_removed = 0;
     let mut removed_lines_sample = Vec::new();
     let prepared = prepare_raw_text_for_normalization(raw_text, strategy);
     for raw_line in raw_text_units(&prepared.text) {
-        let line = normalize_line(raw_line);
+        let trimmed = raw_line.trim_start();
+        // Fence markers toggle state and pass through untouched.
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            lines.push(raw_line);
+            continue;
+        }
+        if in_fence {
+            // Fenced code content bypasses normalization, noise filters,
+            // dedup, and the ≤3-char drop — everything passes as-is.
+            lines.push(raw_line);
+            continue;
+        }
+        let line = normalize_line_preserving(&raw_line, false);
         if line.is_empty() {
             if !lines.last().is_some_and(|item: &String| item.is_empty()) {
                 lines.push(String::new());
@@ -136,8 +150,7 @@ pub(super) fn normalize_article_text(
         if line.chars().count() <= 3 {
             continue;
         }
-        let dedupe_key = line.to_lowercase();
-        if line.chars().count() < 80 && !seen.insert(dedupe_key) {
+        if !dedup.accept(&line) {
             continue;
         }
         lines.push(line);

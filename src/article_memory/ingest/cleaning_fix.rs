@@ -3,8 +3,6 @@
 //! Replaces the T1-era `normalize_line` which unconditionally ran
 //! `split_whitespace()` and destroyed fenced code blocks and list indentation.
 
-#![allow(dead_code)]
-
 /// Normalize a single line of markdown, preserving fenced-code content and
 /// list indentation, while folding internal runs of whitespace into single
 /// spaces.
@@ -35,6 +33,10 @@ pub fn normalize_line_preserving(line: &str, in_code_fence: bool) -> String {
 }
 
 /// Normalize a multi-line markdown string while respecting fenced code blocks.
+///
+/// Held for the T6 quality-gate path (Phase 2); not yet on the T3 hot path
+/// which handles fence state inline inside `normalize_article_text`.
+#[allow(dead_code)]
 pub fn normalize_markdown_preserving_structure(text: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut in_fence = false;
