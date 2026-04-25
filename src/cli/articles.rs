@@ -627,3 +627,134 @@ fn ingest_endpoint() -> String {
     std::env::var("DAVIS_DAEMON_URL").unwrap_or_else(|_| "http://127.0.0.1:3010".to_string())
         + "/article-memory/ingest"
 }
+
+fn daemon_base_url() -> String {
+    std::env::var("DAVIS_DAEMON_URL").unwrap_or_else(|_| "http://127.0.0.1:3010".to_string())
+}
+
+pub(super) async fn rule_learn_list() -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/article-memory/rules", daemon_base_url());
+    let resp = client.get(&url).send().await.map_err(|err| {
+        anyhow!("failed to reach daemon: {err}. Is the daemon running? Try `daviszeroclaw start` first.")
+    })?;
+    if resp.status() != reqwest::StatusCode::OK {
+        bail!("daemon returned {}", resp.status());
+    }
+    let body: serde_json::Value = resp.json().await?;
+    let rules = body
+        .get("rules")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    if rules.is_empty() {
+        println!("No learned rules yet.");
+        return Ok(());
+    }
+    println!("Learned rules: {} host(s)", rules.len());
+    for (host, rule) in &rules {
+        let version = rule.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+        let stale = rule.get("stale").and_then(|v| v.as_bool()).unwrap_or(false);
+        let confidence = rule
+            .get("confidence")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let sample_count = rule
+            .get("learned_from_sample_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        println!(
+            "- {host} | version={version} | confidence={confidence:.2} | samples={sample_count} | stale={stale}"
+        );
+    }
+    Ok(())
+}
+
+pub(super) async fn rule_learn_show(host: &str) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/article-memory/rules", daemon_base_url());
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|err| anyhow!("failed to reach daemon: {err}. Is the daemon running?"))?;
+    if resp.status() != reqwest::StatusCode::OK {
+        bail!("daemon returned {}", resp.status());
+    }
+    let body: serde_json::Value = resp.json().await?;
+    let rule = body.get("rules").and_then(|v| v.get(host));
+    match rule {
+        Some(rule) => {
+            println!("{}", serde_json::to_string_pretty(rule)?);
+            Ok(())
+        }
+        None => bail!("no rule found for host: {host}"),
+    }
+}
+
+pub(super) async fn rule_learn_mark_stale(host: &str, reason: Option<&str>) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/article-memory/rules/mark-stale", daemon_base_url());
+    let payload = serde_json::json!({
+        "host": host,
+        "reason": reason.unwrap_or("manual"),
+    });
+    let resp = client
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|err| anyhow!("failed to reach daemon: {err}. Is the daemon running?"))?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap_or_else(|_| serde_json::json!({}));
+    if status == reqwest::StatusCode::OK {
+        println!("Marked rule stale: host={host}");
+        println!("- response: {}", serde_json::to_string(&body)?);
+        Ok(())
+    } else {
+        bail!(
+            "daemon rejected mark-stale ({}): {}",
+            status,
+            serde_json::to_string(&body).unwrap_or_default()
+        );
+    }
+}
+
+pub(super) fn rule_learn_quarantine(paths: &RuntimePaths) -> Result<()> {
+    let dir = paths.article_memory_dir().join("quarantine_rules");
+    if !dir.exists() {
+        println!("no quarantine rules");
+        return Ok(());
+    }
+    let mut entries: Vec<_> = fs::read_dir(&dir)
+        .with_context(|| format!("failed to read {}", dir.display()))?
+        .filter_map(|e| e.ok())
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    if entries.is_empty() {
+        println!("no quarantine rules");
+        return Ok(());
+    }
+    println!("Quarantined rules in {}:", dir.display());
+    for entry in entries {
+        println!("- {}", entry.path().display());
+    }
+    Ok(())
+}
+
+pub(super) fn rule_learn_promote(host: &str) -> Result<()> {
+    println!("Promotion is a manual flow in Phase 2 v1.");
+    println!("To promote a quarantined rule for host `{host}`:");
+    println!("  1. Inspect the quarantine file under `article_memory/quarantine_rules/`.");
+    println!("  2. Hand-copy the validated rule into");
+    println!("     `config/davis/article_memory_overrides.toml` as a `[[overrides]]` entry.");
+    println!("  3. Restart `daviszeroclaw start` so the daemon reloads overrides.");
+    println!("  4. Verify with `daviszeroclaw articles rule-learn show {host}`.");
+    Ok(())
+}

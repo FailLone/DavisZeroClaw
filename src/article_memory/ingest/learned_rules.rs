@@ -114,6 +114,17 @@ impl LearnedRuleStore {
         self.persist().await
     }
 
+    /// Return a combined snapshot of learned + override rules as a map.
+    /// Overrides win on conflict — matches the `get()` precedence.
+    pub async fn snapshot(&self) -> BTreeMap<String, LearnedRule> {
+        let map = self.inner.read().await;
+        let mut out = map.clone();
+        for (host, rule) in self.overrides.iter() {
+            out.insert(host.clone(), rule.clone());
+        }
+        out
+    }
+
     /// Mark a host's learned rule stale. No-op if missing.
     pub async fn mark_stale(&self, host: &str, reason: &str) -> Result<()> {
         {

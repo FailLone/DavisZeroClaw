@@ -307,6 +307,11 @@ enum ArticlesCommand {
         #[command(subcommand)]
         command: ArticleIngestCommand,
     },
+    /// Manage learned extraction rules.
+    RuleLearn {
+        #[command(subcommand)]
+        command: ArticleRuleLearnCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -378,6 +383,25 @@ enum ArticleIngestCommand {
     },
     /// Show a single ingest job.
     Show { job_id: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum ArticleRuleLearnCommand {
+    /// List all active rules (learned + overrides).
+    List,
+    /// Show a single host's rule (pretty JSON).
+    Show { host: String },
+    /// Mark a host's learned rule stale (forces re-learn on next capture).
+    MarkStale {
+        host: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// List quarantined rules from disk.
+    Quarantine,
+    /// Promote a quarantined rule into the active set
+    /// (Phase 2 v1: prints manual-flow guidance).
+    Promote { host: String },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -576,6 +600,15 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
                     list_article_ingest(&paths, limit, failed).await
                 }
                 ArticleIngestCommand::Show { job_id } => show_article_ingest(&paths, &job_id).await,
+            },
+            ArticlesCommand::RuleLearn { command } => match command {
+                ArticleRuleLearnCommand::List => rule_learn_list().await,
+                ArticleRuleLearnCommand::Show { host } => rule_learn_show(&host).await,
+                ArticleRuleLearnCommand::MarkStale { host, reason } => {
+                    rule_learn_mark_stale(&host, reason.as_deref()).await
+                }
+                ArticleRuleLearnCommand::Quarantine => rule_learn_quarantine(&paths),
+                ArticleRuleLearnCommand::Promote { host } => rule_learn_promote(&host),
             },
         },
     }

@@ -118,6 +118,11 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
     ));
     let profile_locks: crate::Crawl4aiProfileLocks =
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    std::fs::create_dir_all(paths.article_memory_dir()).ok();
+    let learned_rules =
+        Arc::new(crate::article_memory::LearnedRuleStore::load(&paths, None).unwrap());
+    let rule_stats = Arc::new(crate::article_memory::RuleStatsStore::load(&paths).unwrap());
+    let sample_store = Arc::new(crate::article_memory::SampleStore::new(&paths));
     let app = build_app(AppState::new(
         client,
         mcp_client,
@@ -130,6 +135,9 @@ pub(super) async fn spawn_proxy_base_url_with_local_config(
         local_config.webhook.secret,
         profile_locks,
         ingest_queue,
+        learned_rules,
+        rule_stats,
+        sample_store,
     ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -83,6 +83,9 @@ pub struct AppState {
     pub providers: Arc<Vec<ModelProviderConfig>>,
     pub shortcut_secret: String,
     pub ingest_queue: Arc<IngestQueue>,
+    pub learned_rules: Arc<crate::article_memory::LearnedRuleStore>,
+    pub rule_stats: Arc<crate::article_memory::RuleStatsStore>,
+    pub sample_store: Arc<crate::article_memory::SampleStore>,
 }
 
 impl AppState {
@@ -99,6 +102,9 @@ impl AppState {
         shortcut_secret: String,
         crawl4ai_profile_locks: Crawl4aiProfileLocks,
         ingest_queue: Arc<IngestQueue>,
+        learned_rules: Arc<crate::article_memory::LearnedRuleStore>,
+        rule_stats: Arc<crate::article_memory::RuleStatsStore>,
+        sample_store: Arc<crate::article_memory::SampleStore>,
     ) -> Self {
         Self {
             client,
@@ -112,6 +118,9 @@ impl AppState {
             providers,
             shortcut_secret,
             ingest_queue,
+            learned_rules,
+            rule_stats,
+            sample_store,
         }
     }
 
@@ -155,6 +164,12 @@ pub fn build_app(state: AppState) -> Router {
         .route("/article-memory/ingest", post(ingest_submit_handler))
         .route("/article-memory/ingest", get(ingest_list_handler))
         .route("/article-memory/ingest/:job_id", get(ingest_get_handler))
+        .route("/article-memory/rules", get(rules_list_handler))
+        .route(
+            "/article-memory/rules/mark-stale",
+            post(rules_mark_stale_handler),
+        )
+        .route("/article-memory/rules/warmup", post(rules_warmup_handler))
         .route("/ha-mcp/capabilities", get(ha_mcp_capabilities))
         .route("/ha-mcp/live-context", get(ha_mcp_live_context))
         .layer(tower_http::trace::TraceLayer::new_for_http())
@@ -1023,6 +1038,57 @@ async fn ingest_list_handler(
     let jobs = state.ingest_queue.list(&filter).await;
     let total = jobs.len();
     Json(json!({"jobs": jobs, "total": total}))
+}
+
+async fn rules_list_handler(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let snapshot = state.learned_rules.snapshot().await;
+    Ok(Json(serde_json::json!({ "rules": snapshot })))
+}
+
+#[derive(serde::Deserialize)]
+struct MarkStalePayload {
+    host: String,
+    reason: Option<String>,
+}
+
+async fn rules_mark_stale_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<MarkStalePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let reason = payload.reason.unwrap_or_else(|| "manual".to_string());
+    state
+        .learned_rules
+        .mark_stale(&payload.host, &reason)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
+    Ok(Json(serde_json::json!({"status": "ok"})))
+}
+
+#[derive(serde::Deserialize)]
+#[allow(dead_code)]
+struct WarmupPayload {
+    hosts: Option<Vec<String>>,
+    per_host: Option<usize>,
+    from_existing: Option<bool>,
+}
+
+async fn rules_warmup_handler(
+    State(_state): State<AppState>,
+    Json(_payload): Json<WarmupPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({
+            "error": "warmup not implemented in Phase 2 v1; run articles ingest manually"
+        })),
+    ))
 }
 
 #[cfg(test)]

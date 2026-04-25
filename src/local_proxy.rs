@@ -129,19 +129,22 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
     let ingest_config = Arc::new(local_config.article_memory.ingest.clone());
     let ingest_queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_config.clone()));
 
+    // Rule-learning arcs are hoisted out of the `ingest_config.enabled` guard
+    // so `AppState` (and therefore the `articles rule-learn` HTTP endpoints)
+    // always has a handle, even when ingest workers are disabled. The workers
+    // and hourly learner clone from these same arcs below.
+    let learned_rules = Arc::new(crate::article_memory::LearnedRuleStore::load(
+        &paths,
+        Some(
+            &paths
+                .repo_root
+                .join("config/davis/article_memory_overrides.toml"),
+        ),
+    )?);
+    let rule_stats = Arc::new(crate::article_memory::RuleStatsStore::load(&paths)?);
+    let sample_store = Arc::new(crate::article_memory::SampleStore::new(&paths));
+
     if ingest_config.enabled {
-        // Hoist rule-learning arcs so both the ingest worker pool and the
-        // rule-learning worker share the same instances.
-        let learned_rules = Arc::new(crate::article_memory::LearnedRuleStore::load(
-            &paths,
-            Some(
-                &paths
-                    .repo_root
-                    .join("config/davis/article_memory_overrides.toml"),
-            ),
-        )?);
-        let rule_stats = Arc::new(crate::article_memory::RuleStatsStore::load(&paths)?);
-        let sample_store = Arc::new(crate::article_memory::SampleStore::new(&paths));
         let providers_arc = Arc::new(local_config.providers.clone());
 
         IngestWorkerPool::spawn(
@@ -172,9 +175,9 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         let gate_toml = &local_config.article_memory.quality_gate;
         crate::article_memory::RuleLearningWorker::spawn(crate::article_memory::RuleLearningDeps {
             paths: paths.clone(),
-            learned_rules,
-            rule_stats,
-            sample_store,
+            learned_rules: learned_rules.clone(),
+            rule_stats: rule_stats.clone(),
+            sample_store: sample_store.clone(),
             providers: providers_arc,
             config: Arc::new(local_config.article_memory.rule_learning.clone()),
             quality_gate: Arc::new(crate::article_memory::QualityGateConfig {
@@ -202,6 +205,9 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         local_config.webhook.secret.clone(),
         profile_locks,
         ingest_queue,
+        learned_rules,
+        rule_stats,
+        sample_store,
     );
     let app = build_app(state.clone());
     let shortcut_bridge_app = build_shortcut_bridge_app(state);

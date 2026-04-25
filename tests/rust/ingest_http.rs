@@ -33,6 +33,11 @@ async fn build_state_for_test() -> (AppState, TempDir) {
     ));
     let profile_locks: crate::Crawl4aiProfileLocks =
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    std::fs::create_dir_all(paths.article_memory_dir()).ok();
+    let learned_rules =
+        Arc::new(crate::article_memory::LearnedRuleStore::load(&paths, None).unwrap());
+    let rule_stats = Arc::new(crate::article_memory::RuleStatsStore::load(&paths).unwrap());
+    let sample_store = Arc::new(crate::article_memory::SampleStore::new(&paths));
     let state = AppState::new(
         ha_client,
         mcp_client,
@@ -45,6 +50,9 @@ async fn build_state_for_test() -> (AppState, TempDir) {
         local_config.webhook.secret.clone(),
         profile_locks,
         ingest_queue,
+        learned_rules,
+        rule_stats,
+        sample_store,
     );
     (state, tmp)
 }
