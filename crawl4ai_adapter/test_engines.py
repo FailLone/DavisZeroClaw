@@ -1,4 +1,5 @@
-from crawl4ai_adapter.engines import ExtractResult
+import pytest
+from crawl4ai_adapter.engines import ExtractResult, extract_trafilatura
 
 
 def test_extract_result_has_required_fields():
@@ -15,3 +16,31 @@ def test_extract_result_empty_detection():
     assert r.is_empty() is True
     r2 = ExtractResult(markdown="   \n\t  ", metadata={}, engine="test", warnings=[])
     assert r2.is_empty() is True
+
+
+SAMPLE_HTML = """<!DOCTYPE html>
+<html><head><title>Hello</title></head>
+<body>
+  <article>
+    <h1>My Post</h1>
+    <p>This is the first paragraph of the article body.</p>
+    <p>This is the second paragraph with more detail about the topic.</p>
+    <pre><code>print("hello")</code></pre>
+  </article>
+  <aside>Sidebar ad — should be dropped</aside>
+</body></html>"""
+
+
+def test_trafilatura_returns_markdown():
+    r = extract_trafilatura(SAMPLE_HTML)
+    assert r.engine == "trafilatura"
+    assert not r.is_empty()
+    assert "My Post" in r.markdown
+    assert "first paragraph" in r.markdown
+    assert "Sidebar ad" not in r.markdown
+
+
+def test_trafilatura_empty_html_returns_warning():
+    r = extract_trafilatura("<html><body></body></html>")
+    assert r.is_empty()
+    assert r.warnings, "empty extraction should carry a warning"
