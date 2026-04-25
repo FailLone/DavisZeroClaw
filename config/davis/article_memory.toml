@@ -79,3 +79,11 @@ min_kept_ratio = 0.05
 min_paragraphs = 3
 max_link_density = 0.5
 boilerplate_markers = ["订阅", "分享到", "Cookie Policy", "相关推荐"]
+
+[rule_learning]
+enabled = true
+samples_required = 3
+stale_after_consecutive_issues = 2
+learning_provider = "openrouter"
+learning_model = "openai/gpt-4o"
+notify_on_quarantine = true

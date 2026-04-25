@@ -1,0 +1,16 @@
+# Hand-written overrides for article extraction rules.
+#
+# Each [[overrides]] entry takes precedence over any learned rule for the
+# same host (learned rules live in runtime/article_memory/learned_rules.json).
+# Use this file as an emergency repair channel — e.g. when a site's DOM
+# changes and the learner hasn't caught up yet.
+#
+# Example:
+#
+# [[overrides]]
+# host = "zhihu.com"
+# content_selectors = [".QuestionAnswer-content .RichContent-inner"]
+# remove_selectors = [".AnswerItem .RichContent-cover", "aside"]
+# title_selector = "h1.QuestionHeader-title"
+# start_markers = []
+# end_markers = []
