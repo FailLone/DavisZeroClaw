@@ -180,7 +180,10 @@ allow_private_hosts = []
 #
 # [article_memory.discovery.search]
 # provider = "brave"
-# api_key_env = "BRAVE_API_KEY"
+# # Pick ONE of these two. Both are optional — search stays disabled if neither
+# # resolves to a non-empty value. Direct `api_key` wins when both are set.
+# # api_key = "BSA..."              # direct value (local.toml is gitignored; OK for single-user)
+# api_key_env = "BRAVE_API_KEY"     # env-var lookup (team/shared-config safe)
 # rate_limit_per_min = 60
 # results_per_query = 10
 #

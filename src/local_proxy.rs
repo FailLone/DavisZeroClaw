@@ -222,18 +222,33 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                             tracing::warn!(provider = %sc.provider, "unsupported search provider, skipping");
                             return None;
                         }
-                        let env_name = sc.api_key_env.as_deref().unwrap_or("BRAVE_API_KEY");
-                        match std::env::var(env_name) {
-                            Ok(key) if !key.is_empty() => {
+                        // Resolve key: direct `api_key` wins over `api_key_env`
+                        // lookup. Direct value is convenient for single-user
+                        // setups (local.toml is gitignored); env var is the
+                        // team-safe alternative.
+                        let key = sc
+                            .api_key
+                            .as_deref()
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .or_else(|| {
+                                let env_name =
+                                    sc.api_key_env.as_deref().unwrap_or("BRAVE_API_KEY");
+                                std::env::var(env_name).ok().filter(|s| !s.is_empty())
+                            });
+                        match key {
+                            Some(k) => {
                                 // reqwest client built inline — see DiscoveryWorker for matching pattern
                                 let brave = crate::article_memory::discovery::search::brave::BraveSearch::new(
                                     reqwest::Client::new(),
-                                    key,
+                                    k,
                                 );
                                 Some(Arc::new(brave) as Arc<dyn crate::article_memory::discovery::search::SearchProvider>)
                             }
-                            _ => {
-                                tracing::warn!(env = %env_name, "brave api key missing; search disabled");
+                            None => {
+                                tracing::warn!(
+                                    "brave api key missing (set api_key or api_key_env); search disabled",
+                                );
                                 None
                             }
                         }

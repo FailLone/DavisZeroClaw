@@ -304,6 +304,11 @@ pub struct DiscoveryTopicConfig {
 pub struct DiscoverySearchConfig {
     #[serde(default = "default_search_provider")]
     pub provider: String,
+    /// Direct API key. Convenient for single-user setups where `local.toml`
+    /// is gitignored. `api_key_env` is preferred for shared configs. When
+    /// both are set, `api_key` wins.
+    #[serde(default)]
+    pub api_key: Option<String>,
     #[serde(default)]
     pub api_key_env: Option<String>,
     #[serde(default = "default_search_rate_limit")]
