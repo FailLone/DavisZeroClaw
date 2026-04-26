@@ -204,3 +204,13 @@ allow_private_hosts = []
 # stale_after_days = 30
 # score_delta_threshold = 0.2
 # batch_per_cycle = 20
+
+# --- Weekly digest (MVP Phase 5) --------------------------------------------
+# Davis does no scheduling or delivery itself; these fields are rendered into
+# zeroclaw's config.toml as [[cron.jobs]] so zeroclaw runs the agent cron that
+# GETs /article-memory/digest and pushes a Telegram message.
+# [zeroclaw.digest]
+# enabled = false
+# weekly_topic = "async-rust"
+# telegram_chat_id = "-1001234567890"
+# timezone = "Asia/Shanghai"
