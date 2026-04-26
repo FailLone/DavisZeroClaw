@@ -26,6 +26,7 @@ mod models;
 mod observability;
 mod runtime_paths;
 mod server;
+pub mod server_digest;
 mod support;
 
 pub use advisor::{

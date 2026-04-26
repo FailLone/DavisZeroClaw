@@ -192,6 +192,7 @@ pub fn build_app(state: AppState) -> Router {
             post(article_memory_normalize_handler),
         )
         .route("/article-memory/search", get(article_memory_search_handler))
+        .route("/article-memory/digest", get(crate::server_digest::handle))
         .route("/article-memory/ingest", post(ingest_submit_handler))
         .route("/article-memory/ingest", get(ingest_list_handler))
         .route("/article-memory/ingest/:job_id", get(ingest_get_handler))
