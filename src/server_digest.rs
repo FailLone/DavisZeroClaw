@@ -67,6 +67,31 @@ pub async fn handle(
     Json(build_digest(&state.paths, q))
 }
 
+/// Test-only router assembler: wires the digest route onto a fresh `Router`
+/// parameterised by `RuntimePaths` alone. Used by `tests/rust/
+/// topic_crawl_digest.rs` so the integration layer can be exercised
+/// (extractor → handler → `Json` responder) without stitching together a full
+/// production `AppState` (which owns the HA client, crawl4ai supervisor,
+/// ingest queue, and MemPalace sink).
+///
+/// The request path through `build_digest` is identical to production; only
+/// the state type differs.
+pub fn router_for_tests(paths: RuntimePaths) -> axum::Router {
+    axum::Router::new()
+        .route(
+            "/article-memory/digest",
+            axum::routing::get(handle_with_paths),
+        )
+        .with_state(paths)
+}
+
+async fn handle_with_paths(
+    State(paths): State<RuntimePaths>,
+    Query(q): Query<DigestQuery>,
+) -> Json<DigestResponse> {
+    Json(build_digest(&paths, q))
+}
+
 /// Pure filtering/ranking core of the handler. Exposed to unit tests so we
 /// can drive it with a seeded `RuntimePaths` without standing up an
 /// `AppState`.

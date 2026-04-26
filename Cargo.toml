@@ -28,6 +28,10 @@ path = "tests/rust/topic_crawl_brave_integration.rs"
 name = "topic_crawl_translate"
 path = "tests/rust/topic_crawl_translate.rs"
 
+[[test]]
+name = "topic_crawl_digest"
+path = "tests/rust/topic_crawl_digest.rs"
+
 [features]
 # Opt-in to `Crawl4aiSupervisor::for_test(...)` from downstream crates
 # (anyone mocking the adapter). Always on in `cargo test`; off in release
