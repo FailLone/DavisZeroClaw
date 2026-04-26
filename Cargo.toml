@@ -32,6 +32,10 @@ path = "tests/rust/topic_crawl_translate.rs"
 name = "topic_crawl_digest"
 path = "tests/rust/topic_crawl_digest.rs"
 
+[[test]]
+name = "topic_crawl_invariants"
+path = "tests/rust/topic_crawl_invariants.rs"
+
 [features]
 # Opt-in to `Crawl4aiSupervisor::for_test(...)` from downstream crates
 # (anyone mocking the adapter). Always on in `cargo test`; off in release
@@ -68,6 +72,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+walkdir = "2"
 
 # Release profile hardening for the launchd daemon binary.
 # lto="thin"        — 15-25% smaller binary, faster startup
