@@ -116,4 +116,71 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].url, "https://tokio.rs/blog/2019-10-scheduler");
     }
+
+    /// Live Brave Search API smoke. Opt-in: needs a Brave API key configured
+    /// in `config/davis/local.toml` under `[article_memory.discovery.search]`
+    /// (as `api_key` or `api_key_env`), and `--ignored`. Validates that the
+    /// real Brave response JSON still deserializes into
+    /// `BraveResp`/`BraveWeb`/`BraveResult` unchanged.
+    ///
+    /// Run: `cargo test --lib discovery::search::brave::tests::live_brave_smoke
+    /// -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "hits live Brave API; requires a key in local.toml and opt-in via --ignored"]
+    async fn live_brave_smoke() {
+        // Load the key from the same local.toml the daemon reads. `local.toml`
+        // is gitignored, so a direct `api_key` value is safe. If unset, fall
+        // back to the `api_key_env` env var for CI-style setups.
+        let paths = crate::RuntimePaths::from_env();
+        let cfg = crate::app_config::load_local_config(&paths)
+            .expect("load_local_config must succeed; ensure config/davis/local.toml exists");
+        let sc = cfg
+            .article_memory
+            .discovery
+            .search
+            .as_ref()
+            .expect("[article_memory.discovery.search] section is required for this smoke");
+        let key = sc
+            .api_key
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                let env_name = sc.api_key_env.as_deref().unwrap_or("BRAVE_API_KEY");
+                std::env::var(env_name).ok().filter(|s| !s.is_empty())
+            })
+            .expect("api_key or api_key_env must resolve to a non-empty key");
+
+        let brave = BraveSearch::new(
+            reqwest::Client::builder()
+                .user_agent("davis-smoke/0.1")
+                .build()
+                .unwrap(),
+            key,
+        );
+        let hits = brave
+            .search("async rust tokio", 5)
+            .await
+            .expect("Brave search must return 2xx");
+
+        eprintln!("--- brave live smoke: {} hits ---", hits.len());
+        for (i, h) in hits.iter().enumerate() {
+            eprintln!("  [{i}] {}  —  {}", h.url, h.title);
+        }
+
+        assert!(
+            !hits.is_empty(),
+            "Brave returned zero results for a common query"
+        );
+        assert!(hits.len() <= 5, "Brave returned more than requested limit");
+        for (i, h) in hits.iter().enumerate() {
+            assert!(!h.url.is_empty(), "hit[{i}].url empty — schema drift?");
+            assert!(!h.title.is_empty(), "hit[{i}].title empty — schema drift?");
+            assert!(
+                h.url.starts_with("http://") || h.url.starts_with("https://"),
+                "hit[{i}].url not absolute: {}",
+                h.url,
+            );
+        }
+    }
 }
