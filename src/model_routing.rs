@@ -109,7 +109,12 @@ fn render_runtime_config_str(
     patch_model_fallbacks(&mut doc, config);
     patch_mcp_servers(&mut doc, config);
 
-    let rendered = doc.to_string();
+    let mut rendered = doc.to_string();
+    // Digest cron jobs are appended as raw TOML. toml_edit has no ergonomic
+    // API for adding heterogeneous `[[cron.jobs]]` entries (shell vs agent
+    // job types differ in fields), and the digest block is a small,
+    // config-driven tail that `validate_rendered` parses end-to-end anyway.
+    rendered.push_str(&render_digest_cron_jobs(config));
     validate_rendered(&rendered)?;
     Ok(rendered)
 }
@@ -425,6 +430,65 @@ fn patch_mcp_servers(doc: &mut DocumentMut, config: &LocalConfig) {
 
 fn string_value(s: &str) -> Value {
     Value::String(Formatted::new(s.to_string()))
+}
+
+/// Render `[zeroclaw.digest]` settings from `local.toml` as three
+/// `[[cron.jobs]]` blocks appended to zeroclaw's runtime config:
+///
+/// - weekly topic digest (Mon 09:00): `davis-weekly-digest-<topic>`
+/// - daily candidate review (22:00): `davis-daily-candidate-review`
+/// - monthly mempalace compress (1st of month 03:00): `davis-monthly-compress`
+///
+/// Returns an empty string when `digest.enabled` is false or when either
+/// `weekly_topic` / `telegram_chat_id` is unset. Pure string output — the
+/// shape varies between shell and agent job types, so toml_edit's tabled
+/// insert API buys us nothing here over a verbatim `format!`.
+pub fn render_digest_cron_jobs(cfg: &crate::app_config::LocalConfig) -> String {
+    let d = &cfg.zeroclaw.digest;
+    if !d.enabled {
+        return String::new();
+    }
+    let Some(topic) = d.weekly_topic.as_deref() else {
+        return String::new();
+    };
+    let Some(chat) = d.telegram_chat_id.as_deref() else {
+        return String::new();
+    };
+    format!(
+        r#"
+[[cron.jobs]]
+id = "davis-weekly-digest-{topic}"
+job_type = "agent"
+schedule = {{ kind = "cron", expr = "0 9 * * 1", tz = "{tz}" }}
+prompt = """
+Fetch GET http://127.0.0.1:3010/article-memory/brief?topic={topic}&since_days=7 (or /digest if brief unavailable).
+Format as a concise Telegram message with sections: new highlights, candidates needing review, translations available.
+"""
+delivery = {{ mode = "announce", channel = "telegram", to = "{chat}" }}
+allowed_tools = ["web_fetch"]
+uses_memory = false
+
+[[cron.jobs]]
+id = "davis-daily-candidate-review"
+job_type = "agent"
+schedule = {{ kind = "cron", expr = "0 22 * * *", tz = "{tz}" }}
+prompt = """
+GET http://127.0.0.1:3010/article-memory/digest?since_days=1 and list all decision=candidate entries with URLs.
+"""
+delivery = {{ mode = "announce", channel = "telegram", to = "{chat}" }}
+allowed_tools = ["web_fetch"]
+uses_memory = false
+
+[[cron.jobs]]
+id = "davis-monthly-compress"
+job_type = "shell"
+schedule = {{ kind = "cron", expr = "0 3 1 * *", tz = "{tz}" }}
+command = "davis mempalace compress --wing davis.articles"
+"#,
+        topic = topic,
+        tz = d.timezone,
+        chat = chat,
+    )
 }
 
 fn find_model_for_provider(config: &LocalConfig, provider_name: &str) -> String {
@@ -945,5 +1009,92 @@ legacy_field = "__DAVIS_UNPATCHED__"
             rendered.contains("# top comment"),
             "toml_edit must preserve comments:\n{rendered}"
         );
+    }
+}
+
+#[cfg(test)]
+mod digest_cron_tests {
+    use super::render_digest_cron_jobs;
+    use crate::app_config::{DigestConfig, LocalConfig, ZeroclawConfig};
+
+    /// Build a minimal LocalConfig via TOML parse — LocalConfig has no
+    /// `Default` because `home_assistant`, `imessage`, `providers`, and
+    /// `routing` are required. The cron renderer only reads `zeroclaw`,
+    /// so the surrounding config can be any valid shape.
+    fn minimal_config() -> LocalConfig {
+        toml::from_str(
+            r#"
+[home_assistant]
+url = "http://127.0.0.1:8123/api/mcp"
+token = "t"
+
+[imessage]
+allowed_contacts = []
+
+[[providers]]
+name = "openrouter"
+api_key = "x"
+base_url = ""
+allowed_models = ["openai/gpt-4o"]
+
+[routing]
+
+[routing.profiles.home_control]
+provider = "openrouter"
+model = "openai/gpt-4o"
+
+[routing.profiles.general_qa]
+provider = "openrouter"
+model = "openai/gpt-4o"
+
+[routing.profiles.research]
+provider = "openrouter"
+model = "openai/gpt-4o"
+
+[routing.profiles.structured_lookup]
+provider = "openrouter"
+model = "openai/gpt-4o"
+"#,
+        )
+        .expect("minimal_config TOML must parse")
+    }
+
+    #[test]
+    fn disabled_produces_empty() {
+        let mut cfg = minimal_config();
+        cfg.zeroclaw = ZeroclawConfig::default();
+        assert_eq!(render_digest_cron_jobs(&cfg), "");
+    }
+
+    #[test]
+    fn enabled_with_topic_and_chat_emits_three_jobs() {
+        let mut cfg = minimal_config();
+        cfg.zeroclaw = ZeroclawConfig {
+            digest: DigestConfig {
+                enabled: true,
+                weekly_topic: Some("async-rust".into()),
+                telegram_chat_id: Some("-100123".into()),
+                timezone: "Asia/Shanghai".into(),
+            },
+        };
+        let out = render_digest_cron_jobs(&cfg);
+        assert!(out.contains("davis-weekly-digest-async-rust"), "{out}");
+        assert!(out.contains("davis-daily-candidate-review"), "{out}");
+        assert!(out.contains("davis-monthly-compress"), "{out}");
+        assert!(out.contains("to = \"-100123\""), "{out}");
+    }
+
+    #[test]
+    fn enabled_but_missing_topic_or_chat_produces_empty() {
+        let mut cfg = minimal_config();
+        cfg.zeroclaw = ZeroclawConfig {
+            digest: DigestConfig {
+                enabled: true,
+                weekly_topic: None,
+                telegram_chat_id: Some("-100".into()),
+                timezone: "UTC".into(),
+            },
+        };
+        assert_eq!(render_digest_cron_jobs(&cfg), "");
     }
 }

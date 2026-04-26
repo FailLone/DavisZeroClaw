@@ -19,6 +19,45 @@ pub struct LocalConfig {
     pub article_memory: ArticleMemoryConfig,
     #[serde(default)]
     pub query_classification: QueryClassificationOverride,
+    #[serde(default)]
+    pub zeroclaw: ZeroclawConfig,
+}
+
+/// User-editable settings rendered into zeroclaw's `config.toml` as
+/// `[[cron.jobs]]` blocks. Davis itself does no scheduling or delivery;
+/// zeroclaw runs the cron and performs the HTTP fetches + Telegram push.
+/// See `model_routing::render_digest_cron_jobs`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ZeroclawConfig {
+    #[serde(default)]
+    pub digest: DigestConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigestConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub weekly_topic: Option<String>,
+    #[serde(default)]
+    pub telegram_chat_id: Option<String>,
+    #[serde(default = "default_digest_timezone")]
+    pub timezone: String,
+}
+
+impl Default for DigestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            weekly_topic: None,
+            telegram_chat_id: None,
+            timezone: default_digest_timezone(),
+        }
+    }
+}
+
+fn default_digest_timezone() -> String {
+    "Asia/Shanghai".into()
 }
 
 /// User-supplied overrides merged on top of config/davis/query_classification.toml.
