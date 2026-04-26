@@ -90,6 +90,7 @@ async def _run_login(args: argparse.Namespace) -> int:
     try:
         from crawl4ai.async_configs import BrowserConfig
         from crawl4ai.browser_manager import ManagedBrowser
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
         from playwright.async_api import async_playwright
     except Exception as exc:  # pragma: no cover - import failure path
         return _error(
@@ -126,7 +127,23 @@ async def _run_login(args: argparse.Namespace) -> int:
         browser = await playwright.chromium.connect_over_cdp(cdp_url)
         context = browser.contexts[0] if browser.contexts else await browser.new_context()
         page = context.pages[0] if context.pages else await context.new_page()
-        await page.goto(args.url, wait_until="load")
+        try:
+            # Login pages often keep background requests open long enough that
+            # Playwright never observes a full "load" completion. We only need
+            # the page to become interactive, so fall back to manual navigation
+            # instead of blocking the terminal forever.
+            await page.goto(
+                args.url,
+                wait_until="domcontentloaded",
+                timeout=45_000,
+            )
+        except PlaywrightTimeoutError:
+            print(
+                "Timed out waiting for the login page to finish loading. "
+                "The browser window stays open; if needed, finish navigation manually "
+                f"to {args.url} and continue logging in.",
+                file=sys.stderr,
+            )
 
         print(f"Crawl4AI profile login opened for {profile_name}", file=sys.stderr)
         print(f"Profile path: {profile_path}", file=sys.stderr)
