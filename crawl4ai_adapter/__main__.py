@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+import select
 import sys
 from pathlib import Path
 from typing import Any
@@ -155,12 +156,12 @@ async def _run_login(args: argparse.Namespace) -> int:
 
         browser_process = managed_browser.browser_process
         while True:
-            try:
-                line = await asyncio.wait_for(asyncio.to_thread(sys.stdin.readline), timeout=1.0)
-            except asyncio.TimeoutError:
+            ready, _, _ = await asyncio.to_thread(select.select, [sys.stdin], [], [], 1.0)
+            if not ready:
                 if browser_process is not None and browser_process.poll() is not None:
                     break
                 continue
+            line = sys.stdin.readline()
             if line.strip().lower() in {"", "q", "quit", "exit"}:
                 break
 
@@ -218,7 +219,10 @@ async def _main_async() -> int:
 
 
 def main() -> int:
-    return asyncio.run(_main_async())
+    try:
+        return asyncio.run(_main_async())
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":
