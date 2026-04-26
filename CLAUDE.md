@@ -23,6 +23,7 @@ Apparent overlaps with zeroclaw are deliberate product-independence choices. Do 
 | `crawl4ai.rs` + supervisor | Headless browser / login-state crawling. zeroclaw `web_fetch` is GET-only + Firecrawl SaaS. |
 | `article_memory/ingest/queue + worker` | Davis business loop. Also zeroclaw cron has no `JobType::Custom`. |
 | `model_routing.rs` | Not a runtime router — it's a **config renderer** that patches zeroclaw's `config.toml` from Davis's `local.toml`. Different abstraction layer. |
+| `article_memory/translate` (inline zeroclaw HTTP client) | Davis keeps a private, module-scoped HTTP client to zeroclaw `/api/chat`. This is **not** a general-purpose `zeroclaw_client` shared with hot-path callers — hot-path stays direct-OpenRouter per CLAUDE.md. The inline client exists only because translation is non-hot-path and benefits from zeroclaw's failover/budget. Hot-path and enhancement callers have opposite failure semantics (see `docs/superpowers/plans/2026-04-25-topic-crawl-mvp.md` §"Anchor decisions" A1/A3), so they intentionally do not share a dispatcher. |
 
 If a future reviewer re-raises "Davis duplicates zeroclaw" — point them here first.
 
@@ -141,6 +142,8 @@ Fixed `enum Predicate` in `mempalace_sink.rs`. Adding a predicate is a code chan
 
 - `article_memory/ingest/worker.rs` end-of-cycle — `add_drawer(articles/<topic>)` + `kg_add(ArticleDiscusses|Cites|SourcedFrom)` + ingest diary.
 - `article_memory/ingest/rule_learning_worker.rs` — `RuleActiveFor` / `RuleQuarantinedBy` on promotions/demotions + rule-learner diary.
+- `article_memory/discovery/worker.rs` end-of-cycle — `kg_add(ArticleDiscoveredFrom)` + discovery diary (wing `davis.agent.discovery`).
+- `article_memory/translate/worker.rs` on successful translation — `kg_add(ArticleTranslated)` + translator diary (wing `davis.agent.translator`).
 - `ha_mcp.rs` live-context refresh — diff previous snapshot → `EntityHasState` / `EntityReplacementFor` / `EntityNameIssue` / `EntityLocatedIn` + HA findings narrative drawer + ha-analyzer diary.
 - Router / budget hooks: deliberately absent. Davis doesn't own those signals — see the three `deferred` rows in the predicate table above.
 - `crawl4ai` / `imessage` / `express` / `ha_client` — no MemPalace hooks.
