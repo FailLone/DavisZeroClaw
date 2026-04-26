@@ -304,6 +304,78 @@ mod tests {
         })
     }
 
+    /// Smoke test that hits live RSS feeds. Skipped by default; run with
+    /// `cargo test --lib --package davis_zero_claw discovery::worker::tests::live_rss_smoke -- --ignored --nocapture`.
+    /// Validates: real feeds in 2026 still parse with feed-rs 2.x, candidates
+    /// survive keyword filter + cross-source dedupe, IngestQueue::submit accepts.
+    #[tokio::test]
+    #[ignore = "hits the network; opt-in via --ignored"]
+    async fn live_rss_smoke() {
+        let tmp = TempDir::new().unwrap();
+        let paths = test_paths(&tmp);
+        let queue = Arc::new(IngestQueue::load_or_create(&paths, ingest_config()));
+        let sink = Arc::new(SpySink::default());
+
+        let deps = DiscoveryWorkerDeps {
+            paths,
+            ingest_queue: queue.clone(),
+            config: Arc::new(DiscoveryConfig {
+                enabled: true,
+                interval_secs: 60,
+                max_per_cycle: 20,
+                search: None,
+                topics: vec![],
+            }),
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .user_agent("davis-smoke/0.1")
+                .build()
+                .unwrap(),
+            search_provider: None,
+            mempalace_sink: sink.clone(),
+        };
+
+        let topic = DiscoveryTopicConfig {
+            slug: "live-smoke".into(),
+            keywords: vec![
+                "rust".into(),
+                "async".into(),
+                "tokio".into(),
+                "io_uring".into(),
+                "lobste".into(),
+            ],
+            feeds: vec![
+                "https://without.boats/index.xml".into(),
+                "https://lobste.rs/t/rust.rss".into(),
+            ],
+            sitemaps: vec![],
+            search_queries: vec![],
+            enabled: true,
+        };
+
+        let report = run_one_cycle(&deps, &topic)
+            .await
+            .expect("cycle must complete without fatal error");
+
+        eprintln!("--- smoke report ---");
+        eprintln!("{report:#?}");
+        eprintln!("--- emitted kg_adds: {} ---", sink.kg_adds().len());
+
+        assert_eq!(
+            report.fetched_feeds, 2,
+            "both feeds must be attempted (network issues would still count as attempts)"
+        );
+        assert!(
+            report.candidates_before_dedupe > 0,
+            "at least one feed item should parse; if 0, RSS/Atom parsing is broken"
+        );
+        assert!(
+            report.submitted > 0,
+            "at least one candidate should pass keyword filter + dedupe; got 0"
+        );
+        assert!(report.submitted <= 20, "max_per_cycle=20 must be enforced");
+    }
+
     #[tokio::test]
     async fn submits_all_unique_search_hits_up_to_max() {
         let search = Arc::new(MockSearch::new());
