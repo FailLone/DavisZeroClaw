@@ -5,9 +5,11 @@
 # `priority` order. The matched hint is then looked up in
 # [[providers.model_routes]] to pick the model that will answer.
 #
-# This file ships the defaults embedded in the daviszeroclaw binary.
-# Users may append or override rules in local.toml under
-# [[query_classification.rules]] — user rules merge with these defaults
+# ⚠ THIS FILE IS BAKED INTO THE BINARY VIA `include_str!`
+# (`src/model_routing.rs`). Edits here require `cargo build` to take
+# effect at runtime — the on-disk copy is NOT re-read by the running
+# daemon. For hot overrides, add rules to `local.toml` under
+# `[[query_classification.rules]]`; user rules merge with these defaults
 # and take precedence on priority ties.
 
 [[rules]]

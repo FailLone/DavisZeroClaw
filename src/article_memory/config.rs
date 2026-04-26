@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_config::{
-    ArticleMemoryEmbeddingConfig, ArticleMemoryNormalizeConfig, ModelProviderConfig,
+    ArticleMemoryEmbeddingConfig, ArticleMemoryNormalizeConfig, ArticleMemoryValueConfig,
+    ModelProviderConfig,
 };
 use crate::RuntimePaths;
 use anyhow::{bail, Result};
@@ -109,8 +110,14 @@ pub fn resolve_article_normalize_config(
     }))
 }
 
+/// Merges algorithm knobs from `config/davis/article_memory.toml` `[value]`
+/// (committed; safe defaults) with credentials from `local.toml`
+/// `[article_memory.value]` (gitignored; holds the api_key). Returns `None`
+/// when `[value].enabled = false`; `llm_judge` is downgraded to `false`
+/// when credentials can't be resolved so deterministic scoring still runs.
 pub fn resolve_article_value_config(
     paths: &RuntimePaths,
+    creds: &ArticleMemoryValueConfig,
     providers: &[ModelProviderConfig],
 ) -> Result<Option<ResolvedArticleValueConfig>> {
     let policy = load_article_cleaning_config(paths)?;
@@ -118,33 +125,33 @@ pub fn resolve_article_value_config(
     if !value.enabled {
         return Ok(None);
     }
-    let provider = value.provider.trim();
+    let provider = creds.provider.trim();
     let provider_config = if provider.is_empty() {
         None
     } else {
         providers.iter().find(|item| item.name == provider)
     };
     let api_key = first_non_empty(
-        value.api_key.trim(),
+        creds.api_key.trim(),
         provider_config
             .map(|item| item.api_key.as_str())
             .unwrap_or_default(),
     );
     let base_url = first_non_empty(
-        value.base_url.trim(),
+        creds.base_url.trim(),
         provider_config
             .map(|item| item.base_url.as_str())
             .unwrap_or_default(),
     )
     .trim_end_matches('/')
     .to_string();
-    let model = if value.model.trim().is_empty() {
+    let model = if creds.model.trim().is_empty() {
         provider_config
             .and_then(|item| item.allowed_models.first())
             .cloned()
             .unwrap_or_default()
     } else {
-        value.model.trim().to_string()
+        creds.model.trim().to_string()
     };
     let llm_judge =
         value.llm_judge && !api_key.is_empty() && !base_url.is_empty() && !model.is_empty();

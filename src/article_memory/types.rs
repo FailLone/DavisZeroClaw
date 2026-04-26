@@ -278,20 +278,17 @@ pub struct ArticleCleaningDefaults {
     pub contains_noise_lines: Vec<String>,
 }
 
+/// Algorithm knobs for the article value-judge stage. Lives in
+/// `config/davis/article_memory.toml` (tracked in git) alongside other
+/// cleaning thresholds. LLM provider credentials live separately in
+/// `local.toml` as `ArticleMemoryValueConfig` so api_keys stay out of
+/// tracked files.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ArticleValueConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default = "default_true")]
     pub llm_judge: bool,
-    #[serde(default)]
-    pub provider: String,
-    #[serde(default)]
-    pub api_key: String,
-    #[serde(default)]
-    pub base_url: String,
-    #[serde(default)]
-    pub model: String,
     #[serde(default = "default_value_max_input_chars")]
     pub max_input_chars: usize,
     #[serde(default = "default_value_min_normalized_chars")]
@@ -453,10 +450,6 @@ impl Default for ArticleValueConfig {
         Self {
             enabled: true,
             llm_judge: true,
-            provider: String::new(),
-            api_key: String::new(),
-            base_url: String::new(),
-            model: String::new(),
             max_input_chars: default_value_max_input_chars(),
             min_normalized_chars: default_value_min_normalized_chars(),
             save_threshold: default_value_save_threshold(),

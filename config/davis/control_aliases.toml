@@ -12,11 +12,17 @@
 #   room_tokens                — whitelist of room names the resolver may recognize
 #   ignored_entities           — entity_ids the resolver should skip
 
+# Empty today — populate when a specific HA entity needs extra Chinese names.
+# Example: "light.living_room_main" = ["客厅主灯", "客厅顶灯"]
 [entity_aliases]
 
 [area_aliases]
 "父母间" = ["次卧", "爸妈房"]
 
+# Empty today — populate to define virtual groups of entities. Example:
+# [groups.living_room_all_lights]
+# entities = ["light.living_room_main", "light.living_room_accent"]
+# aliases = ["客厅全部灯", "客厅所有灯"]
 [groups]
 
 [domain_preferences]

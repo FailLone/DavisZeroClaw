@@ -765,9 +765,13 @@ async fn article_memory_add_handler(
             )
             .ok()
             .flatten();
-            let value_config = resolve_article_value_config(&state.paths, &state.providers)
-                .ok()
-                .flatten();
+            let value_config = resolve_article_value_config(
+                &state.paths,
+                &state.article_memory_config.value,
+                &state.providers,
+            )
+            .ok()
+            .flatten();
             let normalize_response = normalize_article_memory(
                 &state.paths,
                 normalize_config.as_ref(),
@@ -859,7 +863,11 @@ async fn article_memory_normalize_handler(
     let value_config = if no_llm {
         None
     } else {
-        match resolve_article_value_config(&state.paths, &state.providers) {
+        match resolve_article_value_config(
+            &state.paths,
+            &state.article_memory_config.value,
+            &state.providers,
+        ) {
             Ok(config) => config,
             Err(error) => {
                 return json_response(

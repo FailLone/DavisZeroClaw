@@ -77,7 +77,8 @@ pub(super) async fn add_article(paths: &RuntimePaths, input: ArticleCliAdd) -> R
     let config = check_local_config(paths)?;
     let normalize_config =
         resolve_article_normalize_config(&config.article_memory.normalize, &config.providers)?;
-    let value_config = resolve_article_value_config(paths, &config.providers)?;
+    let value_config =
+        resolve_article_value_config(paths, &config.article_memory.value, &config.providers)?;
     let normalize_response = normalize_article_memory(
         paths,
         normalize_config.as_ref(),
@@ -195,7 +196,7 @@ pub(super) async fn normalize_articles(
     let value_config = if no_llm {
         None
     } else {
-        resolve_article_value_config(paths, &config.providers)?
+        resolve_article_value_config(paths, &config.article_memory.value, &config.providers)?
     };
     let responses = if all {
         normalize_all_article_memory(paths, normalize_config.as_ref(), value_config.as_ref())
@@ -295,12 +296,13 @@ pub(super) async fn judge_articles(
 ) -> Result<()> {
     let config = check_local_config(paths)?;
     let value_config = if no_llm {
-        let mut resolved = resolve_article_value_config(paths, &config.providers)?
-            .ok_or_else(|| anyhow!("article value judging is disabled"))?;
+        let mut resolved =
+            resolve_article_value_config(paths, &config.article_memory.value, &config.providers)?
+                .ok_or_else(|| anyhow!("article value judging is disabled"))?;
         resolved.llm_judge = false;
         Some(resolved)
     } else {
-        resolve_article_value_config(paths, &config.providers)?
+        resolve_article_value_config(paths, &config.article_memory.value, &config.providers)?
     };
     let reports = if all {
         judge_all_article_value_memory(

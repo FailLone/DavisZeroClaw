@@ -1,9 +1,13 @@
 # Hand-written overrides for article extraction rules.
 #
-# Each [[overrides]] entry takes precedence over any learned rule for the
-# same host (learned rules live in runtime/article_memory/learned_rules.json).
-# Use this file as an emergency repair channel — e.g. when a site's DOM
-# changes and the learner hasn't caught up yet.
+# EMERGENCY REPAIR CHANNEL — this file is normally empty. Use it when a
+# site's DOM changes and the rule learner hasn't caught up yet. Each
+# [[overrides]] entry wins over any learned rule for the same host
+# (learned rules live in `{runtime}/article_memory/learned_rules.json`).
+#
+# The loader tolerates a missing file, so leave this one untouched unless
+# you actually need to override. Commit new entries with a note explaining
+# why the learner couldn't do it automatically.
 #
 # Example:
 #

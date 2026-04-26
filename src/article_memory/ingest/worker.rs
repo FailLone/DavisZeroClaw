@@ -444,7 +444,11 @@ async fn execute_job_core(queue: &IngestQueue, deps: &IngestWorkerDeps, job: &In
             return;
         }
     };
-    let value_config = match resolve_article_value_config(&deps.paths, &deps.providers) {
+    let value_config = match resolve_article_value_config(
+        &deps.paths,
+        &deps.article_memory_config.value,
+        &deps.providers,
+    ) {
         Ok(cfg) => cfg,
         Err(err) => {
             queue

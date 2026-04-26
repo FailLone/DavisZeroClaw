@@ -20,6 +20,14 @@ api_key = "your_deepseek_api_key"
 base_url = ""
 allowed_models = ["deepseek-chat"]
 
+# SiliconFlow powers the article-memory embedding pipeline below. Leave
+# api_key empty to keep embeddings disabled.
+[[providers]]
+name = "siliconflow"
+api_key = "your_siliconflow_api_key"
+base_url = "https://api.siliconflow.cn/v1"
+allowed_models = ["Qwen/Qwen3-Embedding-8B", "Qwen/Qwen3-235B-A22B-Instruct-2507"]
+
 # Each profile picks one configured provider + a model from its allowed_models.
 # max_fallbacks caps how many cross-provider fallbacks ZeroClaw may try.
 # Valid range: 0..=3.
@@ -118,6 +126,16 @@ min_polish_input_chars = 1200
 max_polish_input_chars = 24000
 summary_input_chars = 24000
 fallback_min_ratio = 0.7
+
+# LLM credentials for the value-judge stage. Algorithm knobs
+# (save/candidate thresholds, target topics) live in
+# `article_memory.toml [value]`. Leave these empty to skip LLM judging —
+# deterministic scoring still runs.
+[article_memory.value]
+provider = ""
+api_key = ""
+base_url = ""
+model = ""
 
 # URL ingest pipeline — crawl4ai fetches → article_memory pipeline.
 # Any channel (iMessage, Shortcut, cron, CLI, HTTP) can POST a URL to

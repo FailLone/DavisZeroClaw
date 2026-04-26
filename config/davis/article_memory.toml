@@ -3,6 +3,16 @@
 # Davis agents may edit this file to improve article cleaning and value judging.
 # They must not edit Rust source code. If strategy fields are insufficient,
 # they should write an implementation request report instead.
+#
+# SCOPE: This file is parsed as `ArticleCleaningConfig`, which recognizes
+# exactly two sections: `[defaults]` and `[value]`. Any other section
+# (`[ingest]`, `[extract]`, `[quality_gate]`, `[rule_learning]`, ...) is
+# silently dropped by serde. Those pipeline knobs live in `local.toml`
+# under `[article_memory.*]`; see `local.example.toml` for the schema.
+#
+# LLM credentials for `[value]` (provider/api_key/base_url/model) live in
+# `local.toml` under `[article_memory.value]` so they stay out of git.
+# This file holds only algorithm knobs — thresholds, topic list, char caps.
 
 [defaults]
 min_kept_ratio = 0.20
@@ -33,10 +43,6 @@ contains_noise_lines = [
 [value]
 enabled = true
 llm_judge = true
-provider = "openrouter"
-api_key = ""
-base_url = ""
-model = "openai/gpt-4.1"
 max_input_chars = 12000
 min_normalized_chars = 800
 save_threshold = 0.75
@@ -55,35 +61,3 @@ target_topics = [
   "multi-agent",
   "LLM",
 ]
-
-# NOTE: URL ingest pipeline config lives in `config/davis/local.toml`
-# under `[article_memory.ingest]` and `[[article_memory.ingest.host_profiles]]`,
-# NOT in this file. This file is parsed as `ArticleCleaningConfig`, so any
-# `[ingest]` section here is silently ignored. See `local.example.toml`
-# for the documented shape.
-
-[extract]
-default_engine = "trafilatura"
-fallback_ladder = ["trafilatura", "openrouter-llm"]
-
-[extract.openrouter_llm]
-provider = "openrouter"
-model = "google/gemini-2.0-flash-001"
-timeout_secs = 60
-max_input_chars = 60000
-
-[quality_gate]
-enabled = true
-min_markdown_chars = 500
-min_kept_ratio = 0.05
-min_paragraphs = 3
-max_link_density = 0.5
-boilerplate_markers = ["订阅", "分享到", "Cookie Policy", "相关推荐"]
-
-[rule_learning]
-enabled = true
-samples_required = 3
-stale_after_consecutive_issues = 2
-learning_provider = "openrouter"
-learning_model = "openai/gpt-4o"
-notify_on_quarantine = true

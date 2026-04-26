@@ -58,10 +58,6 @@ pub(super) fn normalize_cleaning_defaults(defaults: &mut ArticleCleaningDefaults
 }
 
 pub(super) fn normalize_article_value_config(value: &mut ArticleValueConfig) {
-    value.provider = value.provider.trim().to_string();
-    value.api_key = value.api_key.trim().to_string();
-    value.base_url = value.base_url.trim().trim_end_matches('/').to_string();
-    value.model = value.model.trim().to_string();
     value.target_topics = normalize_string_list(std::mem::take(&mut value.target_topics));
     if value.max_input_chars == 0 {
         value.max_input_chars = default_value_max_input_chars();
@@ -433,4 +429,56 @@ pub(super) fn truncate_chars(text: &str, max_chars: usize) -> String {
         return text.to_string();
     }
     text.chars().take(max_chars).collect()
+}
+
+#[cfg(test)]
+mod defaults_drift_tests {
+    use super::super::{
+        default_cleaning_max_kept_ratio, default_cleaning_min_kept_ratio,
+        default_cleaning_min_normalized_chars, default_value_candidate_threshold,
+        default_value_max_input_chars, default_value_min_normalized_chars,
+        default_value_save_threshold, ArticleCleaningConfig, BUILTIN_ARTICLE_MEMORY_POLICY_CONFIG,
+    };
+
+    /// Guards against silent drift between the shipped TOML defaults (which
+    /// users see and agents edit) and the Rust `default_*()` helpers (which
+    /// win whenever a field is missing or out of range). If these diverge,
+    /// editing the TOML file has no effect and users chase ghost values.
+    #[test]
+    fn shipped_toml_matches_rust_defaults() {
+        let cfg: ArticleCleaningConfig = toml::from_str(BUILTIN_ARTICLE_MEMORY_POLICY_CONFIG)
+            .expect("shipped article_memory.toml must parse");
+
+        assert_eq!(
+            cfg.defaults.min_kept_ratio,
+            default_cleaning_min_kept_ratio()
+        );
+        assert_eq!(
+            cfg.defaults.max_kept_ratio,
+            default_cleaning_max_kept_ratio()
+        );
+        assert_eq!(
+            cfg.defaults.min_normalized_chars,
+            default_cleaning_min_normalized_chars()
+        );
+
+        assert_eq!(cfg.value.max_input_chars, default_value_max_input_chars());
+        assert_eq!(
+            cfg.value.min_normalized_chars,
+            default_value_min_normalized_chars()
+        );
+        assert!(
+            (cfg.value.save_threshold - default_value_save_threshold()).abs() < f32::EPSILON,
+            "save_threshold drift: toml={} rust={}",
+            cfg.value.save_threshold,
+            default_value_save_threshold()
+        );
+        assert!(
+            (cfg.value.candidate_threshold - default_value_candidate_threshold()).abs()
+                < f32::EPSILON,
+            "candidate_threshold drift: toml={} rust={}",
+            cfg.value.candidate_threshold,
+            default_value_candidate_threshold()
+        );
+    }
 }

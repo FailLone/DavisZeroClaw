@@ -201,6 +201,12 @@ pub struct ArticleMemoryConfig {
     pub embedding: ArticleMemoryEmbeddingConfig,
     #[serde(default)]
     pub normalize: ArticleMemoryNormalizeConfig,
+    /// LLM provider credentials for the value-judge stage. Algorithm
+    /// thresholds (save/candidate cutoffs, target topics) live in
+    /// `config/davis/article_memory.toml` as `ArticleValueConfig`; creds live
+    /// here so they stay out of git.
+    #[serde(default)]
+    pub value: ArticleMemoryValueConfig,
     #[serde(default)]
     pub ingest: ArticleMemoryIngestConfig,
     #[serde(default)]
@@ -215,6 +221,23 @@ pub struct ArticleMemoryConfig {
     pub translate: TranslateConfig,
     #[serde(default)]
     pub refresh: RefreshConfig,
+}
+
+/// LLM credentials for the article value-judge stage. Mirrors
+/// `ArticleMemoryNormalizeConfig`'s shape so either block can reuse a
+/// configured `[[providers]]` entry by name, or override `api_key` /
+/// `base_url` directly. When `provider` is empty, direct credentials are
+/// used verbatim.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ArticleMemoryValueConfig {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1012,6 +1035,23 @@ fn validate_article_memory_config(config: &mut LocalConfig) -> Result<()> {
                 normalize.provider
             ));
         }
+    }
+
+    let value = &mut config.article_memory.value;
+    value.provider = value.provider.trim().to_string();
+    value.api_key = value.api_key.trim().to_string();
+    value.base_url = value.base_url.trim().trim_end_matches('/').to_string();
+    value.model = value.model.trim().to_string();
+    if !value.provider.is_empty()
+        && !config
+            .providers
+            .iter()
+            .any(|provider| provider.name == value.provider)
+    {
+        return Err(anyhow!(
+            "article_memory.value.provider does not match a configured provider: {}",
+            value.provider
+        ));
     }
     Ok(())
 }

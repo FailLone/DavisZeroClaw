@@ -35,10 +35,10 @@ pub use advisor::{
 pub use app_config::{
     ArticleMemoryConfig, ArticleMemoryEmbeddingConfig, ArticleMemoryExtractConfig,
     ArticleMemoryHostProfile, ArticleMemoryIngestConfig, ArticleMemoryNormalizeConfig,
-    Crawl4aiConfig, HomeAssistantConfig, ImessageConfig, LocalConfig, McpConfig, McpServerConfig,
-    McpTransport, ModelProviderConfig, OpenRouterLlmEngineConfig, QualityGateToml, RoutingConfig,
-    RoutingProfileConfig, RoutingProfilesConfig, RuleLearningConfig, TranslateConfig,
-    WebhookConfig,
+    ArticleMemoryValueConfig, Crawl4aiConfig, HomeAssistantConfig, ImessageConfig, LocalConfig,
+    McpConfig, McpServerConfig, McpTransport, ModelProviderConfig, OpenRouterLlmEngineConfig,
+    QualityGateToml, RoutingConfig, RoutingProfileConfig, RoutingProfilesConfig,
+    RuleLearningConfig, TranslateConfig, WebhookConfig,
 };
 pub use article_memory::discovery::{
     BraveSearch, DiscoveryWorker, DiscoveryWorkerDeps, SearchError, SearchHit, SearchProvider,
