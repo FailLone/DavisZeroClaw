@@ -422,6 +422,18 @@ pub(super) fn davis_service_label() -> &'static str {
     "com.daviszeroclaw.zeroclaw"
 }
 
+pub(super) fn proxy_service_label() -> &'static str {
+    "com.daviszeroclaw.proxy"
+}
+
+pub(super) fn proxy_service_plist_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?;
+    Ok(PathBuf::from(home)
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{}.plist", proxy_service_label())))
+}
+
 pub(super) fn davis_service_plist_path() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?;
     Ok(PathBuf::from(home)

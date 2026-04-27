@@ -390,6 +390,17 @@ fn render_davis_launchd_plist_uses_davis_runtime_config() {
     assert!(!plist.contains("/opt/homebrew/var/zeroclaw"));
 }
 
+#[test]
+fn proxy_service_label_and_plist_path_are_distinct_from_zeroclaw() {
+    assert_ne!(proxy_service_label(), davis_service_label());
+    assert!(proxy_service_label().contains("proxy"));
+    // plist path must differ
+    let proxy_path = proxy_service_plist_path().unwrap();
+    let zeroclaw_path = davis_service_plist_path().unwrap();
+    assert_ne!(proxy_path, zeroclaw_path);
+    assert!(proxy_path.to_str().unwrap().contains("proxy"));
+}
+
 fn unique_test_dir(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("daviszeroclaw-{name}-{}", unique_suffix()));
     if path.exists() {
