@@ -432,6 +432,18 @@ fn unique_test_dir(name: &str) -> PathBuf {
 }
 
 #[test]
+fn start_mutual_exclusion_message_is_clear() {
+    let msg = format!(
+        "Davis launchd service is already installed ({}).\n\
+         Run `daviszeroclaw service uninstall` first, or use \
+         `daviszeroclaw service restart` to reload.",
+        proxy_service_label()
+    );
+    assert!(msg.contains("service uninstall"));
+    assert!(msg.contains("service restart"));
+}
+
+#[test]
 fn service_is_installed_false_when_no_plists_exist() {
     let fake_proxy = PathBuf::from("/nonexistent/proxy.plist");
     let fake_zeroclaw = PathBuf::from("/nonexistent/zeroclaw.plist");

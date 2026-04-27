@@ -12,6 +12,17 @@ pub(super) async fn start(paths: &RuntimePaths) -> Result<()> {
     println!("Repository: {}", paths.repo_root.display());
     println!("Runtime: {}", paths.runtime_dir.display());
 
+    let proxy_plist = proxy_service_plist_path()?;
+    let zeroclaw_plist = davis_service_plist_path()?;
+    if either_plist_exists(&proxy_plist, &zeroclaw_plist) {
+        bail!(
+            "Davis launchd service is already installed ({}).\n\
+             Run `daviszeroclaw service uninstall` first, or use \
+             `daviszeroclaw service restart` to reload.",
+            proxy_service_label()
+        );
+    }
+
     print_start_step(1, "Preflight");
     let zeroclaw = require_command("zeroclaw")
         .context("zeroclaw was not found. Install it first: brew install zeroclaw")?;
