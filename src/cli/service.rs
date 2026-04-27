@@ -149,6 +149,14 @@ pub(super) fn stop(paths: &RuntimePaths) -> Result<()> {
 pub(super) async fn install_davis_service(paths: &RuntimePaths) -> Result<()> {
     ensure_macos("Davis service management")?;
     fs::create_dir_all(&paths.runtime_dir)?;
+    if pid_file_is_alive(&paths.local_proxy_pid_path())
+        || pid_file_is_alive(&paths.daemon_pid_path())
+    {
+        bail!(
+            "Davis foreground processes are running (started via `daviszeroclaw start`).\n\
+             Run `daviszeroclaw stop` first, then retry `service install`."
+        );
+    }
     render_current_runtime_config(paths)?;
     let proxy_bin = ensure_release_binary(paths, "davis-local-proxy")?;
     let zeroclaw = require_command("zeroclaw")
@@ -548,6 +556,10 @@ pub(super) fn print_health_component(health: &Value, component: &str, label: &st
 
 pub(super) fn either_plist_exists(proxy_plist: &Path, zeroclaw_plist: &Path) -> bool {
     proxy_plist.is_file() || zeroclaw_plist.is_file()
+}
+
+pub(super) fn pid_file_is_alive(pid_file: &Path) -> bool {
+    read_pid(pid_file).is_some_and(pid_is_alive)
 }
 
 pub(super) fn shell_quote(value: &str) -> String {

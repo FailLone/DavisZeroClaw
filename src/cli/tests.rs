@@ -432,6 +432,24 @@ fn unique_test_dir(name: &str) -> PathBuf {
 }
 
 #[test]
+fn pid_files_alive_returns_false_when_no_pid_files_exist() {
+    let root = unique_test_dir("pid-check");
+    let fake_pid = root.join("proxy.pid");
+    assert!(!pid_file_is_alive(&fake_pid));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn pid_file_is_alive_returns_false_for_impossible_pid() {
+    let root = unique_test_dir("pid-impossible");
+    fs::create_dir_all(&root).unwrap();
+    let pid_file = root.join("test.pid");
+    fs::write(&pid_file, "4294967295").unwrap();
+    assert!(!pid_file_is_alive(&pid_file));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn start_mutual_exclusion_message_is_clear() {
     let msg = format!(
         "Davis launchd service is already installed ({}).\n\
