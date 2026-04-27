@@ -392,15 +392,29 @@ pub(super) async fn restart_davis_service(paths: &RuntimePaths) -> Result<()> {
 
 pub(super) fn uninstall_davis_service(_paths: &RuntimePaths) -> Result<()> {
     ensure_macos("Davis service management")?;
-    let plist_path = davis_service_plist_path()?;
     let user_target = launchd_user_target()?;
-    bootout_davis_service(&user_target, &plist_path);
-    if plist_path.is_file() {
-        fs::remove_file(&plist_path)
-            .with_context(|| format!("failed to remove {}", plist_path.display()))?;
+
+    let zeroclaw_plist = davis_service_plist_path()?;
+    bootout_davis_service(&user_target, &zeroclaw_plist);
+    if zeroclaw_plist.is_file() {
+        fs::remove_file(&zeroclaw_plist)
+            .with_context(|| format!("failed to remove {}", zeroclaw_plist.display()))?;
+        println!("- removed: {}", zeroclaw_plist.display());
+    } else {
+        println!("- zeroclaw plist not found (already uninstalled?)");
     }
-    println!("Davis ZeroClaw service uninstalled.");
-    println!("- removed: {}", plist_path.display());
+
+    let proxy_plist = proxy_service_plist_path()?;
+    bootout_davis_service(&user_target, &proxy_plist);
+    if proxy_plist.is_file() {
+        fs::remove_file(&proxy_plist)
+            .with_context(|| format!("failed to remove {}", proxy_plist.display()))?;
+        println!("- removed: {}", proxy_plist.display());
+    } else {
+        println!("- proxy plist not found (already uninstalled?)");
+    }
+
+    println!("Davis services uninstalled.");
     Ok(())
 }
 

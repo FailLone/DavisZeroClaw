@@ -423,6 +423,11 @@ fn render_proxy_launchd_plist_runs_proxy_binary() {
     assert!(plist.contains("<key>DAVIS_RUNTIME_DIR</key>"));
 }
 
+#[test]
+fn uninstall_removes_both_plist_labels() {
+    assert_ne!(proxy_service_label(), davis_service_label());
+}
+
 fn unique_test_dir(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("daviszeroclaw-{name}-{}", unique_suffix()));
     if path.exists() {
