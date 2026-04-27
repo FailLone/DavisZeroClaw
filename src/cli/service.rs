@@ -359,6 +359,46 @@ pub(super) async fn status_davis_service(paths: &RuntimePaths) -> Result<()> {
             .join("daemon.launchd.stderr.log")
             .display()
     );
+
+    println!();
+    println!("Davis proxy service");
+    println!("- label: {}", proxy_service_label());
+    let proxy_plist_path = proxy_service_plist_path()?;
+    println!("- plist: {}", proxy_plist_path.display());
+
+    let mut proxy_print_cmd = Command::new("launchctl");
+    proxy_print_cmd
+        .arg("print")
+        .arg(format!("{user_target}/{}", proxy_service_label()))
+        .env("PATH", tool_path_env());
+    let proxy_output = command_output(&mut proxy_print_cmd).unwrap_or(CommandOutput {
+        status_success: false,
+        stdout: String::new(),
+        stderr: String::new(),
+    });
+
+    if proxy_output.status_success {
+        let state = launchd_state_label(&proxy_output.stdout);
+        println!("- launchd: loaded ({state})");
+    } else if proxy_plist_path.is_file() {
+        println!("- launchd: not loaded");
+    } else {
+        println!("- launchd: not installed");
+    }
+
+    match http_get_text("http://127.0.0.1:3010/health").await {
+        Ok(_) => println!("- proxy: ok (http://127.0.0.1:3010/health)"),
+        Err(err) => println!("- proxy: unavailable ({err})"),
+    }
+
+    println!(
+        "- stdout: {}",
+        paths.runtime_dir.join("proxy.launchd.stdout.log").display()
+    );
+    println!(
+        "- stderr: {}",
+        paths.runtime_dir.join("proxy.launchd.stderr.log").display()
+    );
     Ok(())
 }
 
