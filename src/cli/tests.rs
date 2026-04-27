@@ -400,6 +400,29 @@ fn proxy_service_label_and_plist_path_are_distinct_from_zeroclaw() {
     assert!(proxy_path.to_str().unwrap().contains("proxy"));
 }
 
+#[test]
+fn render_proxy_launchd_plist_runs_proxy_binary() {
+    let spec = DavisServiceSpec {
+        label: proxy_service_label().to_string(),
+        repo_root: PathBuf::from("/tmp/Davis ZeroClaw"),
+        runtime_dir: PathBuf::from("/tmp/Davis ZeroClaw/.runtime/davis"),
+        zeroclaw_bin: PathBuf::from("/opt/homebrew/bin/zeroclaw"),
+        proxy_bin: PathBuf::from("/tmp/Davis ZeroClaw/target/release/davis-local-proxy"),
+        stdout_path: PathBuf::from("/tmp/Davis ZeroClaw/.runtime/davis/proxy.stdout.log"),
+        stderr_path: PathBuf::from("/tmp/Davis ZeroClaw/.runtime/davis/proxy.stderr.log"),
+        path_env: "/opt/homebrew/bin:/usr/local/bin".to_string(),
+    };
+
+    let plist = render_proxy_launchd_plist(&spec);
+    assert!(plist.contains("<string>com.daviszeroclaw.proxy</string>"));
+    assert!(plist.contains("davis-local-proxy"));
+    assert!(!plist.contains("daemon --config-dir"));
+    assert!(plist.contains("<key>RunAtLoad</key>"));
+    assert!(plist.contains("<key>KeepAlive</key>"));
+    assert!(plist.contains("<key>DAVIS_REPO_ROOT</key>"));
+    assert!(plist.contains("<key>DAVIS_RUNTIME_DIR</key>"));
+}
+
 fn unique_test_dir(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("daviszeroclaw-{name}-{}", unique_suffix()));
     if path.exists() {

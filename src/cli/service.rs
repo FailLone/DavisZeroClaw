@@ -418,6 +418,51 @@ pub(super) fn render_davis_launchd_plist(spec: &DavisServiceSpec) -> String {
     )
 }
 
+pub(super) fn render_proxy_launchd_plist(spec: &DavisServiceSpec) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DAVIS_REPO_ROOT</key>
+    <string>{}</string>
+    <key>DAVIS_RUNTIME_DIR</key>
+    <string>{}</string>
+    <key>PATH</key>
+    <string>{}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>{}</string>
+  <key>StandardErrorPath</key>
+  <string>{}</string>
+</dict>
+</plist>
+"#,
+        xml_escape(&spec.label),
+        xml_escape(&spec.proxy_bin.display().to_string()),
+        xml_escape(&spec.repo_root.display().to_string()),
+        xml_escape(&spec.repo_root.display().to_string()),
+        xml_escape(&spec.runtime_dir.display().to_string()),
+        xml_escape(&spec.path_env),
+        xml_escape(&spec.stdout_path.display().to_string()),
+        xml_escape(&spec.stderr_path.display().to_string()),
+    )
+}
+
 pub(super) fn davis_service_label() -> &'static str {
     "com.daviszeroclaw.zeroclaw"
 }
