@@ -158,6 +158,9 @@ pub(super) async fn install_davis_service(paths: &RuntimePaths) -> Result<()> {
         );
     }
     render_current_runtime_config(paths)?;
+    sync_runtime_skills(paths)?;
+    sync_runtime_sops(paths)?;
+    sync_workspace_files(paths)?;
     let proxy_bin = ensure_release_binary(paths, "davis-local-proxy")?;
     let zeroclaw = require_command("zeroclaw")
         .context("zeroclaw was not found. Install it first: brew install zeroclaw")?;
