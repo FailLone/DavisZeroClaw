@@ -430,3 +430,23 @@ fn unique_test_dir(name: &str) -> PathBuf {
     }
     path
 }
+
+#[test]
+fn service_is_installed_false_when_no_plists_exist() {
+    let fake_proxy = PathBuf::from("/nonexistent/proxy.plist");
+    let fake_zeroclaw = PathBuf::from("/nonexistent/zeroclaw.plist");
+    assert!(!either_plist_exists(&fake_proxy, &fake_zeroclaw));
+}
+
+#[test]
+fn service_is_installed_true_when_one_plist_exists() {
+    let root = unique_test_dir("plist-exists-check");
+    fs::create_dir_all(&root).unwrap();
+    let proxy_plist = root.join("proxy.plist");
+    fs::write(&proxy_plist, "<plist/>").unwrap();
+    let fake_zeroclaw = root.join("zeroclaw.plist");
+
+    assert!(either_plist_exists(&proxy_plist, &fake_zeroclaw));
+    assert!(either_plist_exists(&fake_zeroclaw, &proxy_plist));
+    let _ = fs::remove_dir_all(root);
+}

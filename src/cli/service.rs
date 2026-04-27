@@ -535,6 +535,10 @@ pub(super) fn print_health_component(health: &Value, component: &str, label: &st
     }
 }
 
+pub(super) fn either_plist_exists(proxy_plist: &Path, zeroclaw_plist: &Path) -> bool {
+    proxy_plist.is_file() || zeroclaw_plist.is_file()
+}
+
 pub(super) fn shell_quote(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
