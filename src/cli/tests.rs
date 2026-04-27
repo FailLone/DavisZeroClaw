@@ -428,6 +428,83 @@ fn uninstall_removes_both_plist_labels() {
     assert_ne!(proxy_service_label(), davis_service_label());
 }
 
+#[test]
+fn tunnel_config_deserializes_from_toml() {
+    let toml = r#"
+        [home_assistant]
+        url = "http://ha.local/api/mcp"
+        token = "tok"
+        [imessage]
+        allowed_contacts = []
+        [[providers]]
+        name = "openrouter"
+        api_key = "k"
+        base_url = "https://openrouter.ai/api/v1"
+        allowed_models = []
+        [routing]
+        default_profile = "general_qa"
+        [routing.profiles.home_control]
+        provider = "openrouter"
+        model = "anthropic/claude-sonnet-4.6"
+        max_fallbacks = 0
+        [routing.profiles.general_qa]
+        provider = "openrouter"
+        model = "anthropic/claude-sonnet-4.6"
+        max_fallbacks = 0
+        [routing.profiles.research]
+        provider = "openrouter"
+        model = "anthropic/claude-opus-4.6"
+        max_fallbacks = 0
+        [routing.profiles.structured_lookup]
+        provider = "openrouter"
+        model = "anthropic/claude-sonnet-4.6"
+        max_fallbacks = 0
+        [tunnel]
+        tunnel_id = "aaaabbbb-1111-2222-3333-ccccddddeeee"
+        hostname = "davis.example.com"
+    "#;
+    let config: crate::LocalConfig = toml::from_str(toml).unwrap();
+    let tunnel = config.tunnel.unwrap();
+    assert_eq!(tunnel.tunnel_id.as_deref(), Some("aaaabbbb-1111-2222-3333-ccccddddeeee"));
+    assert_eq!(tunnel.hostname.as_deref(), Some("davis.example.com"));
+}
+
+#[test]
+fn tunnel_config_absent_deserializes_to_none() {
+    let toml = r#"
+        [home_assistant]
+        url = "http://ha.local/api/mcp"
+        token = "tok"
+        [imessage]
+        allowed_contacts = []
+        [[providers]]
+        name = "openrouter"
+        api_key = "k"
+        base_url = "https://openrouter.ai/api/v1"
+        allowed_models = []
+        [routing]
+        default_profile = "general_qa"
+        [routing.profiles.home_control]
+        provider = "openrouter"
+        model = "anthropic/claude-sonnet-4.6"
+        max_fallbacks = 0
+        [routing.profiles.general_qa]
+        provider = "openrouter"
+        model = "anthropic/claude-sonnet-4.6"
+        max_fallbacks = 0
+        [routing.profiles.research]
+        provider = "openrouter"
+        model = "anthropic/claude-opus-4.6"
+        max_fallbacks = 0
+        [routing.profiles.structured_lookup]
+        provider = "openrouter"
+        model = "anthropic/claude-sonnet-4.6"
+        max_fallbacks = 0
+    "#;
+    let config: crate::LocalConfig = toml::from_str(toml).unwrap();
+    assert!(config.tunnel.is_none());
+}
+
 fn unique_test_dir(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("daviszeroclaw-{name}-{}", unique_suffix()));
     if path.exists() {

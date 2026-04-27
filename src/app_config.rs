@@ -21,6 +21,8 @@ pub struct LocalConfig {
     pub query_classification: QueryClassificationOverride,
     #[serde(default)]
     pub zeroclaw: ZeroclawConfig,
+    #[serde(default)]
+    pub tunnel: Option<TunnelConfig>,
 }
 
 /// User-editable settings rendered into zeroclaw's `config.toml` as
@@ -91,6 +93,12 @@ pub struct ImessageConfig {
 pub struct WebhookConfig {
     #[serde(default)]
     pub secret: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TunnelConfig {
+    pub tunnel_id: Option<String>,
+    pub hostname: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
