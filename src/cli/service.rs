@@ -435,16 +435,16 @@ pub(super) async fn restart_davis_service(paths: &RuntimePaths) -> Result<()> {
                 .env("PATH", tool_path_env()),
             "launchctl kickstart proxy service",
         )?;
+        let _ = wait_for_probe(
+            &Probe::Http("http://127.0.0.1:3010/health".to_string()),
+            20,
+            Duration::from_millis(500),
+        )
+        .await;
     }
 
     let _ = wait_for_probe(
         &Probe::Http("http://127.0.0.1:3000/health".to_string()),
-        20,
-        Duration::from_millis(500),
-    )
-    .await;
-    let _ = wait_for_probe(
-        &Probe::Http("http://127.0.0.1:3010/health".to_string()),
         20,
         Duration::from_millis(500),
     )
