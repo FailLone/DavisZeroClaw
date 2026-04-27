@@ -172,8 +172,8 @@ pub(super) async fn install_davis_service(paths: &RuntimePaths) -> Result<()> {
         label: davis_service_label().to_string(),
         repo_root: paths.repo_root.clone(),
         runtime_dir: paths.runtime_dir.clone(),
-        zeroclaw_bin: zeroclaw,
-        proxy_bin,
+        zeroclaw_bin: zeroclaw.clone(),
+        proxy_bin: proxy_bin.clone(),
         stdout_path,
         stderr_path,
         path_env: tool_path_env().to_string_lossy().to_string(),
@@ -224,8 +224,73 @@ pub(super) async fn install_davis_service(paths: &RuntimePaths) -> Result<()> {
         Duration::from_millis(500),
     )
     .await;
-    println!("Davis ZeroClaw service installed.");
-    println!("- plist: {}", plist_path.display());
+
+    // Provision the davis-local-proxy launchd service.
+    let proxy_plist_path = proxy_service_plist_path()?;
+    if let Some(parent) = proxy_plist_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let proxy_stdout_path = paths.runtime_dir.join("proxy.launchd.stdout.log");
+    let proxy_stderr_path = paths.runtime_dir.join("proxy.launchd.stderr.log");
+    let proxy_spec = DavisServiceSpec {
+        label: proxy_service_label().to_string(),
+        repo_root: paths.repo_root.clone(),
+        runtime_dir: paths.runtime_dir.clone(),
+        zeroclaw_bin: zeroclaw.clone(),
+        proxy_bin: proxy_bin.clone(),
+        stdout_path: proxy_stdout_path,
+        stderr_path: proxy_stderr_path,
+        path_env: tool_path_env().to_string_lossy().to_string(),
+    };
+    let proxy_plist = render_proxy_launchd_plist(&proxy_spec);
+    fs::write(&proxy_plist_path, proxy_plist)
+        .with_context(|| format!("failed to write {}", proxy_plist_path.display()))?;
+
+    if let Some(plutil) = command_path("plutil") {
+        run_status(
+            Command::new(plutil)
+                .arg("-lint")
+                .arg(&proxy_plist_path)
+                .env("PATH", tool_path_env()),
+            "plutil -lint proxy service plist",
+        )?;
+    }
+
+    bootout_davis_service(&user_target, &proxy_plist_path);
+    run_status(
+        Command::new("launchctl")
+            .arg("bootstrap")
+            .arg(&user_target)
+            .arg(&proxy_plist_path)
+            .env("PATH", tool_path_env()),
+        "launchctl bootstrap proxy service",
+    )?;
+    run_status(
+        Command::new("launchctl")
+            .arg("enable")
+            .arg(format!("{user_target}/{}", proxy_service_label()))
+            .env("PATH", tool_path_env()),
+        "launchctl enable proxy service",
+    )?;
+    run_status(
+        Command::new("launchctl")
+            .arg("kickstart")
+            .arg("-k")
+            .arg(format!("{user_target}/{}", proxy_service_label()))
+            .env("PATH", tool_path_env()),
+        "launchctl kickstart proxy service",
+    )?;
+
+    let _ = wait_for_probe(
+        &Probe::Http("http://127.0.0.1:3010/health".to_string()),
+        20,
+        Duration::from_millis(500),
+    )
+    .await;
+
+    println!("Davis services installed.");
+    println!("- zeroclaw plist: {}", plist_path.display());
+    println!("- proxy plist:    {}", proxy_plist_path.display());
     println!("- config: {}", paths.runtime_config_path().display());
     status_davis_service(paths).await
 }
