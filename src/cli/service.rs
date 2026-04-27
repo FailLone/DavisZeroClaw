@@ -372,21 +372,41 @@ pub(super) async fn restart_davis_service(paths: &RuntimePaths) -> Result<()> {
 
     render_current_runtime_config(paths)?;
     let user_target = launchd_user_target()?;
+
     run_status(
         Command::new("launchctl")
             .arg("kickstart")
             .arg("-k")
             .arg(launchd_service_target(&user_target))
             .env("PATH", tool_path_env()),
-        "launchctl kickstart Davis service",
+        "launchctl kickstart zeroclaw service",
     )?;
+
+    let proxy_plist = proxy_service_plist_path()?;
+    if proxy_plist.is_file() {
+        run_status(
+            Command::new("launchctl")
+                .arg("kickstart")
+                .arg("-k")
+                .arg(format!("{user_target}/{}", proxy_service_label()))
+                .env("PATH", tool_path_env()),
+            "launchctl kickstart proxy service",
+        )?;
+    }
+
     let _ = wait_for_probe(
         &Probe::Http("http://127.0.0.1:3000/health".to_string()),
         20,
         Duration::from_millis(500),
     )
     .await;
-    println!("Davis ZeroClaw service restarted.");
+    let _ = wait_for_probe(
+        &Probe::Http("http://127.0.0.1:3010/health".to_string()),
+        20,
+        Duration::from_millis(500),
+    )
+    .await;
+    println!("Davis services restarted.");
     status_davis_service(paths).await
 }
 
