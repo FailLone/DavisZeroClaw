@@ -719,3 +719,96 @@ pub(super) fn xml_escape(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
 }
+
+// ── Tunnel service helpers ────────────────────────────────────────────────────
+//
+// These are wired up in `install_tunnel_service` below. The full implementation
+// of that function arrives in the next task; the stub here ensures clippy is
+// satisfied and the call sites are present for Task 3 to build on.
+
+#[derive(Debug)]
+pub(super) struct TunnelServiceSpec {
+    pub(super) cloudflared_bin: PathBuf,
+    pub(super) config_path: PathBuf,
+    pub(super) stdout_path: PathBuf,
+    pub(super) stderr_path: PathBuf,
+    pub(super) path_env: String,
+}
+
+pub(super) fn tunnel_service_label() -> &'static str {
+    "com.daviszeroclaw.tunnel"
+}
+
+pub(super) fn tunnel_service_plist_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?;
+    Ok(PathBuf::from(home)
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{}.plist", tunnel_service_label())))
+}
+
+pub(super) fn render_tunnel_launchd_plist(spec: &TunnelServiceSpec) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{}</string>
+    <string>tunnel</string>
+    <string>--config</string>
+    <string>{}</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>{}</string>
+  <key>StandardErrorPath</key>
+  <string>{}</string>
+</dict>
+</plist>
+"#,
+        xml_escape(tunnel_service_label()),
+        xml_escape(&spec.cloudflared_bin.display().to_string()),
+        xml_escape(&spec.config_path.display().to_string()),
+        xml_escape(&spec.path_env),
+        xml_escape(&spec.stdout_path.display().to_string()),
+        xml_escape(&spec.stderr_path.display().to_string()),
+    )
+}
+
+/// Install the Cloudflare tunnel launchd service.
+///
+/// TODO(Task 3): replace this stub with the full implementation that reads
+/// `TunnelConfig` from `local.toml`, locates the `cloudflared` binary,
+/// writes the cloudflared YAML config, renders and installs the plist, and
+/// bootstraps the launchd agent.
+pub(super) async fn install_tunnel_service(paths: &RuntimePaths) -> Result<()> {
+    ensure_macos("Tunnel service management")?;
+    let plist_path = tunnel_service_plist_path()?;
+    // Placeholder spec — Task 3 derives these from TunnelConfig + local.toml.
+    let _spec = TunnelServiceSpec {
+        cloudflared_bin: PathBuf::from("/opt/homebrew/bin/cloudflared"),
+        config_path: paths.runtime_dir.join("cloudflared/davis.yml"),
+        stdout_path: paths.runtime_dir.join("tunnel.stdout.log"),
+        stderr_path: paths.runtime_dir.join("tunnel.stderr.log"),
+        path_env: tool_path_env().to_string_lossy().into_owned(),
+    };
+    let _plist = render_tunnel_launchd_plist(&_spec);
+    bail!(
+        "Tunnel service installation is not yet implemented \
+         (plist would be written to {}).",
+        plist_path.display()
+    );
+}

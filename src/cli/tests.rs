@@ -562,3 +562,30 @@ fn service_is_installed_true_when_one_plist_exists() {
     assert!(either_plist_exists(&fake_zeroclaw, &proxy_plist));
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn render_tunnel_launchd_plist_runs_cloudflared() {
+    let spec = TunnelServiceSpec {
+        cloudflared_bin: PathBuf::from("/opt/homebrew/bin/cloudflared"),
+        config_path: PathBuf::from("/Users/testuser/.cloudflared/davis-shortcut.yml"),
+        stdout_path: PathBuf::from("/tmp/davis/tunnel.stdout.log"),
+        stderr_path: PathBuf::from("/tmp/davis/tunnel.stderr.log"),
+        path_env: "/opt/homebrew/bin:/usr/local/bin".to_string(),
+    };
+    let plist = render_tunnel_launchd_plist(&spec);
+    assert!(plist.contains("<string>com.daviszeroclaw.tunnel</string>"));
+    assert!(plist.contains("cloudflared"));
+    assert!(plist.contains("davis-shortcut.yml"));
+    assert!(plist.contains("<key>RunAtLoad</key>"));
+    assert!(plist.contains("<key>KeepAlive</key>"));
+    assert!(!plist.contains("daemon --config-dir"));
+}
+
+#[test]
+fn tunnel_service_label_and_plist_path_are_distinct() {
+    assert_ne!(tunnel_service_label(), davis_service_label());
+    assert_ne!(tunnel_service_label(), proxy_service_label());
+    assert!(tunnel_service_label().contains("tunnel"));
+    let tunnel_path = tunnel_service_plist_path().unwrap();
+    assert!(tunnel_path.to_str().unwrap().contains("tunnel"));
+}
