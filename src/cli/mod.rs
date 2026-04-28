@@ -104,7 +104,7 @@ enum ServiceCommand {
     /// Stop and remove the Davis ZeroClaw launchd service.
     Uninstall,
     /// Install the Cloudflare tunnel launchd service (requires tunnel config in local.toml).
-    Tunnel,
+    TunnelInstall,
     /// Uninstall the Cloudflare tunnel launchd service.
     TunnelUninstall,
     /// Show Cloudflare tunnel launchd and connectivity status.
@@ -487,7 +487,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             ServiceCommand::Status => status_davis_service(&paths).await,
             ServiceCommand::Restart => restart_davis_service(&paths).await,
             ServiceCommand::Uninstall => uninstall_davis_service(&paths),
-            ServiceCommand::Tunnel => tunnel_install(&paths).await,
+            ServiceCommand::TunnelInstall => tunnel_install(&paths).await,
             ServiceCommand::TunnelUninstall => tunnel_uninstall(&paths),
             ServiceCommand::TunnelStatus => tunnel_status(&paths).await,
         },

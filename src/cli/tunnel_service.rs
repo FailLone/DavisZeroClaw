@@ -116,7 +116,13 @@ pub(super) async fn tunnel_install(paths: &RuntimePaths) -> Result<()> {
     }
     let credentials_str = credentials_path.display().to_string();
     let cf_config = format!(
-        "tunnel: {tunnel_id}\ncredentials-file: {credentials_str}\n\ningress:\n  - hostname: {hostname}\n    service: http://127.0.0.1:3012\n  - service: http_status:404\n"
+        "tunnel: {tunnel_id}\n\
+         credentials-file: \"{credentials_str}\"\n\
+         \n\
+         ingress:\n\
+           - hostname: {hostname}\n\
+             service: http://127.0.0.1:3012\n\
+           - service: http_status:404\n"
     );
     fs::write(&cf_config_path, &cf_config)
         .with_context(|| format!("failed to write {}", cf_config_path.display()))?;
