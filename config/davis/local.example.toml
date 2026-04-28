@@ -226,6 +226,22 @@ allow_private_hosts = []
 # score_delta_threshold = 0.2
 # batch_per_cycle = 20
 
+# --- Cloudflare Tunnel (optional) -------------------------------------------
+# Enables access to the Davis Shortcut bridge (port 3012) from outside the LAN.
+# Prerequisites (run once manually):
+#   brew install cloudflare/cloudflare/cloudflared
+#   cloudflared login
+#   cloudflared tunnel create davis-shortcut
+#   cloudflared tunnel route dns davis-shortcut <hostname>
+# Then fill in the UUID and hostname below and run:
+#   daviszeroclaw service tunnel-install
+# Finally rebuild the Shortcut with the external URL:
+#   daviszeroclaw shortcut install --url "https://<hostname>/shortcut"
+#
+# [tunnel]
+# tunnel_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+# hostname = "davis.yourdomain.com"
+
 # --- Weekly digest (MVP Phase 5) --------------------------------------------
 # Davis does no scheduling or delivery itself; these fields are rendered into
 # zeroclaw's config.toml as [[cron.jobs]] so zeroclaw runs the agent cron that
