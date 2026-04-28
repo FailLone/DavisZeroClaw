@@ -589,3 +589,17 @@ fn tunnel_service_label_and_plist_path_are_distinct() {
     let tunnel_path = tunnel_service_plist_path().unwrap();
     assert!(tunnel_path.to_str().unwrap().contains("tunnel"));
 }
+
+#[test]
+fn tunnel_status_silent_when_plist_absent() {
+    let path = tunnel_service_plist_path().unwrap();
+    assert!(path.to_str().unwrap().contains("LaunchAgents"));
+    assert!(path.to_str().unwrap().contains("com.daviszeroclaw.tunnel"));
+}
+
+#[test]
+fn tunnel_cloudflared_config_path_is_in_dotcloudflared() {
+    let path = tunnel_cloudflared_config_path().unwrap();
+    assert!(path.to_str().unwrap().contains(".cloudflared"));
+    assert!(path.to_str().unwrap().contains("davis-shortcut.yml"));
+}

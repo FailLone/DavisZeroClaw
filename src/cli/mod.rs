@@ -104,8 +104,11 @@ enum ServiceCommand {
     /// Stop and remove the Davis ZeroClaw launchd service.
     Uninstall,
     /// Install the Cloudflare tunnel launchd service (requires tunnel config in local.toml).
-    /// TEMP(Task 3+4): replaced by TunnelInstall/TunnelUninstall/TunnelStatus variants.
     Tunnel,
+    /// Uninstall the Cloudflare tunnel launchd service.
+    TunnelUninstall,
+    /// Show Cloudflare tunnel launchd and connectivity status.
+    TunnelStatus,
 }
 
 #[derive(Debug, Subcommand)]
@@ -484,7 +487,9 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             ServiceCommand::Status => status_davis_service(&paths).await,
             ServiceCommand::Restart => restart_davis_service(&paths).await,
             ServiceCommand::Uninstall => uninstall_davis_service(&paths),
-            ServiceCommand::Tunnel => install_tunnel_service(&paths).await,
+            ServiceCommand::Tunnel => tunnel_install(&paths).await,
+            ServiceCommand::TunnelUninstall => tunnel_uninstall(&paths),
+            ServiceCommand::TunnelStatus => tunnel_status(&paths).await,
         },
         Commands::Skills { command } => match command {
             SkillsCommand::Sync => sync_runtime_skills(&paths),
@@ -650,6 +655,9 @@ use articles::*;
 
 mod service;
 use service::*;
+
+mod tunnel_service;
+use tunnel_service::*;
 
 mod mempalace;
 use mempalace::*;
