@@ -722,9 +722,8 @@ pub(super) fn xml_escape(value: &str) -> String {
 
 // ── Tunnel service helpers ────────────────────────────────────────────────────
 //
-// These are wired up in `install_tunnel_service` below. The full implementation
-// of that function arrives in the next task; the stub here ensures clippy is
-// satisfied and the call sites are present for Task 3 to build on.
+// Stub: `install_tunnel_service` below exercises TunnelServiceSpec to satisfy
+// clippy. Task 3 replaces the stub body with the real implementation.
 
 #[derive(Debug)]
 pub(super) struct TunnelServiceSpec {

@@ -104,6 +104,7 @@ enum ServiceCommand {
     /// Stop and remove the Davis ZeroClaw launchd service.
     Uninstall,
     /// Install the Cloudflare tunnel launchd service (requires tunnel config in local.toml).
+    /// TEMP(Task 3+4): replaced by TunnelInstall/TunnelUninstall/TunnelStatus variants.
     Tunnel,
 }
 
