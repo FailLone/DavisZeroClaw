@@ -402,6 +402,7 @@ pub(super) async fn status_davis_service(paths: &RuntimePaths) -> Result<()> {
         "- stderr: {}",
         paths.runtime_dir.join("proxy.launchd.stderr.log").display()
     );
+    tunnel_status(paths).await?;
     Ok(())
 }
 
