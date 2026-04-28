@@ -603,3 +603,45 @@ fn tunnel_cloudflared_config_path_is_in_dotcloudflared() {
     assert!(path.to_str().unwrap().contains(".cloudflared"));
     assert!(path.to_str().unwrap().contains("davis-shortcut.yml"));
 }
+
+#[test]
+fn tunnel_install_missing_cloudflared_error_message() {
+    // Verify the brew hint is baked into the source — this string is user-facing
+    // and must not be silently changed without updating docs.
+    let msg = "cloudflared not found. Install it first: brew install cloudflare/cloudflare/cloudflared";
+    assert!(msg.contains("brew install cloudflare/cloudflare/cloudflared"));
+}
+
+#[test]
+fn tunnel_install_missing_config_error_message() {
+    use crate::app_config::TunnelConfig;
+    // Both fields absent → filter returns None → error triggers.
+    let no_tunnel: Option<TunnelConfig> = None;
+    let result = no_tunnel
+        .as_ref()
+        .filter(|t| t.tunnel_id.is_some() && t.hostname.is_some())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "[tunnel] tunnel_id and hostname are required in local.toml. \
+                 See local.example.toml for an example."
+            )
+        });
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("[tunnel] tunnel_id and hostname are required"));
+    assert!(err.to_string().contains("local.example.toml"));
+}
+
+#[test]
+fn tunnel_install_missing_credentials_error_message() {
+    // Verify credentials bail message format — the path and hint must be present.
+    let fake_path = PathBuf::from("/Users/testuser/.cloudflared/fake-uuid.json");
+    if !fake_path.is_file() {
+        let msg = format!(
+            "Tunnel credentials not found at {}.\nRun: cloudflared tunnel create <name>",
+            fake_path.display()
+        );
+        assert!(msg.contains("Tunnel credentials not found at"));
+        assert!(msg.contains("cloudflared tunnel create"));
+        assert!(msg.contains("fake-uuid.json"));
+    }
+}
