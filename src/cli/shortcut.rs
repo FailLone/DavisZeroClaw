@@ -31,6 +31,10 @@ pub(super) fn build_shortcut(
         .repo_root
         .join("shortcuts")
         .join("叫下戴维斯.shortcut");
+    let fallback_wflow = paths
+        .repo_root
+        .join("shortcuts")
+        .join("叫下戴维斯.unsigned.wflow");
     let route_config = resolve_shortcut_route_config(paths, url);
 
     let webhook_secret = resolve_shortcut_secret(paths, secret, no_secret);
@@ -67,7 +71,7 @@ pub(super) fn build_shortcut(
             .env("PATH", tool_path_env()),
         "plutil -convert binary1",
     )?;
-    run_status_filtering_shortcuts_warnings(
+    let signed = run_status_filtering_shortcuts_warnings(
         Command::new(shortcuts)
             .arg("sign")
             .arg("-m")
@@ -78,7 +82,24 @@ pub(super) fn build_shortcut(
             .arg(&output_shortcut)
             .env("PATH", tool_path_env()),
         "shortcuts sign",
-    )?;
+    );
+    let output_shortcut = match signed {
+        Ok(()) => output_shortcut,
+        Err(err) => {
+            fs::copy(&tmp_wflow, &fallback_wflow).with_context(|| {
+                format!(
+                    "failed to preserve unsigned workflow at {}",
+                    fallback_wflow.display()
+                )
+            })?;
+            eprintln!(
+                "Warning: shortcuts signing failed ({err}). \
+                 Preserved unsigned workflow for import: {}",
+                fallback_wflow.display()
+            );
+            fallback_wflow
+        }
+    };
     drop(cleanup);
 
     println!("Built {}", output_shortcut.display());
