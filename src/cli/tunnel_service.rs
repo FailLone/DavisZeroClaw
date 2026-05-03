@@ -36,6 +36,26 @@ pub(super) fn tunnel_cloudflared_config_path() -> Result<PathBuf> {
         .join("davis-shortcut.yml"))
 }
 
+pub(super) fn render_tunnel_cloudflared_config(
+    tunnel_id: &str,
+    credentials_path: &PathBuf,
+    hostname: &str,
+) -> String {
+    let credentials_str = credentials_path.display();
+    format!(
+        concat!(
+            "tunnel: {}\n",
+            "credentials-file: \"{}\"\n",
+            "\n",
+            "ingress:\n",
+            "  - hostname: {}\n",
+            "    service: http://127.0.0.1:3012\n",
+            "  - service: http_status:404\n",
+        ),
+        tunnel_id, credentials_str, hostname
+    )
+}
+
 pub(super) fn render_tunnel_launchd_plist(spec: &TunnelServiceSpec) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -114,16 +134,7 @@ pub(super) async fn tunnel_install(paths: &RuntimePaths) -> Result<()> {
     if let Some(parent) = cf_config_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let credentials_str = credentials_path.display().to_string();
-    let cf_config = format!(
-        "tunnel: {tunnel_id}\n\
-         credentials-file: \"{credentials_str}\"\n\
-         \n\
-         ingress:\n\
-           - hostname: {hostname}\n\
-             service: http://127.0.0.1:3012\n\
-           - service: http_status:404\n"
-    );
+    let cf_config = render_tunnel_cloudflared_config(tunnel_id, &credentials_path, hostname);
     fs::write(&cf_config_path, &cf_config)
         .with_context(|| format!("failed to write {}", cf_config_path.display()))?;
     println!("Written: {}", cf_config_path.display());
@@ -174,12 +185,7 @@ pub(super) async fn tunnel_install(paths: &RuntimePaths) -> Result<()> {
     println!("Tunnel service installed: {}", plist_path.display());
     println!("Waiting for tunnel to come online (up to 10s)...");
     let health_url = format!("https://{hostname}/health");
-    let online = wait_for_probe(
-        &Probe::Http(health_url.clone()),
-        10,
-        Duration::from_secs(1),
-    )
-    .await;
+    let online = wait_for_probe(&Probe::Http(health_url.clone()), 10, Duration::from_secs(1)).await;
     if online {
         println!("Tunnel online: {hostname}");
     } else {

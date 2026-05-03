@@ -465,7 +465,10 @@ fn tunnel_config_deserializes_from_toml() {
     "#;
     let config: crate::LocalConfig = toml::from_str(toml).unwrap();
     let tunnel = config.tunnel.unwrap();
-    assert_eq!(tunnel.tunnel_id.as_deref(), Some("aaaabbbb-1111-2222-3333-ccccddddeeee"));
+    assert_eq!(
+        tunnel.tunnel_id.as_deref(),
+        Some("aaaabbbb-1111-2222-3333-ccccddddeeee")
+    );
     assert_eq!(tunnel.hostname.as_deref(), Some("davis.example.com"));
 }
 
@@ -605,10 +608,37 @@ fn tunnel_cloudflared_config_path_is_in_dotcloudflared() {
 }
 
 #[test]
+fn render_tunnel_cloudflared_config_preserves_yaml_indentation() {
+    let credentials_path =
+        PathBuf::from("/Users/testuser/.cloudflared/94039ffd-4852-4626-a5ab-dfdb5603cfe2.json");
+    let yaml = render_tunnel_cloudflared_config(
+        "94039ffd-4852-4626-a5ab-dfdb5603cfe2",
+        &credentials_path,
+        "davis.faillone.com",
+    );
+
+    assert_eq!(
+        yaml,
+        concat!(
+            "tunnel: 94039ffd-4852-4626-a5ab-dfdb5603cfe2\n",
+            "credentials-file: \"/Users/testuser/.cloudflared/94039ffd-4852-4626-a5ab-dfdb5603cfe2.json\"\n",
+            "\n",
+            "ingress:\n",
+            "  - hostname: davis.faillone.com\n",
+            "    service: http://127.0.0.1:3012\n",
+            "  - service: http_status:404\n",
+        )
+    );
+    assert!(yaml.contains("\n  - hostname: davis.faillone.com\n"));
+    assert!(yaml.contains("\n    service: http://127.0.0.1:3012\n"));
+}
+
+#[test]
 fn tunnel_install_missing_cloudflared_error_message() {
     // Verify the brew hint is baked into the source — this string is user-facing
     // and must not be silently changed without updating docs.
-    let msg = "cloudflared not found. Install it first: brew install cloudflare/cloudflare/cloudflared";
+    let msg =
+        "cloudflared not found. Install it first: brew install cloudflare/cloudflare/cloudflared";
     assert!(msg.contains("brew install cloudflare/cloudflare/cloudflared"));
 }
 
@@ -627,7 +657,9 @@ fn tunnel_install_missing_config_error_message() {
             )
         });
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("[tunnel] tunnel_id and hostname are required"));
+    assert!(err
+        .to_string()
+        .contains("[tunnel] tunnel_id and hostname are required"));
     assert!(err.to_string().contains("local.example.toml"));
 }
 
