@@ -134,6 +134,10 @@ fn customize_shortcut_json_adds_lan_wifi_branch_when_configured() {
         .and_then(Value::as_str)
         .unwrap();
     assert_eq!(
+        actions[2].pointer("/WFWorkflowActionParameters/GroupingIdentifier"),
+        Some(&Value::String(first_wifi_uuid.to_string()))
+    );
+    assert_eq!(
         actions[2].pointer("/WFWorkflowActionParameters/WFInput/Variable/Value/OutputUUID"),
         Some(&Value::String(first_wifi_uuid.to_string()))
     );
@@ -160,6 +164,10 @@ fn customize_shortcut_json_adds_lan_wifi_branch_when_configured() {
         .and_then(Value::as_str)
         .unwrap();
     assert_eq!(
+        actions[6].pointer("/WFWorkflowActionParameters/GroupingIdentifier"),
+        Some(&Value::String(second_wifi_uuid.to_string()))
+    );
+    assert_eq!(
         actions[6].pointer("/WFWorkflowActionParameters/WFInput/Variable/Value/OutputUUID"),
         Some(&Value::String(second_wifi_uuid.to_string()))
     );
@@ -179,6 +187,12 @@ fn customize_shortcut_json_adds_lan_wifi_branch_when_configured() {
             "https://davis.faillone.com/shortcut".to_string()
         ))
     );
+    assert!(actions[10]
+        .pointer("/WFWorkflowActionParameters/UUID")
+        .is_some());
+    assert!(actions[11]
+        .pointer("/WFWorkflowActionParameters/UUID")
+        .is_some());
     assert_eq!(
         workflow.pointer("/WFWorkflowImportQuestions/0/ActionIndex"),
         Some(&Value::from(9))

@@ -342,17 +342,16 @@ fn push_lan_ssid_branches(
     webhook_secret: Option<&str>,
 ) -> Result<()> {
     if let Some((ssid, rest)) = remaining_ssids.split_first() {
-        let group = pseudo_uuid();
         let wifi_uuid = pseudo_uuid();
         actions.push(get_wifi_network_name_action(&wifi_uuid));
-        actions.push(if_current_wifi_equals_action(&group, &wifi_uuid, ssid));
+        actions.push(if_current_wifi_equals_action(&wifi_uuid, ssid));
         actions.push(download_action_from_template(
             download_template,
             lan_url,
             webhook_secret,
             "LAN",
         )?);
-        actions.push(otherwise_action(&group));
+        actions.push(otherwise_action(&wifi_uuid));
         push_lan_ssid_branches(
             actions,
             download_template,
@@ -361,7 +360,7 @@ fn push_lan_ssid_branches(
             external_download,
             webhook_secret,
         )?;
-        actions.push(end_if_action(&group));
+        actions.push(end_if_action(&wifi_uuid));
     } else {
         actions.push(external_download);
     }
@@ -427,11 +426,11 @@ fn get_wifi_network_name_action(uuid: &str) -> Value {
     })
 }
 
-fn if_current_wifi_equals_action(grouping_identifier: &str, wifi_uuid: &str, ssid: &str) -> Value {
+fn if_current_wifi_equals_action(wifi_uuid: &str, ssid: &str) -> Value {
     json!({
         "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
         "WFWorkflowActionParameters": {
-            "GroupingIdentifier": grouping_identifier,
+            "GroupingIdentifier": wifi_uuid,
             "WFControlFlowMode": 0,
             "WFInput": action_output_variable(wifi_uuid, "Network Details"),
             "WFCondition": 4,
@@ -455,6 +454,7 @@ fn end_if_action(grouping_identifier: &str) -> Value {
         "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
         "WFWorkflowActionParameters": {
             "GroupingIdentifier": grouping_identifier,
+            "UUID": pseudo_uuid(),
             "WFControlFlowMode": 2
         }
     })
