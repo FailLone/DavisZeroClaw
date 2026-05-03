@@ -297,21 +297,7 @@ fn customize_shortcut_json_dual_route(
     let download_template = actions[1].clone();
     let speak_action = actions[2].clone();
 
-    let wifi_uuid = pseudo_uuid();
-    let ssids_uuid = pseudo_uuid();
-    let if_group = pseudo_uuid();
-
-    let mut lan_download = download_template.clone();
-    apply_download_url_settings(
-        lan_download
-            .pointer_mut("/WFWorkflowActionParameters")
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| anyhow!("shortcut template missing LAN download parameters"))?,
-        &lan.lan_url,
-        webhook_secret,
-    );
-
-    let mut external_download = download_template;
+    let mut external_download = download_template.clone();
     apply_download_url_settings(
         external_download
             .pointer_mut("/WFWorkflowActionParameters")
@@ -321,23 +307,82 @@ fn customize_shortcut_json_dual_route(
         webhook_secret,
     );
 
-    *actions = vec![
-        ask_action,
-        get_wifi_network_name_action(&wifi_uuid),
-        ssid_allowlist_text_action(&ssids_uuid, &lan.lan_ssids),
-        if_current_wifi_in_allowlist_action(&if_group, &ssids_uuid, &wifi_uuid),
-        lan_download,
-        otherwise_action(&if_group),
+    let mut routed_actions = vec![ask_action];
+    push_lan_ssid_branches(
+        &mut routed_actions,
+        &download_template,
+        &lan.lan_url,
+        &lan.lan_ssids,
         external_download,
-        end_if_action(&if_group),
-        speak_action,
-    ];
+        webhook_secret,
+    )?;
+    let external_action_index = routed_actions
+        .iter()
+        .position(|action| {
+            action.pointer("/WFWorkflowActionParameters/WFURL")
+                == Some(&Value::String(external_url.to_string()))
+        })
+        .unwrap_or(1);
+    routed_actions.push(speak_action);
+    *actions = routed_actions;
 
     if let Some(action_index) = workflow.pointer_mut("/WFWorkflowImportQuestions/0/ActionIndex") {
-        *action_index = Value::from(6);
+        *action_index = Value::from(external_action_index);
     }
 
     Ok(())
+}
+
+fn push_lan_ssid_branches(
+    actions: &mut Vec<Value>,
+    download_template: &Value,
+    lan_url: &str,
+    remaining_ssids: &[String],
+    external_download: Value,
+    webhook_secret: Option<&str>,
+) -> Result<()> {
+    if let Some((ssid, rest)) = remaining_ssids.split_first() {
+        let group = pseudo_uuid();
+        actions.push(get_wifi_network_name_action(&pseudo_uuid()));
+        actions.push(if_current_wifi_equals_action(&group, ssid));
+        actions.push(download_action_from_template(
+            download_template,
+            lan_url,
+            webhook_secret,
+            "LAN",
+        )?);
+        actions.push(otherwise_action(&group));
+        push_lan_ssid_branches(
+            actions,
+            download_template,
+            lan_url,
+            rest,
+            external_download,
+            webhook_secret,
+        )?;
+        actions.push(end_if_action(&group));
+    } else {
+        actions.push(external_download);
+    }
+    Ok(())
+}
+
+fn download_action_from_template(
+    download_template: &Value,
+    webhook_url: &str,
+    webhook_secret: Option<&str>,
+    label: &str,
+) -> Result<Value> {
+    let mut download = download_template.clone();
+    apply_download_url_settings(
+        download
+            .pointer_mut("/WFWorkflowActionParameters")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| anyhow!("shortcut template missing {label} download parameters"))?,
+        webhook_url,
+        webhook_secret,
+    );
+    Ok(download)
 }
 
 fn apply_download_url_settings(
@@ -381,41 +426,14 @@ fn get_wifi_network_name_action(uuid: &str) -> Value {
     })
 }
 
-fn ssid_allowlist_text_action(uuid: &str, ssids: &[String]) -> Value {
-    json!({
-        "WFWorkflowActionIdentifier": "is.workflow.actions.gettext",
-        "WFWorkflowActionParameters": {
-            "UUID": uuid,
-            "WFTextActionText": format!("|{}|", ssids.join("|"))
-        }
-    })
-}
-
-fn if_current_wifi_in_allowlist_action(
-    grouping_identifier: &str,
-    ssids_uuid: &str,
-    wifi_uuid: &str,
-) -> Value {
+fn if_current_wifi_equals_action(grouping_identifier: &str, ssid: &str) -> Value {
     json!({
         "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
         "WFWorkflowActionParameters": {
             "GroupingIdentifier": grouping_identifier,
             "WFControlFlowMode": 0,
-            "WFCondition": 99,
-            "WFInput": action_output_attachment(ssids_uuid, "Text"),
-            "WFConditionalActionString": {
-                "Value": {
-                    "string": "|￼|",
-                    "attachmentsByRange": {
-                        "{1, 1}": {
-                            "OutputUUID": wifi_uuid,
-                            "Type": "ActionOutput",
-                            "OutputName": "Network Details"
-                        }
-                    }
-                },
-                "WFSerializationType": "WFTextTokenString"
-            }
+            "WFCondition": "Equals",
+            "WFConditionalActionString": ssid
         }
     })
 }
@@ -437,17 +455,6 @@ fn end_if_action(grouping_identifier: &str) -> Value {
             "GroupingIdentifier": grouping_identifier,
             "WFControlFlowMode": 2
         }
-    })
-}
-
-fn action_output_attachment(output_uuid: &str, output_name: &str) -> Value {
-    json!({
-        "Value": {
-            "OutputUUID": output_uuid,
-            "Type": "ActionOutput",
-            "OutputName": output_name
-        },
-        "WFSerializationType": "WFTextTokenAttachment"
     })
 }
 

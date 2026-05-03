@@ -110,43 +110,67 @@ fn customize_shortcut_json_adds_lan_wifi_branch_when_configured() {
         .pointer("/WFWorkflowActions")
         .and_then(Value::as_array)
         .unwrap();
-    assert_eq!(actions.len(), 9);
+    assert_eq!(actions.len(), 13);
     assert_eq!(
         actions[1].pointer("/WFWorkflowActionIdentifier"),
         Some(&Value::String("is.workflow.actions.getwifi".to_string()))
     );
     assert_eq!(
-        actions[2].pointer("/WFWorkflowActionParameters/WFTextActionText"),
-        Some(&Value::String("|FailLone|FailLone_5G|".to_string()))
+        actions[2].pointer("/WFWorkflowActionIdentifier"),
+        Some(&Value::String(
+            "is.workflow.actions.conditional".to_string()
+        ))
     );
     assert_eq!(
-        actions[3].pointer("/WFWorkflowActionParameters/WFCondition"),
-        Some(&Value::from(99))
+        actions[2].pointer("/WFWorkflowActionParameters/WFCondition"),
+        Some(&Value::String("Equals".to_string()))
     );
     assert_eq!(
-        actions[4].pointer("/WFWorkflowActionParameters/WFURL"),
+        actions[2].pointer("/WFWorkflowActionParameters/WFConditionalActionString"),
+        Some(&Value::String("FailLone".to_string()))
+    );
+    assert_eq!(
+        actions[3].pointer("/WFWorkflowActionParameters/WFURL"),
         Some(&Value::String(
             "http://192.168.1.2:3012/shortcut".to_string()
         ))
     );
     assert_eq!(
-        actions[6].pointer("/WFWorkflowActionParameters/WFURL"),
+        actions[5].pointer("/WFWorkflowActionIdentifier"),
+        Some(&Value::String("is.workflow.actions.getwifi".to_string()))
+    );
+    assert_eq!(
+        actions[6].pointer("/WFWorkflowActionParameters/WFCondition"),
+        Some(&Value::String("Equals".to_string()))
+    );
+    assert_eq!(
+        actions[6].pointer("/WFWorkflowActionParameters/WFConditionalActionString"),
+        Some(&Value::String("FailLone_5G".to_string()))
+    );
+    assert_eq!(
+        actions[7].pointer("/WFWorkflowActionParameters/WFURL"),
+        Some(&Value::String(
+            "http://192.168.1.2:3012/shortcut".to_string()
+        ))
+    );
+    assert_eq!(
+        actions[9].pointer("/WFWorkflowActionParameters/WFURL"),
         Some(&Value::String(
             "https://davis.faillone.com/shortcut".to_string()
         ))
     );
     assert_eq!(
         workflow.pointer("/WFWorkflowImportQuestions/0/ActionIndex"),
-        Some(&Value::from(6))
+        Some(&Value::from(9))
     );
     assert_eq!(
-        actions[4].pointer(
+        actions[3].pointer(
             "/WFWorkflowActionParameters/WFHTTPHeaders/Value/WFDictionaryFieldValueItems/0/WFValue"
         ),
         Some(&Value::String("secret".to_string()))
     );
     assert_eq!(
-        actions[6].pointer(
+        actions[9].pointer(
             "/WFWorkflowActionParameters/WFHTTPHeaders/Value/WFDictionaryFieldValueItems/0/WFValue"
         ),
         Some(&Value::String("secret".to_string()))
