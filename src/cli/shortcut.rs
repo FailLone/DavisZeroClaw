@@ -31,10 +31,6 @@ pub(super) fn build_shortcut(
         .repo_root
         .join("shortcuts")
         .join("叫下戴维斯.shortcut");
-    let fallback_wflow = paths
-        .repo_root
-        .join("shortcuts")
-        .join("叫下戴维斯.unsigned.wflow");
     let route_config = resolve_shortcut_route_config(paths, url);
 
     let webhook_secret = resolve_shortcut_secret(paths, secret, no_secret);
@@ -71,35 +67,7 @@ pub(super) fn build_shortcut(
             .env("PATH", tool_path_env()),
         "plutil -convert binary1",
     )?;
-    let signed = run_status_filtering_shortcuts_warnings(
-        Command::new(shortcuts)
-            .arg("sign")
-            .arg("-m")
-            .arg("anyone")
-            .arg("-i")
-            .arg(&tmp_wflow)
-            .arg("-o")
-            .arg(&output_shortcut)
-            .env("PATH", tool_path_env()),
-        "shortcuts sign",
-    );
-    let output_shortcut = match signed {
-        Ok(()) => output_shortcut,
-        Err(err) => {
-            fs::copy(&tmp_wflow, &fallback_wflow).with_context(|| {
-                format!(
-                    "failed to preserve unsigned workflow at {}",
-                    fallback_wflow.display()
-                )
-            })?;
-            eprintln!(
-                "Warning: shortcuts signing failed ({err}). \
-                 Preserved unsigned workflow for import: {}",
-                fallback_wflow.display()
-            );
-            fallback_wflow
-        }
-    };
+    sign_shortcut(&shortcuts, &tmp_wflow, &output_shortcut)?;
     drop(cleanup);
 
     println!("Built {}", output_shortcut.display());
@@ -115,6 +83,47 @@ pub(super) fn build_shortcut(
         println!("Embedded header: none (no webhook secret found)");
     }
     Ok(ShortcutBuild { output_shortcut })
+}
+
+fn sign_shortcut(shortcuts: &Path, input: &Path, output: &Path) -> Result<()> {
+    match sign_shortcut_with_mode(shortcuts, "anyone", input, output) {
+        Ok(()) => Ok(()),
+        Err(anyone_err) => {
+            eprintln!("Warning: {anyone_err}. Retrying with people-who-know-me signing mode.");
+            sign_shortcut_with_mode(shortcuts, "people-who-know-me", input, output)
+                .context("shortcuts sign failed in both anyone and people-who-know-me modes")
+        }
+    }
+}
+
+fn sign_shortcut_with_mode(
+    shortcuts: &Path,
+    mode: &str,
+    input: &Path,
+    output: &Path,
+) -> Result<()> {
+    let command_output = command_output(
+        Command::new(shortcuts)
+            .arg("sign")
+            .arg("-m")
+            .arg(mode)
+            .arg("-i")
+            .arg(input)
+            .arg("-o")
+            .arg(output)
+            .env("PATH", tool_path_env()),
+    )
+    .with_context(|| format!("failed to run shortcuts sign -m {mode}"))?;
+    let stderr = filter_known_shortcuts_warnings(&command_output.stderr);
+    if command_output.status_success {
+        print_command_streams(&command_output.stdout, &stderr);
+        return Ok(());
+    }
+
+    let detail = first_non_empty_line(&stderr)
+        .or_else(|| first_non_empty_line(&command_output.stdout))
+        .unwrap_or("no error details");
+    bail!("shortcuts sign -m {mode} failed: {detail}");
 }
 
 #[derive(Debug, Clone)]

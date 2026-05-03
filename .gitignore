@@ -7,7 +7,6 @@ node_modules/
 browser-worker/node_modules/
 config/davis/local.toml
 shortcuts/*.shortcut
-shortcuts/*.wflow
 skills/*
 __pycache__/
 *.pyc

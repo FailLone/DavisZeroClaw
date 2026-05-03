@@ -182,21 +182,6 @@ pub(super) fn run_status(command: &mut Command, description: &str) -> Result<()>
     Ok(())
 }
 
-pub(super) fn run_status_filtering_shortcuts_warnings(
-    command: &mut Command,
-    description: &str,
-) -> Result<()> {
-    let output = command_output(command).with_context(|| format!("failed to run {description}"))?;
-    print_command_streams(
-        &output.stdout,
-        &filter_known_shortcuts_warnings(&output.stderr),
-    );
-    if !output.status_success {
-        bail!("{description} failed");
-    }
-    Ok(())
-}
-
 pub(super) fn print_command_streams(stdout: &str, stderr: &str) {
     if !stdout.is_empty() {
         print!("{stdout}");
