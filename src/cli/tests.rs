@@ -123,7 +123,19 @@ fn customize_shortcut_json_adds_lan_wifi_branch_when_configured() {
     );
     assert_eq!(
         actions[2].pointer("/WFWorkflowActionParameters/WFCondition"),
-        Some(&Value::String("Equals".to_string()))
+        Some(&Value::from(4))
+    );
+    assert_eq!(
+        actions[2].pointer("/WFWorkflowActionParameters/WFInput/Type"),
+        Some(&Value::String("Variable".to_string()))
+    );
+    let first_wifi_uuid = actions[1]
+        .pointer("/WFWorkflowActionParameters/UUID")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert_eq!(
+        actions[2].pointer("/WFWorkflowActionParameters/WFInput/Variable/Value/OutputUUID"),
+        Some(&Value::String(first_wifi_uuid.to_string()))
     );
     assert_eq!(
         actions[2].pointer("/WFWorkflowActionParameters/WFConditionalActionString"),
@@ -141,7 +153,15 @@ fn customize_shortcut_json_adds_lan_wifi_branch_when_configured() {
     );
     assert_eq!(
         actions[6].pointer("/WFWorkflowActionParameters/WFCondition"),
-        Some(&Value::String("Equals".to_string()))
+        Some(&Value::from(4))
+    );
+    let second_wifi_uuid = actions[5]
+        .pointer("/WFWorkflowActionParameters/UUID")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert_eq!(
+        actions[6].pointer("/WFWorkflowActionParameters/WFInput/Variable/Value/OutputUUID"),
+        Some(&Value::String(second_wifi_uuid.to_string()))
     );
     assert_eq!(
         actions[6].pointer("/WFWorkflowActionParameters/WFConditionalActionString"),

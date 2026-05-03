@@ -343,8 +343,9 @@ fn push_lan_ssid_branches(
 ) -> Result<()> {
     if let Some((ssid, rest)) = remaining_ssids.split_first() {
         let group = pseudo_uuid();
-        actions.push(get_wifi_network_name_action(&pseudo_uuid()));
-        actions.push(if_current_wifi_equals_action(&group, ssid));
+        let wifi_uuid = pseudo_uuid();
+        actions.push(get_wifi_network_name_action(&wifi_uuid));
+        actions.push(if_current_wifi_equals_action(&group, &wifi_uuid, ssid));
         actions.push(download_action_from_template(
             download_template,
             lan_url,
@@ -426,13 +427,14 @@ fn get_wifi_network_name_action(uuid: &str) -> Value {
     })
 }
 
-fn if_current_wifi_equals_action(grouping_identifier: &str, ssid: &str) -> Value {
+fn if_current_wifi_equals_action(grouping_identifier: &str, wifi_uuid: &str, ssid: &str) -> Value {
     json!({
         "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
         "WFWorkflowActionParameters": {
             "GroupingIdentifier": grouping_identifier,
             "WFControlFlowMode": 0,
-            "WFCondition": "Equals",
+            "WFInput": action_output_variable(wifi_uuid, "Network Details"),
+            "WFCondition": 4,
             "WFConditionalActionString": ssid
         }
     })
@@ -454,6 +456,20 @@ fn end_if_action(grouping_identifier: &str) -> Value {
         "WFWorkflowActionParameters": {
             "GroupingIdentifier": grouping_identifier,
             "WFControlFlowMode": 2
+        }
+    })
+}
+
+fn action_output_variable(output_uuid: &str, output_name: &str) -> Value {
+    json!({
+        "Type": "Variable",
+        "Variable": {
+            "WFSerializationType": "WFTextTokenAttachment",
+            "Value": {
+                "Type": "ActionOutput",
+                "OutputName": output_name,
+                "OutputUUID": output_uuid
+            }
         }
     })
 }
