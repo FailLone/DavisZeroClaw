@@ -242,6 +242,18 @@ allow_private_hosts = []
 # tunnel_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # hostname = "davis.yourdomain.com"
 
+# --- Shortcut network routing (optional) -------------------------------------
+# If set, the generated iPhone Shortcut uses the LAN URL when the current Wi-Fi
+# name matches one of lan_ssids; otherwise it uses external_url.
+# external_url can be omitted when [tunnel].hostname is set.
+# lan_url can be omitted; Davis will detect this Mac's LAN IP while generating
+# the Shortcut and use http://<mac-ip>:3012/shortcut.
+#
+# [shortcut]
+# external_url = "https://davis.yourdomain.com/shortcut"
+# lan_ssids = ["HomeWiFi", "HomeWiFi_5G"]
+# lan_url = "http://192.168.1.2:3012/shortcut" # optional override
+
 # --- Weekly digest (MVP Phase 5) --------------------------------------------
 # Davis does no scheduling or delivery itself; these fields are rendered into
 # zeroclaw's config.toml as [[cron.jobs]] so zeroclaw runs the agent cron that

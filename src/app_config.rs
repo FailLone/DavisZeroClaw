@@ -23,6 +23,8 @@ pub struct LocalConfig {
     pub zeroclaw: ZeroclawConfig,
     #[serde(default)]
     pub tunnel: Option<TunnelConfig>,
+    #[serde(default)]
+    pub shortcut: ShortcutConfig,
 }
 
 /// User-editable settings rendered into zeroclaw's `config.toml` as
@@ -99,6 +101,16 @@ pub struct WebhookConfig {
 pub struct TunnelConfig {
     pub tunnel_id: Option<String>,
     pub hostname: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ShortcutConfig {
+    #[serde(default)]
+    pub external_url: Option<String>,
+    #[serde(default)]
+    pub lan_url: Option<String>,
+    #[serde(default)]
+    pub lan_ssids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

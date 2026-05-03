@@ -63,6 +63,97 @@ fn customize_shortcut_json_sets_url_and_secret_header() {
 }
 
 #[test]
+fn customize_shortcut_json_adds_lan_wifi_branch_when_configured() {
+    let mut workflow = json!({
+        "WFWorkflowImportQuestions": [
+            {
+                "ActionIndex": 1,
+                "DefaultValue": "http://old"
+            }
+        ],
+        "WFWorkflowActions": [
+            {
+                "WFWorkflowActionIdentifier": "is.workflow.actions.ask",
+                "WFWorkflowActionParameters": {
+                    "UUID": "ASK-UUID"
+                }
+            },
+            {
+                "WFWorkflowActionIdentifier": "is.workflow.actions.downloadurl",
+                "WFWorkflowActionParameters": {
+                    "UUID": "DOWNLOAD-UUID",
+                    "WFURL": "http://old"
+                }
+            },
+            {
+                "WFWorkflowActionIdentifier": "is.workflow.actions.speaktext",
+                "WFWorkflowActionParameters": {
+                    "UUID": "SPEAK-UUID"
+                }
+            }
+        ]
+    });
+    let lan = ShortcutLanRouting {
+        lan_url: "http://192.168.1.2:3012/shortcut".to_string(),
+        lan_ssids: vec!["FailLone".to_string(), "FailLone_5G".to_string()],
+    };
+
+    customize_shortcut_json_with_routing(
+        &mut workflow,
+        "https://davis.faillone.com/shortcut",
+        Some(&lan),
+        Some("secret"),
+    )
+    .unwrap();
+
+    let actions = workflow
+        .pointer("/WFWorkflowActions")
+        .and_then(Value::as_array)
+        .unwrap();
+    assert_eq!(actions.len(), 9);
+    assert_eq!(
+        actions[1].pointer("/WFWorkflowActionIdentifier"),
+        Some(&Value::String("is.workflow.actions.getwifi".to_string()))
+    );
+    assert_eq!(
+        actions[2].pointer("/WFWorkflowActionParameters/WFTextActionText"),
+        Some(&Value::String("|FailLone|FailLone_5G|".to_string()))
+    );
+    assert_eq!(
+        actions[3].pointer("/WFWorkflowActionParameters/WFCondition"),
+        Some(&Value::from(99))
+    );
+    assert_eq!(
+        actions[4].pointer("/WFWorkflowActionParameters/WFURL"),
+        Some(&Value::String(
+            "http://192.168.1.2:3012/shortcut".to_string()
+        ))
+    );
+    assert_eq!(
+        actions[6].pointer("/WFWorkflowActionParameters/WFURL"),
+        Some(&Value::String(
+            "https://davis.faillone.com/shortcut".to_string()
+        ))
+    );
+    assert_eq!(
+        workflow.pointer("/WFWorkflowImportQuestions/0/ActionIndex"),
+        Some(&Value::from(6))
+    );
+    assert_eq!(
+        actions[4].pointer(
+            "/WFWorkflowActionParameters/WFHTTPHeaders/Value/WFDictionaryFieldValueItems/0/WFValue"
+        ),
+        Some(&Value::String("secret".to_string()))
+    );
+    assert_eq!(
+        actions[6].pointer(
+            "/WFWorkflowActionParameters/WFHTTPHeaders/Value/WFDictionaryFieldValueItems/0/WFValue"
+        ),
+        Some(&Value::String("secret".to_string()))
+    );
+}
+
+#[test]
 fn customize_shortcut_json_removes_secret_header_when_disabled() {
     let mut workflow = json!({
         "WFWorkflowImportQuestions": [
@@ -470,6 +561,85 @@ fn tunnel_config_deserializes_from_toml() {
         Some("aaaabbbb-1111-2222-3333-ccccddddeeee")
     );
     assert_eq!(tunnel.hostname.as_deref(), Some("davis.example.com"));
+}
+
+#[test]
+fn shortcut_config_deserializes_from_toml() {
+    let toml = r#"
+        [home_assistant]
+        url = "http://ha.local:8123"
+        token = "token"
+
+        [imessage]
+        allowed_contacts = ["+15551234567"]
+
+        [[providers]]
+        name = "openai"
+        api_key = "sk-test"
+        base_url = "https://api.openai.com/v1"
+        allowed_models = ["gpt-test"]
+
+        [routing]
+        default_profile = "home_control"
+
+        [routing.profiles.home_control]
+        provider = "openai"
+        model = "gpt-test"
+
+        [routing.profiles.general_qa]
+        provider = "openai"
+        model = "gpt-test"
+
+        [routing.profiles.research]
+        provider = "openai"
+        model = "gpt-test"
+
+        [routing.profiles.structured_lookup]
+        provider = "openai"
+        model = "gpt-test"
+
+        [shortcut]
+        external_url = "https://davis.example.com/shortcut"
+        lan_ssids = ["FailLone", "FailLone_5G"]
+    "#;
+    let config: crate::LocalConfig = toml::from_str(toml).unwrap();
+    assert_eq!(
+        config.shortcut.external_url.as_deref(),
+        Some("https://davis.example.com/shortcut")
+    );
+    assert!(config.shortcut.lan_url.is_none());
+    assert_eq!(config.shortcut.lan_ssids, vec!["FailLone", "FailLone_5G"]);
+}
+
+#[test]
+fn shortcut_route_config_detects_lan_url_when_ssids_are_configured() {
+    let root = unique_test_dir("shortcut-route-config");
+    fs::create_dir_all(root.join("config").join("davis")).unwrap();
+    fs::write(
+        root.join("config").join("davis").join("local.toml"),
+        r#"
+        [tunnel]
+        hostname = "davis.example.com"
+
+        [shortcut]
+        lan_ssids = ["FailLone", "FailLone_5G"]
+    "#,
+    )
+    .unwrap();
+    std::env::set_var("DAVIS_SHORTCUT_HOST_IP", "192.168.1.23");
+    let paths = RuntimePaths {
+        repo_root: root.clone(),
+        runtime_dir: root.join(".runtime").join("davis"),
+    };
+
+    let route = resolve_shortcut_route_config(&paths, None);
+
+    std::env::remove_var("DAVIS_SHORTCUT_HOST_IP");
+    assert_eq!(route.external_url, "https://davis.example.com/shortcut");
+    let lan = route.lan.unwrap();
+    assert_eq!(lan.lan_url, "http://192.168.1.23:3012/shortcut");
+    assert_eq!(lan.lan_ssids, vec!["FailLone", "FailLone_5G"]);
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

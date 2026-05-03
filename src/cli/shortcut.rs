@@ -31,32 +31,19 @@ pub(super) fn build_shortcut(
         .repo_root
         .join("shortcuts")
         .join("叫下戴维斯.shortcut");
-    let webhook_url = match url
-        .or_else(|| std::env::var("DAVIS_SHORTCUT_WEBHOOK_URL").ok())
-        .filter(|value| !value.trim().is_empty())
-    {
-        Some(value) => value,
-        None => {
-            let host_ip = detect_host_ip().unwrap_or_else(|| {
-                eprintln!(
-                    "Warning: could not detect this Mac's LAN IP; leaving URL host as <mac-ip>."
-                );
-                "<mac-ip>".to_string()
-            });
-            let port =
-                std::env::var("DAVIS_SHORTCUT_WEBHOOK_PORT").unwrap_or_else(|_| "3012".to_string());
-            let path = std::env::var("DAVIS_SHORTCUT_WEBHOOK_PATH")
-                .unwrap_or_else(|_| "/shortcut".to_string());
-            format!("http://{host_ip}:{port}{path}")
-        }
-    };
+    let route_config = resolve_shortcut_route_config(paths, url);
 
     let webhook_secret = resolve_shortcut_secret(paths, secret, no_secret);
     let raw = fs::read_to_string(&shortcut_json)
         .with_context(|| format!("failed to read {}", shortcut_json.display()))?;
     let mut workflow: Value = serde_json::from_str(&raw)
         .with_context(|| format!("invalid shortcut JSON: {}", shortcut_json.display()))?;
-    customize_shortcut_json(&mut workflow, &webhook_url, webhook_secret.as_deref())?;
+    customize_shortcut_json_with_routing(
+        &mut workflow,
+        &route_config.external_url,
+        route_config.lan.as_ref(),
+        webhook_secret.as_deref(),
+    )?;
 
     let unique = unique_suffix();
     let tmp_json = paths
@@ -95,7 +82,11 @@ pub(super) fn build_shortcut(
     drop(cleanup);
 
     println!("Built {}", output_shortcut.display());
-    println!("Webhook URL: {webhook_url}");
+    println!("Webhook URL: {}", route_config.external_url);
+    if let Some(lan) = &route_config.lan {
+        println!("LAN URL: {}", lan.lan_url);
+        println!("LAN SSIDs: {}", lan.lan_ssids.join(", "));
+    }
     let embedded_secret = webhook_secret.is_some();
     if embedded_secret {
         println!("Embedded header: X-Webhook-Secret");
@@ -103,6 +94,63 @@ pub(super) fn build_shortcut(
         println!("Embedded header: none (no webhook secret found)");
     }
     Ok(ShortcutBuild { output_shortcut })
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ShortcutRouteConfig {
+    pub(super) external_url: String,
+    pub(super) lan: Option<ShortcutLanRouting>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ShortcutLanRouting {
+    pub lan_url: String,
+    pub lan_ssids: Vec<String>,
+}
+
+pub(super) fn resolve_shortcut_route_config(
+    paths: &RuntimePaths,
+    explicit_url: Option<String>,
+) -> ShortcutRouteConfig {
+    let external_url = explicit_url
+        .or_else(|| std::env::var("DAVIS_SHORTCUT_WEBHOOK_URL").ok())
+        .or_else(|| toml_string_value(&paths.local_config_path(), "shortcut", "external_url"))
+        .or_else(|| {
+            toml_string_value(&paths.local_config_path(), "tunnel", "hostname")
+                .map(|host| format!("https://{}/shortcut", host.trim().trim_end_matches('/')))
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(default_shortcut_lan_url);
+
+    let lan_ssids = toml_string_array_value(&paths.local_config_path(), "shortcut", "lan_ssids")
+        .unwrap_or_default();
+    let lan_ssids = lan_ssids
+        .iter()
+        .map(|ssid| ssid.trim())
+        .filter(|ssid| !ssid.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let lan = if lan_ssids.is_empty() {
+        None
+    } else {
+        let lan_url = toml_string_value(&paths.local_config_path(), "shortcut", "lan_url")
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(default_shortcut_lan_url);
+        Some(ShortcutLanRouting { lan_url, lan_ssids })
+    };
+
+    ShortcutRouteConfig { external_url, lan }
+}
+
+fn default_shortcut_lan_url() -> String {
+    let host_ip = detect_host_ip().unwrap_or_else(|| {
+        eprintln!("Warning: could not detect this Mac's LAN IP; leaving URL host as <mac-ip>.");
+        "<mac-ip>".to_string()
+    });
+    let port = std::env::var("DAVIS_SHORTCUT_WEBHOOK_PORT").unwrap_or_else(|_| "3012".to_string());
+    let path =
+        std::env::var("DAVIS_SHORTCUT_WEBHOOK_PATH").unwrap_or_else(|_| "/shortcut".to_string());
+    format!("http://{host_ip}:{port}{path}")
 }
 
 pub(super) fn install_shortcut(
@@ -202,21 +250,102 @@ pub fn customize_shortcut_json(
     webhook_url: &str,
     webhook_secret: Option<&str>,
 ) -> Result<()> {
+    customize_shortcut_json_with_routing(workflow, webhook_url, None, webhook_secret)
+}
+
+pub fn customize_shortcut_json_with_routing(
+    workflow: &mut Value,
+    external_url: &str,
+    lan_routing: Option<&ShortcutLanRouting>,
+    webhook_secret: Option<&str>,
+) -> Result<()> {
     *workflow
         .pointer_mut("/WFWorkflowImportQuestions/0/DefaultValue")
         .ok_or_else(|| {
             anyhow!("shortcut template missing WFWorkflowImportQuestions.0.DefaultValue")
-        })? = Value::String(webhook_url.to_string());
-    *workflow
-        .pointer_mut("/WFWorkflowActions/1/WFWorkflowActionParameters/WFURL")
-        .ok_or_else(|| anyhow!("shortcut template missing WFWorkflowActions.1.WFURL"))? =
-        Value::String(webhook_url.to_string());
+        })? = Value::String(external_url.to_string());
+
+    if let Some(lan) = lan_routing {
+        customize_shortcut_json_dual_route(workflow, external_url, lan, webhook_secret)?;
+        return Ok(());
+    }
 
     let params = workflow
         .pointer_mut("/WFWorkflowActions/1/WFWorkflowActionParameters")
         .and_then(Value::as_object_mut)
         .ok_or_else(|| anyhow!("shortcut template missing download URL action parameters"))?;
 
+    apply_download_url_settings(params, external_url, webhook_secret);
+    Ok(())
+}
+
+fn customize_shortcut_json_dual_route(
+    workflow: &mut Value,
+    external_url: &str,
+    lan: &ShortcutLanRouting,
+    webhook_secret: Option<&str>,
+) -> Result<()> {
+    let actions = workflow
+        .pointer_mut("/WFWorkflowActions")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow!("shortcut template missing WFWorkflowActions"))?;
+    if actions.len() < 3 {
+        bail!("shortcut template must contain ask, download URL, and speak actions");
+    }
+
+    let ask_action = actions[0].clone();
+    let download_template = actions[1].clone();
+    let speak_action = actions[2].clone();
+
+    let wifi_uuid = pseudo_uuid();
+    let ssids_uuid = pseudo_uuid();
+    let if_group = pseudo_uuid();
+
+    let mut lan_download = download_template.clone();
+    apply_download_url_settings(
+        lan_download
+            .pointer_mut("/WFWorkflowActionParameters")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| anyhow!("shortcut template missing LAN download parameters"))?,
+        &lan.lan_url,
+        webhook_secret,
+    );
+
+    let mut external_download = download_template;
+    apply_download_url_settings(
+        external_download
+            .pointer_mut("/WFWorkflowActionParameters")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| anyhow!("shortcut template missing external download parameters"))?,
+        external_url,
+        webhook_secret,
+    );
+
+    *actions = vec![
+        ask_action,
+        get_wifi_network_name_action(&wifi_uuid),
+        ssid_allowlist_text_action(&ssids_uuid, &lan.lan_ssids),
+        if_current_wifi_in_allowlist_action(&if_group, &ssids_uuid, &wifi_uuid),
+        lan_download,
+        otherwise_action(&if_group),
+        external_download,
+        end_if_action(&if_group),
+        speak_action,
+    ];
+
+    if let Some(action_index) = workflow.pointer_mut("/WFWorkflowImportQuestions/0/ActionIndex") {
+        *action_index = Value::from(6);
+    }
+
+    Ok(())
+}
+
+fn apply_download_url_settings(
+    params: &mut serde_json::Map<String, Value>,
+    webhook_url: &str,
+    webhook_secret: Option<&str>,
+) {
+    params.insert("WFURL".to_string(), Value::String(webhook_url.to_string()));
     params.remove("WFHTTPHeaders");
     params.remove("ShowHeaders");
 
@@ -239,8 +368,87 @@ pub fn customize_shortcut_json(
         );
         params.insert("ShowHeaders".to_string(), Value::Bool(true));
     }
+}
 
-    Ok(())
+fn get_wifi_network_name_action(uuid: &str) -> Value {
+    json!({
+        "WFWorkflowActionIdentifier": "is.workflow.actions.getwifi",
+        "WFWorkflowActionParameters": {
+            "UUID": uuid,
+            "WFNetworkDetailsNetwork": "Wi-Fi",
+            "WFWiFiDetail": "Network Name"
+        }
+    })
+}
+
+fn ssid_allowlist_text_action(uuid: &str, ssids: &[String]) -> Value {
+    json!({
+        "WFWorkflowActionIdentifier": "is.workflow.actions.gettext",
+        "WFWorkflowActionParameters": {
+            "UUID": uuid,
+            "WFTextActionText": format!("|{}|", ssids.join("|"))
+        }
+    })
+}
+
+fn if_current_wifi_in_allowlist_action(
+    grouping_identifier: &str,
+    ssids_uuid: &str,
+    wifi_uuid: &str,
+) -> Value {
+    json!({
+        "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
+        "WFWorkflowActionParameters": {
+            "GroupingIdentifier": grouping_identifier,
+            "WFControlFlowMode": 0,
+            "WFCondition": 99,
+            "WFInput": action_output_attachment(ssids_uuid, "Text"),
+            "WFConditionalActionString": {
+                "Value": {
+                    "string": "|￼|",
+                    "attachmentsByRange": {
+                        "{1, 1}": {
+                            "OutputUUID": wifi_uuid,
+                            "Type": "ActionOutput",
+                            "OutputName": "Network Details"
+                        }
+                    }
+                },
+                "WFSerializationType": "WFTextTokenString"
+            }
+        }
+    })
+}
+
+fn otherwise_action(grouping_identifier: &str) -> Value {
+    json!({
+        "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
+        "WFWorkflowActionParameters": {
+            "GroupingIdentifier": grouping_identifier,
+            "WFControlFlowMode": 1
+        }
+    })
+}
+
+fn end_if_action(grouping_identifier: &str) -> Value {
+    json!({
+        "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
+        "WFWorkflowActionParameters": {
+            "GroupingIdentifier": grouping_identifier,
+            "WFControlFlowMode": 2
+        }
+    })
+}
+
+fn action_output_attachment(output_uuid: &str, output_name: &str) -> Value {
+    json!({
+        "Value": {
+            "OutputUUID": output_uuid,
+            "Type": "ActionOutput",
+            "OutputName": output_name
+        },
+        "WFSerializationType": "WFTextTokenAttachment"
+    })
 }
 
 pub(super) fn detect_host_ip() -> Option<String> {
