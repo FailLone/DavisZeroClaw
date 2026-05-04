@@ -2,7 +2,7 @@ use super::*;
 use crate::{check_local_config, RuntimePaths};
 use anyhow::{anyhow, bail, Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -38,7 +38,7 @@ pub(super) fn tunnel_cloudflared_config_path() -> Result<PathBuf> {
 
 pub(super) fn render_tunnel_cloudflared_config(
     tunnel_id: &str,
-    credentials_path: &PathBuf,
+    credentials_path: &Path,
     hostname: &str,
 ) -> String {
     let credentials_str = credentials_path.display();
