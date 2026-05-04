@@ -111,6 +111,38 @@ pub struct ShortcutConfig {
     pub lan_url: Option<String>,
     #[serde(default)]
     pub lan_ssids: Vec<String>,
+    #[serde(default)]
+    pub reply: Option<ShortcutReplyConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutReplyConfig {
+    #[serde(default = "default_brief_threshold_chars")]
+    pub brief_threshold_chars: usize,
+    #[serde(default = "default_shortcut_wait_timeout_secs")]
+    pub shortcut_wait_timeout_secs: u64,
+    #[serde(default = "default_pending_max_age_secs")]
+    pub pending_max_age_secs: u64,
+    pub default_imessage_handle: String,
+    pub phrases: ShortcutReplyPhrases,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutReplyPhrases {
+    pub speak_brief_imessage_full: String,
+    pub error_generic: String,
+}
+
+fn default_brief_threshold_chars() -> usize {
+    60
+}
+
+fn default_shortcut_wait_timeout_secs() -> u64 {
+    20
+}
+
+fn default_pending_max_age_secs() -> u64 {
+    300
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -909,8 +941,41 @@ fn validate_local_config(mut config: LocalConfig) -> Result<LocalConfig> {
     validate_mcp_servers(&mut config.mcp)?;
     validate_article_memory_config(&mut config)?;
     validate_query_classification_override(&mut config.query_classification)?;
+    validate_shortcut_reply(&mut config.shortcut.reply)?;
 
     Ok(config)
+}
+
+fn validate_shortcut_reply(reply: &mut Option<ShortcutReplyConfig>) -> Result<()> {
+    let Some(cfg) = reply.as_mut() else {
+        return Ok(());
+    };
+    cfg.default_imessage_handle = cfg.default_imessage_handle.trim().to_string();
+    if cfg.default_imessage_handle.is_empty() {
+        return Err(anyhow!(
+            "shortcut.reply.default_imessage_handle must not be empty"
+        ));
+    }
+    cfg.phrases.speak_brief_imessage_full =
+        cfg.phrases.speak_brief_imessage_full.trim().to_string();
+    if cfg.phrases.speak_brief_imessage_full.is_empty() {
+        return Err(anyhow!(
+            "shortcut.reply.phrases.speak_brief_imessage_full must not be empty"
+        ));
+    }
+    cfg.phrases.error_generic = cfg.phrases.error_generic.trim().to_string();
+    if cfg.phrases.error_generic.is_empty() {
+        return Err(anyhow!(
+            "shortcut.reply.phrases.error_generic must not be empty"
+        ));
+    }
+    if cfg.shortcut_wait_timeout_secs == 0 {
+        cfg.shortcut_wait_timeout_secs = default_shortcut_wait_timeout_secs();
+    }
+    if cfg.pending_max_age_secs == 0 {
+        cfg.pending_max_age_secs = default_pending_max_age_secs();
+    }
+    Ok(())
 }
 
 fn validate_mcp_servers(mcp: &mut McpConfig) -> Result<()> {
@@ -1364,5 +1429,111 @@ mod refresh_config_tests {
             ..RefreshConfig::default()
         };
         assert!(cfg.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod shortcut_reply_config_tests {
+    use super::*;
+
+    const MINIMAL_TOML: &str = r#"
+[home_assistant]
+url = "x"
+token = "y"
+
+[imessage]
+allowed_contacts = ["+15550000000"]
+
+[[providers]]
+name = "p"
+api_key = "k"
+allowed_models = ["m"]
+
+[routing.profiles.home_control]
+provider = "p"
+model = "m"
+
+[routing.profiles.general_qa]
+provider = "p"
+model = "m"
+
+[routing.profiles.research]
+provider = "p"
+model = "m"
+
+[routing.profiles.structured_lookup]
+provider = "p"
+model = "m"
+
+[shortcut.reply]
+default_imessage_handle = "you@icloud.com"
+
+[shortcut.reply.phrases]
+speak_brief_imessage_full = "详情我通过短信发你"
+error_generic = "戴维斯好像出问题了"
+"#;
+
+    #[test]
+    fn shortcut_reply_config_defaults_apply() {
+        let cfg: LocalConfig = toml::from_str(MINIMAL_TOML).expect("minimal config parses");
+        let reply = cfg.shortcut.reply.expect("reply block present");
+        assert_eq!(reply.brief_threshold_chars, 60);
+        assert_eq!(reply.shortcut_wait_timeout_secs, 20);
+        assert_eq!(reply.pending_max_age_secs, 300);
+        assert_eq!(reply.default_imessage_handle, "you@icloud.com");
+        assert_eq!(
+            reply.phrases.speak_brief_imessage_full,
+            "详情我通过短信发你"
+        );
+        assert_eq!(reply.phrases.error_generic, "戴维斯好像出问题了");
+    }
+
+    #[test]
+    fn shortcut_reply_absent_is_none() {
+        let no_reply_toml = MINIMAL_TOML.replace(
+            "\n[shortcut.reply]\ndefault_imessage_handle = \"you@icloud.com\"\n\n[shortcut.reply.phrases]\nspeak_brief_imessage_full = \"详情我通过短信发你\"\nerror_generic = \"戴维斯好像出问题了\"\n",
+            "",
+        );
+        let cfg: LocalConfig = toml::from_str(&no_reply_toml).expect("parses");
+        assert!(cfg.shortcut.reply.is_none());
+    }
+
+    #[test]
+    fn empty_imessage_handle_is_rejected() {
+        let toml = MINIMAL_TOML.replace(
+            "default_imessage_handle = \"you@icloud.com\"",
+            "default_imessage_handle = \"   \"",
+        );
+        let parsed: LocalConfig = toml::from_str(&toml).expect("parses");
+        let err = validate_local_config(parsed).expect_err("must reject empty handle");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("default_imessage_handle"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn empty_error_phrase_is_rejected() {
+        let toml = MINIMAL_TOML.replace(
+            "error_generic = \"戴维斯好像出问题了\"",
+            "error_generic = \"\"",
+        );
+        let parsed: LocalConfig = toml::from_str(&toml).expect("parses");
+        let err = validate_local_config(parsed).expect_err("must reject empty phrase");
+        assert!(err.to_string().contains("error_generic"));
+    }
+
+    #[test]
+    fn zero_timeouts_reset_to_defaults() {
+        let toml = MINIMAL_TOML.replace(
+            "default_imessage_handle = \"you@icloud.com\"",
+            "default_imessage_handle = \"you@icloud.com\"\nshortcut_wait_timeout_secs = 0\npending_max_age_secs = 0",
+        );
+        let parsed: LocalConfig = toml::from_str(&toml).expect("parses");
+        let cfg = validate_local_config(parsed).expect("validates");
+        let reply = cfg.shortcut.reply.expect("reply present");
+        assert_eq!(reply.shortcut_wait_timeout_secs, 20);
+        assert_eq!(reply.pending_max_age_secs, 300);
     }
 }

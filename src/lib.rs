@@ -39,7 +39,8 @@ pub use app_config::{
     ArticleMemoryValueConfig, Crawl4aiConfig, HomeAssistantConfig, ImessageConfig, LocalConfig,
     McpConfig, McpServerConfig, McpTransport, ModelProviderConfig, OpenRouterLlmEngineConfig,
     QualityGateToml, RoutingConfig, RoutingProfileConfig, RoutingProfilesConfig,
-    RuleLearningConfig, TranslateConfig, WebhookConfig,
+    RuleLearningConfig, ShortcutConfig, ShortcutReplyConfig, ShortcutReplyPhrases, TranslateConfig,
+    WebhookConfig,
 };
 pub use article_memory::discovery::{
     BraveSearch, DiscoveryWorker, DiscoveryWorkerDeps, SearchError, SearchHit, SearchProvider,
