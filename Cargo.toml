@@ -53,7 +53,7 @@ clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 hmac = "0.12"
 libc = "0.2"
-lru = "0.12"
+lru = "0.18"
 pathdiff = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 scraper = "0.19"
@@ -73,8 +73,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-wiremock = "0.6"
 walkdir = "2"
+wiremock = "0.6"
 
 # Release profile hardening for the launchd daemon binary.
 # lto="thin"        — 15-25% smaller binary, faster startup
