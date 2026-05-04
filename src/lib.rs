@@ -27,6 +27,7 @@ mod observability;
 mod runtime_paths;
 mod server;
 pub mod server_digest;
+mod shortcut_reply;
 mod support;
 
 pub use advisor::{
