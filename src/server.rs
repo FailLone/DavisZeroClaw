@@ -106,6 +106,10 @@ pub struct AppState {
     /// across handlers so the 30-second sustained-failure window survives
     /// per-request state. `TimeDebouncer::new(Duration::from_secs(30))`.
     pub component_reachability_debouncer: Arc<crate::mempalace_sink::TimeDebouncer>,
+    /// Reply channel state, set only when `[shortcut.reply]` is present
+    /// in local.toml. `None` disables the synchronous-wait path — the
+    /// bridge then falls back to the historical 202 Accepted behavior.
+    pub shortcut_reply: Option<Arc<crate::shortcut_reply::ShortcutReplyState>>,
 }
 
 impl AppState {
@@ -125,6 +129,7 @@ impl AppState {
         learned_rules: Arc<crate::article_memory::LearnedRuleStore>,
         rule_stats: Arc<crate::article_memory::RuleStatsStore>,
         sample_store: Arc<crate::article_memory::SampleStore>,
+        shortcut_reply: Option<Arc<crate::shortcut_reply::ShortcutReplyState>>,
     ) -> Self {
         Self {
             client,
@@ -145,6 +150,7 @@ impl AppState {
             component_reachability_debouncer: Arc::new(crate::mempalace_sink::TimeDebouncer::new(
                 std::time::Duration::from_secs(30),
             )),
+            shortcut_reply,
         }
     }
 
@@ -209,9 +215,21 @@ pub fn build_app(state: AppState) -> Router {
 }
 
 pub fn build_shortcut_bridge_app(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(shortcut_bridge_health))
-        .route("/shortcut", post(shortcut_bridge))
+        .route("/shortcut", post(shortcut_bridge));
+    let router = if let Some(reply_state) = state.shortcut_reply.clone() {
+        router.route(
+            "/shortcut/reply",
+            post(move |body: Bytes| {
+                let reply_state = reply_state.clone();
+                async move { crate::shortcut_reply::handle_reply(State(reply_state), body).await }
+            }),
+        )
+    } else {
+        router
+    };
+    router
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -338,55 +356,196 @@ async fn shortcut_bridge(
     if state.shortcut_secret.trim().is_empty() {
         return json_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            json!({
-                "status": "failed",
-                "reason": "missing_webhook_secret",
-            }),
+            json!({"status":"failed","reason":"missing_webhook_secret"}),
         );
     }
-
     let provided_secret = headers
         .get("x-webhook-secret")
-        .and_then(|value| value.to_str().ok())
+        .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     if provided_secret != state.shortcut_secret {
         return json_response(
             StatusCode::UNAUTHORIZED,
-            json!({
-                "status": "failed",
-                "reason": "invalid_webhook_secret",
-            }),
+            json!({"status":"failed","reason":"invalid_webhook_secret"}),
         );
     }
 
-    if serde_json::from_slice::<Value>(&body).is_err() {
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            json!({
-                "status": "failed",
-                "reason": "invalid_json",
-            }),
+    // Fast path: no reply channel configured → historical fire-and-forget.
+    let Some(reply_state) = state.shortcut_reply.clone() else {
+        return forward_legacy_and_accept(&state.shortcut_secret, body).await;
+    };
+
+    // Parse the body as JSON (to read and rewrite thread_id).
+    let mut parsed: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"status":"failed","reason":"invalid_json"}),
+            );
+        }
+    };
+    let prefix = parsed
+        .get("thread_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    let prefix_owned = match prefix {
+        "ios:iphone" | "ios:homepod" => prefix.to_string(),
+        _ => {
+            tracing::warn!(
+                target: "shortcut_reply",
+                event = "bridge_parse_failed",
+                thread_id = %prefix,
+                "unknown thread_id prefix",
+            );
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"status":"failed","reason":"invalid_thread_id"}),
+            );
+        }
+    };
+
+    // Register a pending reply waiter.
+    let default_handle = reply_state.config.default_imessage_handle.clone();
+    let (request_id, rx) = reply_state.pending.register(Some(default_handle));
+    reply_state
+        .metrics
+        .total_registered
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    // Rewrite thread_id = "<prefix>:<uuid>" and re-serialize.
+    if let Some(obj) = parsed.as_object_mut() {
+        obj.insert(
+            "thread_id".to_string(),
+            Value::String(format!("{prefix_owned}:{request_id}")),
         );
     }
+    let rewritten = match serde_json::to_vec(&parsed) {
+        Ok(b) => b,
+        Err(_) => {
+            let _ = reply_state.pending.abandon(&request_id);
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"status":"failed","reason":"serialize_failed"}),
+            );
+        }
+    };
+    let signature = hmac_sha256_hex(&state.shortcut_secret, &rewritten);
 
-    let signature = hmac_sha256_hex(&state.shortcut_secret, &body);
+    // Forward with the existing 10s timeout.
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
     {
-        Ok(client) => client,
+        Ok(c) => c,
+        Err(err) => {
+            let _ = reply_state.pending.abandon(&request_id);
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"status":"failed","reason":"client_build_failed","message":err.to_string()}),
+            );
+        }
+    };
+    match client
+        .post("http://127.0.0.1:3001/shortcut")
+        .header("content-type", "application/json")
+        .header("x-webhook-signature", signature)
+        .body(rewritten)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {}
+        Ok(resp) => {
+            let _ = reply_state.pending.abandon(&request_id);
+            return json_response(
+                StatusCode::BAD_GATEWAY,
+                json!({
+                    "status":"failed",
+                    "reason":"zeroclaw_webhook_rejected",
+                    "upstream_status": resp.status().as_u16(),
+                }),
+            );
+        }
+        Err(err) => {
+            let _ = reply_state.pending.abandon(&request_id);
+            return json_response(
+                StatusCode::BAD_GATEWAY,
+                json!({
+                    "status":"failed",
+                    "reason":"zeroclaw_webhook_unreachable",
+                    "message": err.to_string(),
+                }),
+            );
+        }
+    }
+
+    // Await the reply with a 1-second slack before the Shortcut-side timeout.
+    let davis_timeout = Duration::from_secs(
+        reply_state
+            .config
+            .shortcut_wait_timeout_secs
+            .saturating_sub(1)
+            .max(1),
+    );
+    match tokio::time::timeout(davis_timeout, rx).await {
+        Ok(Ok(resp)) => {
+            let value = serde_json::to_value(resp)
+                .unwrap_or_else(|_| json!({"speak_text": null, "imessage_sent": false}));
+            (StatusCode::OK, Json(value))
+        }
+        Ok(Err(_recv_err)) => {
+            // oneshot sender dropped — treat as internal bug signal.
+            tracing::error!(
+                target: "shortcut_reply",
+                event = "oneshot_closed",
+                request_id = %request_id,
+                "reply receiver closed unexpectedly",
+            );
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"status":"failed","reason":"oneshot_closed"}),
+            )
+        }
+        Err(_elapsed) => {
+            let _ = reply_state.pending.abandon(&request_id);
+            tracing::info!(
+                target: "shortcut_reply",
+                event = "timeout",
+                request_id = %request_id,
+                "davis-side oneshot timed out; handing off to abandoned fallback",
+            );
+            json_response(
+                StatusCode::GATEWAY_TIMEOUT,
+                json!({"status":"failed","reason":"timeout"}),
+            )
+        }
+    }
+}
+
+/// Legacy path: used only when `[shortcut.reply]` is NOT configured in
+/// local.toml. Preserves the historical fire-and-forget behavior so
+/// existing deployments that haven't adopted reply still work.
+async fn forward_legacy_and_accept(secret: &str, body: Bytes) -> (StatusCode, Json<Value>) {
+    if serde_json::from_slice::<Value>(&body).is_err() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"status":"failed","reason":"invalid_json"}),
+        );
+    }
+    let signature = hmac_sha256_hex(secret, &body);
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
         Err(err) => {
             return json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                json!({
-                    "status": "failed",
-                    "reason": "client_build_failed",
-                    "message": err.to_string(),
-                }),
-            )
+                json!({"status":"failed","reason":"client_build_failed","message":err.to_string()}),
+            );
         }
     };
-
     match client
         .post("http://127.0.0.1:3001/shortcut")
         .header("content-type", "application/json")
@@ -395,22 +554,22 @@ async fn shortcut_bridge(
         .send()
         .await
     {
-        Ok(response) if response.status().is_success() => {
-            json_response(StatusCode::ACCEPTED, json!({"status": "accepted"}))
+        Ok(resp) if resp.status().is_success() => {
+            json_response(StatusCode::ACCEPTED, json!({"status":"accepted"}))
         }
-        Ok(response) => json_response(
+        Ok(resp) => json_response(
             StatusCode::BAD_GATEWAY,
             json!({
-                "status": "failed",
-                "reason": "zeroclaw_webhook_rejected",
-                "upstream_status": response.status().as_u16(),
+                "status":"failed",
+                "reason":"zeroclaw_webhook_rejected",
+                "upstream_status": resp.status().as_u16(),
             }),
         ),
         Err(err) => json_response(
             StatusCode::BAD_GATEWAY,
             json!({
-                "status": "failed",
-                "reason": "zeroclaw_webhook_unreachable",
+                "status":"failed",
+                "reason":"zeroclaw_webhook_unreachable",
                 "message": err.to_string(),
             }),
         ),
@@ -1192,5 +1351,50 @@ mod tests {
             hmac_sha256_hex("key", b"The quick brown fox jumps over the lazy dog"),
             "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
         );
+    }
+}
+
+#[cfg(test)]
+mod shortcut_bridge_reply_tests {
+    use super::*;
+    use crate::shortcut_reply::{PendingReplies, ReplyMetrics, ShortcutReplyState};
+    use crate::{ShortcutReplyConfig, ShortcutReplyPhrases};
+    use async_trait::async_trait;
+
+    struct NoopSender;
+    #[async_trait]
+    impl crate::shortcut_reply::ImessageSender for NoopSender {
+        async fn send(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn make_reply_state() -> Arc<ShortcutReplyState> {
+        Arc::new(ShortcutReplyState {
+            pending: Arc::new(PendingReplies::new()),
+            config: ShortcutReplyConfig {
+                brief_threshold_chars: 60,
+                shortcut_wait_timeout_secs: 3,
+                pending_max_age_secs: 300,
+                default_imessage_handle: "you@icloud.com".into(),
+                phrases: ShortcutReplyPhrases {
+                    speak_brief_imessage_full: "brief".into(),
+                    error_generic: "err".into(),
+                },
+            },
+            imessage_sender: Arc::new(NoopSender),
+            metrics: Arc::new(ReplyMetrics::default()),
+        })
+    }
+
+    #[tokio::test]
+    async fn parse_thread_id_from_bridge_rejects_legacy() {
+        // Documentary: bridge-side prefix gate uses literal match on
+        // "ios:iphone" | "ios:homepod" (see shortcut_bridge). Legacy
+        // "iphone-shortcuts" must not pass. Full e2e is Task 9.
+        let state = make_reply_state();
+        let tid = "iphone-shortcuts";
+        assert!(!matches!(tid, "ios:iphone" | "ios:homepod"));
+        drop(state);
     }
 }

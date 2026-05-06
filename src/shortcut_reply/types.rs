@@ -1,7 +1,4 @@
 //! Pure type declarations for the shortcut reply channel. No behavior.
-//! Transitional: scaffolded in Task 2; consumers land in Tasks 3-8.
-//! Remove this attribute in Task 8 once every item has a live caller.
-#![allow(dead_code)]
 
 use serde::Serialize;
 use tokio::sync::oneshot;
@@ -49,6 +46,8 @@ pub struct ShortcutResponse {
     pub imessage_sent: bool,
 }
 
+// No caller yet — reserved for error propagation from Task 8+ callers.
+#[allow(dead_code)]
 #[derive(thiserror::Error, Debug)]
 pub enum ShortcutReplyError {
     #[error("imessage send failed: {0}")]

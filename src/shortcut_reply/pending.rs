@@ -22,8 +22,6 @@ struct Inner {
     recently_delivered: LruCache<RequestId, Instant>,
 }
 
-// consumed by relay.rs in Task 6
-#[allow(dead_code)]
 pub enum TakeResult {
     Found(PendingReply),
     AlreadyDelivered,
@@ -51,8 +49,6 @@ impl PendingReplies {
     /// Register a new pending reply. Returns the generated `request_id`
     /// (uuid v4 string) and the `oneshot::Receiver` the caller should
     /// await.
-    // consumed by relay.rs in Task 6
-    #[allow(dead_code)]
     pub fn register(
         &self,
         imessage_handle: Option<String>,
@@ -79,8 +75,6 @@ impl PendingReplies {
     /// in the map so the reply handler can still find it and run the
     /// iMessage fallback). Returns `None` if the entry was already
     /// taken by the reply handler.
-    // consumed by relay.rs in Task 6
-    #[allow(dead_code)]
     pub fn abandon(&self, id: &RequestId) -> Option<()> {
         let mut inner = self.inner.lock().expect("pending_replies lock poisoned");
         if let Some(entry) = inner.waiting.get_mut(id) {
@@ -102,8 +96,6 @@ impl PendingReplies {
     /// rather than `AlreadyDelivered` — callers (the relay handler)
     /// must treat both equivalently (log + ignore) to stay robust
     /// against this narrow idempotency gap.
-    // consumed by relay.rs in Task 6
-    #[allow(dead_code)]
     pub fn take(&self, id: &RequestId) -> TakeResult {
         let mut inner = self.inner.lock().expect("pending_replies lock poisoned");
         if let Some(entry) = inner.waiting.remove(id) {
@@ -168,8 +160,6 @@ impl PendingReplies {
         purged
     }
 
-    // will be read by ReplyMetrics in Task 6/7
-    #[allow(dead_code)]
     pub fn pending_count(&self) -> usize {
         self.inner
             .lock()
@@ -178,8 +168,6 @@ impl PendingReplies {
             .len()
     }
 
-    // will be read by ReplyMetrics in Task 6/7
-    #[allow(dead_code)]
     pub fn recently_delivered_count(&self) -> usize {
         self.inner
             .lock()
@@ -192,7 +180,7 @@ impl PendingReplies {
 /// Spawn a background task that calls `gc(max_age)` every `interval`.
 /// The task owns a clone of the `Arc<PendingReplies>` and exits only
 /// when all other references to the `Arc` drop.
-// will be called by the server bridge wiring in Task 8
+// called by local_proxy.rs in Task 8
 #[allow(dead_code)]
 pub fn spawn_gc_task(pending: Arc<PendingReplies>, max_age: Duration, interval: Duration) {
     tokio::spawn(async move {

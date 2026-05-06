@@ -3,8 +3,8 @@
 //!
 //! Design: docs/superpowers/specs/2026-05-04-shortcut-reply-channel-design.md
 
-// Transitional: stub re-exports have no external consumers until Tasks
-// 7-8 wire them through AppState. Remove after Task 8.
+// Re-exports not yet consumed at the lib-crate level; local_proxy.rs
+// will import these in Task 8 (ShortcutReplyState, OsascriptSender, etc.)
 #![allow(unused_imports)]
 
 pub mod grader;

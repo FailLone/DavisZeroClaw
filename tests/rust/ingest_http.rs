@@ -53,6 +53,7 @@ async fn build_state_for_test() -> (AppState, TempDir) {
         learned_rules,
         rule_stats,
         sample_store,
+        None,
     );
     (state, tmp)
 }

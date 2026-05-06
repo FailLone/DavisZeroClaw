@@ -20,12 +20,10 @@ use std::sync::Arc;
 /// Abstraction so production uses real osascript and tests inject a mock.
 #[async_trait]
 pub trait ImessageSender: Send + Sync {
-    // consumed by AppState wiring in Task 7
-    #[allow(dead_code)]
     async fn send(&self, handle: &str, text: &str) -> anyhow::Result<()>;
 }
 
-// consumed by AppState wiring in Task 7
+// constructed by local_proxy.rs in Task 8
 #[allow(dead_code)]
 pub struct OsascriptSender {
     pub allowed: Vec<String>,
@@ -38,18 +36,13 @@ impl ImessageSender for OsascriptSender {
     }
 }
 
-// Fields incremented by relay handler; total_registered and total_gc_swept
-// are consumed by bridge handler in Task 7 and spawn_gc_task log sink in Task 12.
+// Fields incremented by relay handler; total_gc_swept consumed by
+// spawn_gc_task log sink in Task 12.
 pub struct ReplyMetrics {
-    #[allow(dead_code)] // consumed by bridge handler in Task 7
     pub total_registered: AtomicU64,
-    #[allow(dead_code)] // consumed by bridge handler in Task 7
     pub total_delivered: AtomicU64,
-    #[allow(dead_code)] // consumed by bridge handler in Task 7
     pub total_abandoned: AtomicU64,
-    #[allow(dead_code)] // consumed by bridge handler in Task 7
     pub total_unknown_reply: AtomicU64,
-    #[allow(dead_code)] // consumed by bridge handler in Task 7
     pub total_imessage_failed: AtomicU64,
     #[allow(dead_code)] // consumed by spawn_gc_task log sink in Task 12
     pub total_gc_swept: AtomicU64,
@@ -68,8 +61,6 @@ impl Default for ReplyMetrics {
     }
 }
 
-// consumed by AppState wiring in Task 7
-#[allow(dead_code)]
 pub struct ShortcutReplyState {
     pub pending: Arc<PendingReplies>,
     pub config: ShortcutReplyConfig,
@@ -85,8 +76,6 @@ struct InboundReply {
 
 /// Parse `"ios:iphone:<uuid>"` or `"ios:homepod:<uuid>"`. Returns
 /// `(prefix, request_id)` or `None` if the format is anything else.
-// consumed by server.rs bridge wiring in Task 7
-#[allow(dead_code)]
 pub fn parse_thread_id(tid: &str) -> Option<(&str, &str)> {
     let iphone = "ios:iphone:";
     let homepod = "ios:homepod:";
@@ -103,8 +92,6 @@ pub fn parse_thread_id(tid: &str) -> Option<(&str, &str)> {
     None
 }
 
-// consumed by server.rs route registration in Task 7
-#[allow(dead_code)]
 pub async fn handle_reply(State(state): State<Arc<ShortcutReplyState>>, body: Bytes) -> Response {
     let inbound: InboundReply = match serde_json::from_slice(&body) {
         Ok(v) => v,

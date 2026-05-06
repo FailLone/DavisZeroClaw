@@ -297,6 +297,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         learned_rules,
         rule_stats,
         sample_store,
+        None, // shortcut_reply; wired in Task 8
     )
     .with_mempalace_sink(mempalace_sink);
     let app = build_app(state.clone());
