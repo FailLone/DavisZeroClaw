@@ -282,6 +282,22 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         tracing::info!("refresh worker started");
     }
 
+    let shortcut_reply_state = local_config.shortcut.reply.clone().map(|cfg| {
+        let pending = std::sync::Arc::new(crate::shortcut_reply::PendingReplies::new());
+        let gc_interval = std::time::Duration::from_secs(60);
+        let gc_max_age = std::time::Duration::from_secs(cfg.pending_max_age_secs);
+        crate::shortcut_reply::spawn_gc_task(pending.clone(), gc_max_age, gc_interval);
+        let allowed = local_config.imessage.allowed_contacts.clone();
+        let sender: std::sync::Arc<dyn crate::shortcut_reply::ImessageSender> =
+            std::sync::Arc::new(crate::shortcut_reply::OsascriptSender { allowed });
+        std::sync::Arc::new(crate::shortcut_reply::ShortcutReplyState {
+            pending,
+            config: cfg,
+            imessage_sender: sender,
+            metrics: std::sync::Arc::new(crate::shortcut_reply::ReplyMetrics::default()),
+        })
+    });
+
     let state = AppState::new(
         client,
         mcp_client,
@@ -297,7 +313,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         learned_rules,
         rule_stats,
         sample_store,
-        None, // shortcut_reply; wired in Task 8
+        shortcut_reply_state.clone(),
     )
     .with_mempalace_sink(mempalace_sink);
     let app = build_app(state.clone());

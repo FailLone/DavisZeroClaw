@@ -180,8 +180,6 @@ impl PendingReplies {
 /// Spawn a background task that calls `gc(max_age)` every `interval`.
 /// The task owns a clone of the `Arc<PendingReplies>` and exits only
 /// when all other references to the `Arc` drop.
-// called by local_proxy.rs in Task 8
-#[allow(dead_code)]
 pub fn spawn_gc_task(pending: Arc<PendingReplies>, max_age: Duration, interval: Duration) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);

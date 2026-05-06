@@ -1,8 +1,5 @@
 //! Pure decision: given agent reply content, pick a `ReplyMode` and
 //! render the `speak_text` the Shortcut will speak.
-//! Transitional: scaffolded in Task 3; callers land in Tasks 6-8.
-//! Remove this attribute in Task 8 once every item has a live caller.
-#![allow(dead_code)]
 
 use crate::shortcut_reply::types::{ReplyMode, ShortcutResponse};
 

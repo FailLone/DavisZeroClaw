@@ -23,8 +23,6 @@ pub trait ImessageSender: Send + Sync {
     async fn send(&self, handle: &str, text: &str) -> anyhow::Result<()>;
 }
 
-// constructed by local_proxy.rs in Task 8
-#[allow(dead_code)]
 pub struct OsascriptSender {
     pub allowed: Vec<String>,
 }
