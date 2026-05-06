@@ -103,6 +103,7 @@ fn render_runtime_config_str(
 
     patch_allowed_roots(&mut doc, repo_root)?;
     patch_webhook_secret(&mut doc, config);
+    patch_webhook_send_url(&mut doc, config);
     patch_imessage(&mut doc, config);
     patch_providers(&mut doc, config)?;
     patch_query_classification(&mut doc, config);
@@ -220,6 +221,21 @@ fn patch_webhook_secret(doc: &mut DocumentMut, config: &LocalConfig) {
         .and_then(Item::as_table_mut)
     {
         webhook["secret"] = Item::Value(string_value(secret));
+    }
+}
+
+fn patch_webhook_send_url(doc: &mut DocumentMut, config: &LocalConfig) {
+    // Only render send_url when the reply feature is enabled.
+    if config.shortcut.reply.is_none() {
+        return;
+    }
+    if let Some(webhook) = doc
+        .get_mut("channels")
+        .and_then(Item::as_table_mut)
+        .and_then(|t| t.get_mut("webhook"))
+        .and_then(Item::as_table_mut)
+    {
+        webhook["send_url"] = Item::Value(string_value("http://127.0.0.1:3012/shortcut/reply"));
     }
 }
 
@@ -1008,6 +1024,37 @@ legacy_field = "__DAVIS_UNPATCHED__"
         assert!(
             rendered.contains("# top comment"),
             "toml_edit must preserve comments:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn send_url_rendered_when_reply_configured() {
+        let mut cfg = sample_config();
+        cfg.shortcut.reply = Some(crate::ShortcutReplyConfig {
+            brief_threshold_chars: 60,
+            shortcut_wait_timeout_secs: 20,
+            pending_max_age_secs: 300,
+            default_imessage_handle: "you@icloud.com".into(),
+            phrases: crate::ShortcutReplyPhrases {
+                speak_brief_imessage_full: "b".into(),
+                error_generic: "e".into(),
+            },
+        });
+        let rendered = render_with_test_template(&cfg);
+        assert!(
+            rendered.contains("send_url = \"http://127.0.0.1:3012/shortcut/reply\""),
+            "rendered template must contain send_url:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn send_url_absent_when_reply_not_configured() {
+        let cfg = sample_config();
+        assert!(cfg.shortcut.reply.is_none());
+        let rendered = render_with_test_template(&cfg);
+        assert!(
+            !rendered.contains("send_url"),
+            "send_url must not leak when reply disabled"
         );
     }
 }
