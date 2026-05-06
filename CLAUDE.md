@@ -39,7 +39,7 @@ If a future reviewer re-raises "Davis duplicates zeroclaw" — point them here f
 
 ```
 davis-local-proxy (3010)   ← agent-facing, the "Davis" surface
-davis-ha-proxy / shortcut (3012)
+davis-ha-proxy / shortcut (3012)   ← /shortcut (inbound) + /shortcut/reply (zeroclaw→Davis callback, sync reply channel)
 zeroclaw daemon (3000/3001) ← subprocess, launched and supervised by Davis
 ```
 
