@@ -263,3 +263,19 @@ allow_private_hosts = []
 # weekly_topic = "async-rust"
 # telegram_chat_id = "-1001234567890"
 # timezone = "Asia/Shanghai"
+
+# --- Agent reply channel (optional) -----------------------------------------
+# When present, Davis synchronously waits on the Shortcut bridge and zeroclaw
+# posts back to /shortcut/reply so iPhone- or HomePod-triggered Shortcuts speak
+# the reply on the triggering device. Without this block, the bridge falls back
+# to the historical 202 Accepted fire-and-forget behavior.
+#
+# [shortcut.reply]
+# brief_threshold_chars = 60
+# shortcut_wait_timeout_secs = 20
+# pending_max_age_secs = 300
+# default_imessage_handle = "you@icloud.com"
+#
+# [shortcut.reply.phrases]
+# speak_brief_imessage_full = "详情我通过短信发你"
+# error_generic = "戴维斯好像出问题了"

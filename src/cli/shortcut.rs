@@ -38,11 +38,13 @@ pub(super) fn build_shortcut(
         .with_context(|| format!("failed to read {}", shortcut_json.display()))?;
     let mut workflow: Value = serde_json::from_str(&raw)
         .with_context(|| format!("invalid shortcut JSON: {}", shortcut_json.display()))?;
-    customize_shortcut_json_with_routing(
+    let reply_phrases = load_reply_phrases(paths);
+    customize_shortcut_json_with_reply(
         &mut workflow,
         &route_config.external_url,
         route_config.lan.as_ref(),
         webhook_secret.as_deref(),
+        reply_phrases.as_ref(),
     )?;
 
     let unique = unique_suffix();
@@ -172,6 +174,21 @@ pub(super) fn resolve_shortcut_route_config(
     ShortcutRouteConfig { external_url, lan }
 }
 
+fn load_reply_phrases(paths: &RuntimePaths) -> Option<ReplyPhrases> {
+    let path = paths.local_config_path();
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let doc: toml::Value = toml::from_str(&raw).ok()?;
+    let reply = doc.get("shortcut")?.get("reply")?.as_table()?;
+    let phrases_tbl = reply.get("phrases")?.as_table()?;
+    Some(ReplyPhrases {
+        speak_brief_imessage_full: phrases_tbl
+            .get("speak_brief_imessage_full")?
+            .as_str()?
+            .to_string(),
+        error_generic: phrases_tbl.get("error_generic")?.as_str()?.to_string(),
+    })
+}
+
 fn default_shortcut_lan_url() -> String {
     let host_ip = detect_host_ip().unwrap_or_else(|| {
         eprintln!("Warning: could not detect this Mac's LAN IP; leaving URL host as <mac-ip>.");
@@ -289,6 +306,20 @@ pub fn customize_shortcut_json_with_routing(
     lan_routing: Option<&ShortcutLanRouting>,
     webhook_secret: Option<&str>,
 ) -> Result<()> {
+    customize_shortcut_json_with_reply(workflow, external_url, lan_routing, webhook_secret, None)
+}
+
+/// Extended renderer with optional reply wiring. When `reply_phrases`
+/// is `Some`, the renderer inserts the device-detect branch before the
+/// download URL action, patches `thread_id` to use a variable, and
+/// appends response-parse + speak actions after the download URL.
+pub fn customize_shortcut_json_with_reply(
+    workflow: &mut Value,
+    external_url: &str,
+    lan_routing: Option<&ShortcutLanRouting>,
+    webhook_secret: Option<&str>,
+    reply_phrases: Option<&ReplyPhrases>,
+) -> Result<()> {
     *workflow
         .pointer_mut("/WFWorkflowImportQuestions/0/DefaultValue")
         .ok_or_else(|| {
@@ -297,15 +328,17 @@ pub fn customize_shortcut_json_with_routing(
 
     if let Some(lan) = lan_routing {
         customize_shortcut_json_dual_route(workflow, external_url, lan, webhook_secret)?;
-        return Ok(());
+    } else {
+        let params = workflow
+            .pointer_mut("/WFWorkflowActions/1/WFWorkflowActionParameters")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| anyhow!("shortcut template missing download URL action parameters"))?;
+        apply_download_url_settings(params, external_url, webhook_secret);
     }
 
-    let params = workflow
-        .pointer_mut("/WFWorkflowActions/1/WFWorkflowActionParameters")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| anyhow!("shortcut template missing download URL action parameters"))?;
-
-    apply_download_url_settings(params, external_url, webhook_secret);
+    if let Some(phrases) = reply_phrases {
+        inject_reply_wiring(workflow, phrases)?;
+    }
     Ok(())
 }
 
@@ -319,13 +352,14 @@ fn customize_shortcut_json_dual_route(
         .pointer_mut("/WFWorkflowActions")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| anyhow!("shortcut template missing WFWorkflowActions"))?;
-    if actions.len() < 3 {
-        bail!("shortcut template must contain ask, download URL, and speak actions");
+    if actions.len() < 2 {
+        bail!("shortcut template must contain at least ask and download URL actions");
     }
 
     let ask_action = actions[0].clone();
     let download_template = actions[1].clone();
-    let speak_action = actions[2].clone();
+    // Trailing actions beyond the download URL (e.g. speak) are preserved if present.
+    let trailing_actions: Vec<Value> = actions.drain(2..).collect();
 
     let mut external_download = download_template.clone();
     apply_download_url_settings(
@@ -353,7 +387,7 @@ fn customize_shortcut_json_dual_route(
                 == Some(&Value::String(external_url.to_string()))
         })
         .unwrap_or(1);
-    routed_actions.push(speak_action);
+    routed_actions.extend(trailing_actions);
     *actions = routed_actions;
 
     if let Some(action_index) = workflow.pointer_mut("/WFWorkflowImportQuestions/0/ActionIndex") {
@@ -502,6 +536,221 @@ fn action_output_variable(output_uuid: &str, output_name: &str) -> Value {
             }
         }
     })
+}
+
+/// Phrases spoken on the triggering device when reply wiring is enabled.
+pub struct ReplyPhrases {
+    /// Spoken when the reply is brief enough to speak directly but an iMessage
+    /// full-length reply was also sent (server-rendered; not used in Shortcut).
+    pub speak_brief_imessage_full: String,
+    /// Spoken when the response body cannot be parsed or `speak_text` is empty.
+    pub error_generic: String,
+}
+
+/// Thread-id prefix action variables: a `getdevicedetails` to read
+/// Device Model, then an `if` branch to pick the prefix, emitting a
+/// variable whose `Control Flow Item` output replaces the static
+/// `"ios:iphone"` string in the download URL action.
+///
+/// Returns the sequence of actions to insert before the downloadurl
+/// action, plus the UUID of the If-group whose `Control Flow Item`
+/// output carries the computed prefix.
+fn build_device_prefix_actions() -> (Vec<Value>, String) {
+    let get_model_uuid = pseudo_uuid();
+    let if_group_uuid = pseudo_uuid();
+    let if_body_uuid = pseudo_uuid();
+    let else_body_uuid = pseudo_uuid();
+
+    let actions = vec![
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.getdevicedetails",
+            "WFWorkflowActionParameters": {
+                "UUID": get_model_uuid,
+                "WFDeviceDetail": "Device Model"
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
+            "WFWorkflowActionParameters": {
+                "GroupingIdentifier": if_group_uuid,
+                "WFControlFlowMode": 0,
+                "WFInput": action_output_variable(&get_model_uuid, "Device Model"),
+                "WFCondition": 8,
+                "WFConditionalActionString": "HomePod"
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.gettext",
+            "WFWorkflowActionParameters": {
+                "UUID": if_body_uuid,
+                "WFTextActionText": "ios:homepod"
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
+            "WFWorkflowActionParameters": {
+                "GroupingIdentifier": if_group_uuid,
+                "WFControlFlowMode": 1
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.gettext",
+            "WFWorkflowActionParameters": {
+                "UUID": else_body_uuid,
+                "WFTextActionText": "ios:iphone"
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
+            "WFWorkflowActionParameters": {
+                "GroupingIdentifier": if_group_uuid,
+                "UUID": pseudo_uuid(),
+                "WFControlFlowMode": 2
+            }
+        }),
+    ];
+    (actions, if_group_uuid)
+}
+
+/// Post-POST actions: parse `speak_text` from response and speak it
+/// unless empty; fall back to `error_phrase` when empty.
+fn build_reply_actions(error_phrase: &str, downloadurl_uuid: &str) -> Vec<Value> {
+    let dict_uuid = pseudo_uuid();
+    let text_uuid = pseudo_uuid();
+    let if_group_uuid = pseudo_uuid();
+    vec![
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.detect.dictionary",
+            "WFWorkflowActionParameters": {
+                "UUID": dict_uuid,
+                "WFInput": action_output_variable(downloadurl_uuid, "Contents of URL")
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.getvalueforkey",
+            "WFWorkflowActionParameters": {
+                "UUID": text_uuid,
+                "WFDictionaryKey": "speak_text",
+                "WFInput": action_output_variable(&dict_uuid, "Dictionary")
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
+            "WFWorkflowActionParameters": {
+                "GroupingIdentifier": if_group_uuid,
+                "WFControlFlowMode": 0,
+                "WFInput": action_output_variable(&text_uuid, "Dictionary Value"),
+                "WFCondition": 4,
+                "WFConditionalActionString": ""
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.speaktext",
+            "WFWorkflowActionParameters": {
+                "UUID": pseudo_uuid(),
+                "Text": error_phrase,
+                "Language": "zh-CN"
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
+            "WFWorkflowActionParameters": {
+                "GroupingIdentifier": if_group_uuid,
+                "WFControlFlowMode": 1
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.speaktext",
+            "WFWorkflowActionParameters": {
+                "UUID": pseudo_uuid(),
+                "Text": action_output_variable(&text_uuid, "Dictionary Value"),
+                "Language": "zh-CN"
+            }
+        }),
+        json!({
+            "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
+            "WFWorkflowActionParameters": {
+                "GroupingIdentifier": if_group_uuid,
+                "UUID": pseudo_uuid(),
+                "WFControlFlowMode": 2
+            }
+        }),
+    ]
+}
+
+/// Patch the `thread_id` dictionary entry inside the download URL's
+/// `WFJSONValues` to reference the prefix variable instead of the
+/// hardcoded `"ios:iphone"` string.
+fn patch_thread_id_to_prefix_variable(
+    download_action: &mut Value,
+    prefix_if_group_uuid: &str,
+) -> Result<()> {
+    let new_thread_id_value = json!({
+        "Value": {
+            "string": "\u{FFFC}",
+            "attachmentsByRange": {
+                "{0, 1}": {
+                    "OutputUUID": prefix_if_group_uuid,
+                    "Type": "ActionOutput",
+                    "OutputName": "Control Flow Item"
+                }
+            }
+        },
+        "WFSerializationType": "WFTextTokenString"
+    });
+    let items = download_action
+        .pointer_mut("/WFWorkflowActionParameters/WFJSONValues/Value/WFDictionaryFieldValueItems")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow!("download action missing WFDictionaryFieldValueItems"))?;
+    for item in items.iter_mut() {
+        if item.get("WFKey").and_then(Value::as_str) == Some("thread_id") {
+            if let Some(obj) = item.as_object_mut() {
+                obj.insert("WFValue".to_string(), new_thread_id_value);
+            }
+            return Ok(());
+        }
+    }
+    bail!("thread_id entry not found in download URL dictionary");
+}
+
+fn inject_reply_wiring(workflow: &mut Value, phrases: &ReplyPhrases) -> Result<()> {
+    // 1. Build the device-prefix branch to insert before the downloadurl action.
+    let (prefix_actions, prefix_if_group_uuid) = build_device_prefix_actions();
+
+    // 2. Locate the download URL action.
+    let actions = workflow
+        .pointer_mut("/WFWorkflowActions")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow!("shortcut template missing WFWorkflowActions"))?;
+    let download_idx = actions
+        .iter()
+        .position(|a| {
+            a.get("WFWorkflowActionIdentifier").and_then(Value::as_str)
+                == Some("is.workflow.actions.downloadurl")
+        })
+        .ok_or_else(|| anyhow!("no downloadurl action in workflow"))?;
+    let download_uuid = actions[download_idx]
+        .pointer("/WFWorkflowActionParameters/UUID")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("downloadurl action missing UUID"))?
+        .to_string();
+
+    // 3. Patch thread_id to use the prefix variable.
+    patch_thread_id_to_prefix_variable(&mut actions[download_idx], &prefix_if_group_uuid)?;
+
+    // 4. Splice the device-prefix actions before the downloadurl.
+    let mut new_actions = Vec::with_capacity(actions.len() + prefix_actions.len() + 8);
+    for (i, a) in actions.drain(..).enumerate() {
+        if i == download_idx {
+            new_actions.extend(prefix_actions.clone());
+        }
+        new_actions.push(a);
+    }
+    // 5. Append the post-POST reply actions.
+    new_actions.extend(build_reply_actions(&phrases.error_generic, &download_uuid));
+    *actions = new_actions;
+    let _ = &phrases.speak_brief_imessage_full; // server-rendered, not Shortcut-side
+    Ok(())
 }
 
 pub(super) fn detect_host_ip() -> Option<String> {
@@ -899,4 +1148,145 @@ pub(super) fn sqlite_rows(sqlite3: &Path, db: &Path, query: &str) -> Result<Vec<
         .filter(|line| !line.trim().is_empty())
         .map(|line| line.split('\t').map(ToString::to_string).collect())
         .collect())
+}
+
+#[cfg(test)]
+mod reply_renderer_tests {
+    use super::*;
+
+    fn minimal_template() -> Value {
+        json!({
+            "WFWorkflowImportQuestions": [{
+                "ActionIndex": 1,
+                "Category": "Parameter",
+                "DefaultValue": "http://x/shortcut",
+                "ParameterKey": "WFURL",
+                "Text": ""
+            }],
+            "WFWorkflowActions": [
+                {
+                    "WFWorkflowActionIdentifier": "is.workflow.actions.ask",
+                    "WFWorkflowActionParameters": {"UUID": "ASK-UUID"}
+                },
+                {
+                    "WFWorkflowActionIdentifier": "is.workflow.actions.downloadurl",
+                    "WFWorkflowActionParameters": {
+                        "UUID": "DL-UUID",
+                        "WFURL": "http://x/shortcut",
+                        "WFHTTPMethod": "POST",
+                        "WFJSONValues": {
+                            "Value": {
+                                "WFDictionaryFieldValueItems": [
+                                    {"WFKey": "sender", "WFValue": "ios-shortcuts", "WFItemType": 0},
+                                    {"WFKey": "thread_id", "WFValue": "ios:iphone", "WFItemType": 0}
+                                ]
+                            },
+                            "WFSerializationType": "WFDictionaryFieldValue"
+                        }
+                    }
+                }
+            ]
+        })
+    }
+
+    #[test]
+    fn reply_wiring_injects_device_detect_and_reply_actions() {
+        let mut wf = minimal_template();
+        let phrases = ReplyPhrases {
+            speak_brief_imessage_full: "详情我通过短信发你".into(),
+            error_generic: "戴维斯好像出问题了".into(),
+        };
+        customize_shortcut_json_with_reply(
+            &mut wf,
+            "http://x/shortcut",
+            None,
+            None,
+            Some(&phrases),
+        )
+        .expect("inject ok");
+        let actions = wf
+            .pointer("/WFWorkflowActions")
+            .and_then(Value::as_array)
+            .unwrap();
+        let ids: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| a.get("WFWorkflowActionIdentifier").and_then(Value::as_str))
+            .collect();
+        assert!(
+            ids.contains(&"is.workflow.actions.getdevicedetails"),
+            "must insert getdevicedetails; got {ids:?}"
+        );
+        assert!(
+            ids.contains(&"is.workflow.actions.speaktext"),
+            "must append speaktext"
+        );
+        assert!(
+            ids.contains(&"is.workflow.actions.getvalueforkey"),
+            "must parse response dict"
+        );
+    }
+
+    #[test]
+    fn reply_wiring_omitted_when_phrases_none() {
+        let mut wf = minimal_template();
+        customize_shortcut_json_with_reply(&mut wf, "http://x/shortcut", None, None, None)
+            .expect("ok");
+        let actions = wf
+            .pointer("/WFWorkflowActions")
+            .and_then(Value::as_array)
+            .unwrap();
+        let ids: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| a.get("WFWorkflowActionIdentifier").and_then(Value::as_str))
+            .collect();
+        assert!(
+            !ids.contains(&"is.workflow.actions.getdevicedetails"),
+            "no device detect without phrases"
+        );
+    }
+
+    #[test]
+    fn thread_id_entry_rewritten_to_variable() {
+        let mut wf = minimal_template();
+        let phrases = ReplyPhrases {
+            speak_brief_imessage_full: "b".into(),
+            error_generic: "e".into(),
+        };
+        customize_shortcut_json_with_reply(
+            &mut wf,
+            "http://x/shortcut",
+            None,
+            None,
+            Some(&phrases),
+        )
+        .unwrap();
+        let actions = wf
+            .pointer("/WFWorkflowActions")
+            .and_then(Value::as_array)
+            .unwrap();
+        let download = actions
+            .iter()
+            .find(|a| {
+                a.get("WFWorkflowActionIdentifier").and_then(Value::as_str)
+                    == Some("is.workflow.actions.downloadurl")
+            })
+            .unwrap();
+        let items = download
+            .pointer("/WFWorkflowActionParameters/WFJSONValues/Value/WFDictionaryFieldValueItems")
+            .and_then(Value::as_array)
+            .unwrap();
+        let thread_id_item = items
+            .iter()
+            .find(|i| i.get("WFKey").and_then(Value::as_str) == Some("thread_id"))
+            .unwrap();
+        let val = thread_id_item.get("WFValue").unwrap();
+        assert!(
+            val.is_object(),
+            "thread_id WFValue should be an attachment-token object, got {val}"
+        );
+        assert!(
+            val.get("WFSerializationType").and_then(Value::as_str) == Some("WFTextTokenString"),
+            "thread_id WFValue must be WFTextTokenString token"
+        );
+    }
 }

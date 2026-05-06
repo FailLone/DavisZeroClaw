@@ -85,20 +85,12 @@
               {
                 "WFItemType": 0,
                 "WFKey": "thread_id",
-                "WFValue": "iphone-shortcuts"
+                "WFValue": "ios:iphone"
               }
             ]
           },
           "WFSerializationType": "WFDictionaryFieldValue"
         }
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.speaktext",
-      "WFWorkflowActionParameters": {
-        "UUID": "B59B6C11-B3F1-4E6B-8342-417E99EA582D",
-        "Text": "正在处理",
-        "Language": "zh-CN"
       }
     }
   ]
