@@ -414,6 +414,7 @@ pub(super) async fn restart_davis_service(paths: &RuntimePaths) -> Result<()> {
         return install_davis_service(paths).await;
     }
 
+    ensure_release_binary(paths, "davis-local-proxy")?;
     render_current_runtime_config(paths)?;
     let user_target = launchd_user_target()?;
 
@@ -502,10 +503,6 @@ pub(super) fn render_current_runtime_config(paths: &RuntimePaths) -> Result<()> 
 
 pub(super) fn ensure_release_binary(paths: &RuntimePaths, name: &str) -> Result<PathBuf> {
     let bin = release_bin_path(paths, name);
-    if bin.is_file() {
-        return Ok(bin);
-    }
-
     let cargo =
         require_command("cargo").context("cargo was not found; cannot build Davis binary")?;
     run_status(
