@@ -36,6 +36,10 @@ path = "tests/rust/topic_crawl_digest.rs"
 name = "topic_crawl_invariants"
 path = "tests/rust/topic_crawl_invariants.rs"
 
+[[test]]
+name = "router_supervisor_spawn"
+path = "tests/rust/router_supervisor_spawn.rs"
+
 [features]
 # Opt-in to `Crawl4aiSupervisor::for_test(...)` from downstream crates
 # (anyone mocking the adapter). Always on in `cargo test`; off in release

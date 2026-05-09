@@ -24,6 +24,7 @@ pub mod mempalace_sink;
 mod model_routing;
 mod models;
 mod observability;
+pub mod router_supervisor;
 mod runtime_paths;
 mod server;
 pub mod server_digest;
