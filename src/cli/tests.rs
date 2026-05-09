@@ -110,7 +110,7 @@ fn customize_shortcut_json_adds_lan_wifi_branch_when_configured() {
         .pointer("/WFWorkflowActions")
         .and_then(Value::as_array)
         .unwrap();
-    assert_eq!(actions.len(), 13);
+    assert_eq!(actions.len(), 9);
     assert_eq!(
         actions[1].pointer("/WFWorkflowActionIdentifier"),
         Some(&Value::String("is.workflow.actions.getwifi".to_string()))
@@ -122,12 +122,10 @@ fn customize_shortcut_json_adds_lan_wifi_branch_when_configured() {
         ))
     );
     assert_eq!(
-        actions[2].pointer("/WFWorkflowActionParameters/WFCondition"),
-        Some(&Value::from(4))
-    );
-    assert_eq!(
-        actions[2].pointer("/WFWorkflowActionParameters/WFInput/Type"),
-        Some(&Value::String("Variable".to_string()))
+        actions[2].pointer("/WFWorkflowActionParameters/WFConditions/WFSerializationType"),
+        Some(&Value::String(
+            "WFContentPredicateTableTemplate".to_string()
+        ))
     );
     let first_wifi_uuid = actions[1]
         .pointer("/WFWorkflowActionParameters/UUID")
@@ -135,79 +133,59 @@ fn customize_shortcut_json_adds_lan_wifi_branch_when_configured() {
         .unwrap();
     assert_eq!(
         actions[2].pointer("/WFWorkflowActionParameters/GroupingIdentifier"),
-        Some(&Value::String(first_wifi_uuid.to_string()))
+        actions[6].pointer("/WFWorkflowActionParameters/GroupingIdentifier")
     );
     assert_eq!(
-        actions[2].pointer("/WFWorkflowActionParameters/WFInput/Variable/Value/OutputUUID"),
-        Some(&Value::String(first_wifi_uuid.to_string()))
-    );
-    assert_eq!(
-        actions[2].pointer("/WFWorkflowActionParameters/WFConditionalActionString"),
+        actions[2].pointer("/WFWorkflowActionParameters/WFConditions/Value/WFActionParameterFilterTemplates/0/WFConditionalActionString"),
         Some(&Value::String("FailLone".to_string()))
     );
     assert_eq!(
-        actions[3].pointer("/WFWorkflowActionParameters/WFURL"),
-        Some(&Value::String(
-            "http://192.168.1.2:3012/shortcut".to_string()
-        ))
+        actions[2].pointer("/WFWorkflowActionParameters/WFConditions/Value/WFActionParameterFilterTemplates/0/WFInput/Variable/Value/OutputUUID"),
+        Some(&Value::String(first_wifi_uuid.to_string()))
     );
     assert_eq!(
-        actions[5].pointer("/WFWorkflowActionIdentifier"),
-        Some(&Value::String("is.workflow.actions.getwifi".to_string()))
-    );
-    assert_eq!(
-        actions[6].pointer("/WFWorkflowActionParameters/WFCondition"),
-        Some(&Value::from(4))
-    );
-    let second_wifi_uuid = actions[5]
-        .pointer("/WFWorkflowActionParameters/UUID")
-        .and_then(Value::as_str)
-        .unwrap();
-    assert_eq!(
-        actions[6].pointer("/WFWorkflowActionParameters/GroupingIdentifier"),
-        Some(&Value::String(second_wifi_uuid.to_string()))
-    );
-    assert_eq!(
-        actions[6].pointer("/WFWorkflowActionParameters/WFInput/Variable/Value/OutputUUID"),
-        Some(&Value::String(second_wifi_uuid.to_string()))
-    );
-    assert_eq!(
-        actions[6].pointer("/WFWorkflowActionParameters/WFConditionalActionString"),
+        actions[2].pointer("/WFWorkflowActionParameters/WFConditions/Value/WFActionParameterFilterTemplates/1/WFConditionalActionString"),
         Some(&Value::String("FailLone_5G".to_string()))
     );
     assert_eq!(
-        actions[7].pointer("/WFWorkflowActionParameters/WFURL"),
+        actions[3].pointer("/WFWorkflowActionParameters/WFTextActionText"),
         Some(&Value::String(
             "http://192.168.1.2:3012/shortcut".to_string()
         ))
     );
     assert_eq!(
-        actions[9].pointer("/WFWorkflowActionParameters/WFURL"),
+        actions[5].pointer("/WFWorkflowActionParameters/WFTextActionText"),
         Some(&Value::String(
             "https://davis.faillone.com/shortcut".to_string()
         ))
     );
-    assert!(actions[10]
+    assert_eq!(
+        actions[7].pointer("/WFWorkflowActionIdentifier"),
+        Some(&Value::String(
+            "is.workflow.actions.downloadurl".to_string()
+        ))
+    );
+    assert!(actions[7]
         .pointer("/WFWorkflowActionParameters/UUID")
         .is_some());
-    assert!(actions[11]
+    assert!(actions[8]
         .pointer("/WFWorkflowActionParameters/UUID")
         .is_some());
     assert_eq!(
         workflow.pointer("/WFWorkflowImportQuestions/0/ActionIndex"),
-        Some(&Value::from(9))
+        Some(&Value::from(7))
     );
     assert_eq!(
-        actions[3].pointer(
+        actions[7].pointer(
             "/WFWorkflowActionParameters/WFHTTPHeaders/Value/WFDictionaryFieldValueItems/0/WFValue"
         ),
         Some(&Value::String("secret".to_string()))
     );
     assert_eq!(
-        actions[9].pointer(
-            "/WFWorkflowActionParameters/WFHTTPHeaders/Value/WFDictionaryFieldValueItems/0/WFValue"
+        actions[7].pointer(
+            "/WFWorkflowActionParameters/WFURL/Value/attachmentsByRange/{0, 1}/OutputUUID"
         ),
-        Some(&Value::String("secret".to_string()))
+        actions[6].pointer("/WFWorkflowActionParameters/UUID")
     );
 }
 

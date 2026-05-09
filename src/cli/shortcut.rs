@@ -339,6 +339,7 @@ pub fn customize_shortcut_json_with_reply(
     if let Some(phrases) = reply_phrases {
         inject_reply_wiring(workflow, phrases)?;
     }
+    retarget_import_question_action_index(workflow, external_url);
     Ok(())
 }
 
@@ -357,36 +358,39 @@ fn customize_shortcut_json_dual_route(
     }
 
     let ask_action = actions[0].clone();
-    let download_template = actions[1].clone();
+    let mut download_action = actions[1].clone();
     // Trailing actions beyond the download URL (e.g. speak) are preserved if present.
     let trailing_actions: Vec<Value> = actions.drain(2..).collect();
 
-    let mut external_download = download_template.clone();
+    let wifi_uuid = pseudo_uuid();
+    let url_if_group_uuid = pseudo_uuid();
+    let lan_url_uuid = pseudo_uuid();
+    let external_url_uuid = pseudo_uuid();
+    let url_if_result_uuid = pseudo_uuid();
+
+    let mut routed_actions = vec![
+        ask_action,
+        get_wifi_network_name_action(&wifi_uuid),
+        if_current_wifi_matches_any_action(&wifi_uuid, &url_if_group_uuid, &lan.lan_ssids),
+        text_action(&lan_url_uuid, &lan.lan_url),
+        otherwise_action(&url_if_group_uuid),
+        text_action(&external_url_uuid, external_url),
+        end_if_action_with_uuid(&url_if_group_uuid, &url_if_result_uuid),
+    ];
+
+    reset_action_uuid(&mut download_action)?;
     apply_download_url_settings(
-        external_download
+        download_action
             .pointer_mut("/WFWorkflowActionParameters")
             .and_then(Value::as_object_mut)
             .ok_or_else(|| anyhow!("shortcut template missing external download parameters"))?,
-        external_url,
+        "",
         webhook_secret,
     );
+    set_download_url_to_variable(&mut download_action, &url_if_result_uuid, "If Result")?;
+    routed_actions.push(download_action);
+    let external_action_index = routed_actions.len() - 1;
 
-    let mut routed_actions = vec![ask_action];
-    push_lan_ssid_branches(
-        &mut routed_actions,
-        &download_template,
-        &lan.lan_url,
-        &lan.lan_ssids,
-        external_download,
-        webhook_secret,
-    )?;
-    let external_action_index = routed_actions
-        .iter()
-        .position(|action| {
-            action.pointer("/WFWorkflowActionParameters/WFURL")
-                == Some(&Value::String(external_url.to_string()))
-        })
-        .unwrap_or(1);
     routed_actions.extend(trailing_actions);
     *actions = routed_actions;
 
@@ -397,56 +401,14 @@ fn customize_shortcut_json_dual_route(
     Ok(())
 }
 
-fn push_lan_ssid_branches(
-    actions: &mut Vec<Value>,
-    download_template: &Value,
-    lan_url: &str,
-    remaining_ssids: &[String],
-    external_download: Value,
-    webhook_secret: Option<&str>,
-) -> Result<()> {
-    if let Some((ssid, rest)) = remaining_ssids.split_first() {
-        let wifi_uuid = pseudo_uuid();
-        actions.push(get_wifi_network_name_action(&wifi_uuid));
-        actions.push(if_current_wifi_equals_action(&wifi_uuid, ssid));
-        actions.push(download_action_from_template(
-            download_template,
-            lan_url,
-            webhook_secret,
-            "LAN",
-        )?);
-        actions.push(otherwise_action(&wifi_uuid));
-        push_lan_ssid_branches(
-            actions,
-            download_template,
-            lan_url,
-            rest,
-            external_download,
-            webhook_secret,
-        )?;
-        actions.push(end_if_action(&wifi_uuid));
-    } else {
-        actions.push(external_download);
-    }
-    Ok(())
-}
-
-fn download_action_from_template(
-    download_template: &Value,
-    webhook_url: &str,
-    webhook_secret: Option<&str>,
-    label: &str,
-) -> Result<Value> {
-    let mut download = download_template.clone();
-    apply_download_url_settings(
-        download
-            .pointer_mut("/WFWorkflowActionParameters")
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| anyhow!("shortcut template missing {label} download parameters"))?,
-        webhook_url,
-        webhook_secret,
-    );
-    Ok(download)
+fn reset_action_uuid(action: &mut Value) -> Result<String> {
+    let uuid = pseudo_uuid();
+    let params = action
+        .pointer_mut("/WFWorkflowActionParameters")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| anyhow!("shortcut action missing parameters"))?;
+    params.insert("UUID".to_string(), Value::String(uuid.clone()));
+    Ok(uuid)
 }
 
 fn apply_download_url_settings(
@@ -490,15 +452,44 @@ fn get_wifi_network_name_action(uuid: &str) -> Value {
     })
 }
 
-fn if_current_wifi_equals_action(wifi_uuid: &str, ssid: &str) -> Value {
+fn if_current_wifi_matches_any_action(
+    wifi_uuid: &str,
+    grouping_identifier: &str,
+    ssids: &[String],
+) -> Value {
+    let templates: Vec<Value> = ssids
+        .iter()
+        .map(|ssid| {
+            json!({
+                "WFCondition": 4,
+                "WFInput": action_output_variable(wifi_uuid, "Network Details"),
+                "WFConditionalActionString": ssid
+            })
+        })
+        .collect();
     json!({
         "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
         "WFWorkflowActionParameters": {
-            "GroupingIdentifier": wifi_uuid,
+            "GroupingIdentifier": grouping_identifier,
             "WFControlFlowMode": 0,
-            "WFInput": action_output_variable(wifi_uuid, "Network Details"),
-            "WFCondition": 4,
-            "WFConditionalActionString": ssid
+            "WFConditions": {
+                "Value": {
+                    "WFActionParameterFilterPrefix": 0,
+                    "WFActionParameterFilterTemplates": templates,
+                    "WFContentPredicateBoundedDate": false
+                },
+                "WFSerializationType": "WFContentPredicateTableTemplate"
+            }
+        }
+    })
+}
+
+fn text_action(uuid: &str, text: &str) -> Value {
+    json!({
+        "WFWorkflowActionIdentifier": "is.workflow.actions.gettext",
+        "WFWorkflowActionParameters": {
+            "UUID": uuid,
+            "WFTextActionText": text
         }
     })
 }
@@ -513,15 +504,31 @@ fn otherwise_action(grouping_identifier: &str) -> Value {
     })
 }
 
-fn end_if_action(grouping_identifier: &str) -> Value {
+fn end_if_action_with_uuid(grouping_identifier: &str, uuid: &str) -> Value {
     json!({
         "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
         "WFWorkflowActionParameters": {
             "GroupingIdentifier": grouping_identifier,
-            "UUID": pseudo_uuid(),
+            "UUID": uuid,
             "WFControlFlowMode": 2
         }
     })
+}
+
+fn set_download_url_to_variable(
+    download_action: &mut Value,
+    output_uuid: &str,
+    output_name: &str,
+) -> Result<()> {
+    let params = download_action
+        .pointer_mut("/WFWorkflowActionParameters")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| anyhow!("download action missing parameters"))?;
+    params.insert(
+        "WFURL".to_string(),
+        text_token_action_output(output_uuid, output_name),
+    );
+    Ok(())
 }
 
 fn action_output_variable(output_uuid: &str, output_name: &str) -> Value {
@@ -538,6 +545,51 @@ fn action_output_variable(output_uuid: &str, output_name: &str) -> Value {
     })
 }
 
+fn action_output_attachment(output_uuid: &str, output_name: &str) -> Value {
+    json!({
+        "Value": {
+            "OutputUUID": output_uuid,
+            "Type": "ActionOutput",
+            "OutputName": output_name
+        },
+        "WFSerializationType": "WFTextTokenAttachment"
+    })
+}
+
+fn text_token_action_output(output_uuid: &str, output_name: &str) -> Value {
+    json!({
+        "Value": {
+            "string": "\u{FFFC}",
+            "attachmentsByRange": {
+                "{0, 1}": {
+                    "OutputUUID": output_uuid,
+                    "Type": "ActionOutput",
+                    "OutputName": output_name
+                }
+            }
+        },
+        "WFSerializationType": "WFTextTokenString"
+    })
+}
+
+fn retarget_import_question_action_index(workflow: &mut Value, webhook_url: &str) {
+    let index = workflow
+        .pointer("/WFWorkflowActions")
+        .and_then(Value::as_array)
+        .and_then(|actions| {
+            actions.iter().position(|action| {
+                action.pointer("/WFWorkflowActionParameters/WFURL")
+                    == Some(&Value::String(webhook_url.to_string()))
+            })
+        });
+    if let (Some(index), Some(action_index)) = (
+        index,
+        workflow.pointer_mut("/WFWorkflowImportQuestions/0/ActionIndex"),
+    ) {
+        *action_index = Value::from(index);
+    }
+}
+
 /// Phrases spoken on the triggering device when reply wiring is enabled.
 pub struct ReplyPhrases {
     /// Spoken when the reply is brief enough to speak directly but an iMessage
@@ -548,18 +600,19 @@ pub struct ReplyPhrases {
 }
 
 /// Thread-id prefix action variables: a `getdevicedetails` to read
-/// Device Model, then an `if` branch to pick the prefix, emitting a
-/// variable whose `Control Flow Item` output replaces the static
-/// `"ios:iphone"` string in the download URL action.
+/// Device Model, then an `if` branch to pick the prefix, emitting an
+/// `If Result` variable that replaces the static `"ios:iphone"` string
+/// in every download URL action.
 ///
 /// Returns the sequence of actions to insert before the downloadurl
-/// action, plus the UUID of the If-group whose `Control Flow Item`
-/// output carries the computed prefix.
+/// action, plus the UUID of the end-if action whose `If Result` output
+/// carries the computed prefix.
 fn build_device_prefix_actions() -> (Vec<Value>, String) {
     let get_model_uuid = pseudo_uuid();
     let if_group_uuid = pseudo_uuid();
     let if_body_uuid = pseudo_uuid();
     let else_body_uuid = pseudo_uuid();
+    let end_if_uuid = pseudo_uuid();
 
     let actions = vec![
         json!({
@@ -604,12 +657,12 @@ fn build_device_prefix_actions() -> (Vec<Value>, String) {
             "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
             "WFWorkflowActionParameters": {
                 "GroupingIdentifier": if_group_uuid,
-                "UUID": pseudo_uuid(),
+                "UUID": end_if_uuid,
                 "WFControlFlowMode": 2
             }
         }),
     ];
-    (actions, if_group_uuid)
+    (actions, end_if_uuid)
 }
 
 /// Post-POST actions: parse `speak_text` from response and speak it
@@ -618,20 +671,22 @@ fn build_reply_actions(error_phrase: &str, downloadurl_uuid: &str) -> Vec<Value>
     let dict_uuid = pseudo_uuid();
     let text_uuid = pseudo_uuid();
     let if_group_uuid = pseudo_uuid();
+    let speak_value = text_token_action_output(&text_uuid, "Dictionary Value");
     vec![
         json!({
             "WFWorkflowActionIdentifier": "is.workflow.actions.detect.dictionary",
             "WFWorkflowActionParameters": {
                 "UUID": dict_uuid,
-                "WFInput": action_output_variable(downloadurl_uuid, "Contents of URL")
+                "WFInput": action_output_attachment(downloadurl_uuid, "Contents of URL")
             }
         }),
         json!({
             "WFWorkflowActionIdentifier": "is.workflow.actions.getvalueforkey",
             "WFWorkflowActionParameters": {
                 "UUID": text_uuid,
+                "WFGetDictionaryValueType": "Value",
                 "WFDictionaryKey": "speak_text",
-                "WFInput": action_output_variable(&dict_uuid, "Dictionary")
+                "WFInput": action_output_attachment(&dict_uuid, "Dictionary")
             }
         }),
         json!({
@@ -640,15 +695,15 @@ fn build_reply_actions(error_phrase: &str, downloadurl_uuid: &str) -> Vec<Value>
                 "GroupingIdentifier": if_group_uuid,
                 "WFControlFlowMode": 0,
                 "WFInput": action_output_variable(&text_uuid, "Dictionary Value"),
-                "WFCondition": 4,
-                "WFConditionalActionString": ""
+                "WFCondition": 100
             }
         }),
         json!({
             "WFWorkflowActionIdentifier": "is.workflow.actions.speaktext",
             "WFWorkflowActionParameters": {
                 "UUID": pseudo_uuid(),
-                "Text": error_phrase,
+                "Text": speak_value.clone(),
+                "WFText": speak_value,
                 "Language": "zh-CN"
             }
         }),
@@ -663,7 +718,8 @@ fn build_reply_actions(error_phrase: &str, downloadurl_uuid: &str) -> Vec<Value>
             "WFWorkflowActionIdentifier": "is.workflow.actions.speaktext",
             "WFWorkflowActionParameters": {
                 "UUID": pseudo_uuid(),
-                "Text": action_output_variable(&text_uuid, "Dictionary Value"),
+                "Text": error_phrase,
+                "WFText": error_phrase,
                 "Language": "zh-CN"
             }
         }),
@@ -679,20 +735,20 @@ fn build_reply_actions(error_phrase: &str, downloadurl_uuid: &str) -> Vec<Value>
 }
 
 /// Patch the `thread_id` dictionary entry inside the download URL's
-/// `WFJSONValues` to reference the prefix variable instead of the
-/// hardcoded `"ios:iphone"` string.
+/// `WFJSONValues` to reference the device-prefix If Result instead of
+/// the hardcoded `"ios:iphone"` string.
 fn patch_thread_id_to_prefix_variable(
     download_action: &mut Value,
-    prefix_if_group_uuid: &str,
+    prefix_if_result_uuid: &str,
 ) -> Result<()> {
     let new_thread_id_value = json!({
         "Value": {
             "string": "\u{FFFC}",
             "attachmentsByRange": {
                 "{0, 1}": {
-                    "OutputUUID": prefix_if_group_uuid,
+                    "OutputUUID": prefix_if_result_uuid,
                     "Type": "ActionOutput",
-                    "OutputName": "Control Flow Item"
+                    "OutputName": "If Result"
                 }
             }
         },
@@ -714,40 +770,58 @@ fn patch_thread_id_to_prefix_variable(
 }
 
 fn inject_reply_wiring(workflow: &mut Value, phrases: &ReplyPhrases) -> Result<()> {
-    // 1. Build the device-prefix branch to insert before the downloadurl action.
+    // Build the device-prefix branch once, before any LAN/external routing.
     let (prefix_actions, prefix_if_group_uuid) = build_device_prefix_actions();
 
-    // 2. Locate the download URL action.
     let actions = workflow
         .pointer_mut("/WFWorkflowActions")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| anyhow!("shortcut template missing WFWorkflowActions"))?;
-    let download_idx = actions
+    let first_download_idx = actions
         .iter()
         .position(|a| {
             a.get("WFWorkflowActionIdentifier").and_then(Value::as_str)
                 == Some("is.workflow.actions.downloadurl")
         })
         .ok_or_else(|| anyhow!("no downloadurl action in workflow"))?;
-    let download_uuid = actions[download_idx]
-        .pointer("/WFWorkflowActionParameters/UUID")
+    let prefix_insert_idx = if actions
+        .first()
+        .and_then(|a| a.get("WFWorkflowActionIdentifier"))
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("downloadurl action missing UUID"))?
-        .to_string();
+        == Some("is.workflow.actions.ask")
+    {
+        1
+    } else {
+        first_download_idx
+    };
 
-    // 3. Patch thread_id to use the prefix variable.
-    patch_thread_id_to_prefix_variable(&mut actions[download_idx], &prefix_if_group_uuid)?;
-
-    // 4. Splice the device-prefix actions before the downloadurl.
-    let mut new_actions = Vec::with_capacity(actions.len() + prefix_actions.len() + 8);
-    for (i, a) in actions.drain(..).enumerate() {
-        if i == download_idx {
+    let mut saw_download = false;
+    let mut new_actions = Vec::with_capacity(actions.len() + prefix_actions.len() + 24);
+    for (i, mut action) in actions.drain(..).enumerate() {
+        if i == prefix_insert_idx {
             new_actions.extend(prefix_actions.clone());
         }
-        new_actions.push(a);
+        if action
+            .get("WFWorkflowActionIdentifier")
+            .and_then(Value::as_str)
+            == Some("is.workflow.actions.downloadurl")
+        {
+            saw_download = true;
+            let download_uuid = action
+                .pointer("/WFWorkflowActionParameters/UUID")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("downloadurl action missing UUID"))?
+                .to_string();
+            patch_thread_id_to_prefix_variable(&mut action, &prefix_if_group_uuid)?;
+            new_actions.push(action);
+            new_actions.extend(build_reply_actions(&phrases.error_generic, &download_uuid));
+        } else {
+            new_actions.push(action);
+        }
     }
-    // 5. Append the post-POST reply actions.
-    new_actions.extend(build_reply_actions(&phrases.error_generic, &download_uuid));
+    if !saw_download {
+        bail!("no downloadurl action in workflow");
+    }
     *actions = new_actions;
     let _ = &phrases.speak_brief_imessage_full; // server-rendered, not Shortcut-side
     Ok(())
@@ -1287,6 +1361,190 @@ mod reply_renderer_tests {
         assert!(
             val.get("WFSerializationType").and_then(Value::as_str) == Some("WFTextTokenString"),
             "thread_id WFValue must be WFTextTokenString token"
+        );
+        assert_eq!(
+            val.pointer("/Value/attachmentsByRange/{0, 1}/OutputName"),
+            Some(&Value::String("If Result".to_string())),
+            "thread_id token must reference the device-prefix If Result"
+        );
+    }
+
+    #[test]
+    fn reply_wiring_uses_single_download_after_lan_url_selection() {
+        let mut wf = minimal_template();
+        let lan = ShortcutLanRouting {
+            lan_url: "http://192.168.1.2:3012/shortcut".into(),
+            lan_ssids: vec!["FailLone".into(), "FailLone_5G".into()],
+        };
+        let phrases = ReplyPhrases {
+            speak_brief_imessage_full: "b".into(),
+            error_generic: "e".into(),
+        };
+
+        customize_shortcut_json_with_reply(
+            &mut wf,
+            "https://davis.example.com/shortcut",
+            Some(&lan),
+            None,
+            Some(&phrases),
+        )
+        .unwrap();
+
+        let actions = wf
+            .pointer("/WFWorkflowActions")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(
+            actions[1].pointer("/WFWorkflowActionIdentifier"),
+            Some(&Value::String(
+                "is.workflow.actions.getdevicedetails".to_string()
+            )),
+            "device prefix must run before LAN Wi-Fi routing"
+        );
+
+        let download_indices: Vec<usize> = actions
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, action)| {
+                (action
+                    .get("WFWorkflowActionIdentifier")
+                    .and_then(Value::as_str)
+                    == Some("is.workflow.actions.downloadurl"))
+                .then_some(idx)
+            })
+            .collect();
+        assert_eq!(
+            download_indices.len(),
+            1,
+            "LAN routing should choose a URL first, then use one shared download/reply flow"
+        );
+
+        let download_idx = download_indices[0];
+        let url_if_idx = actions
+            .iter()
+            .position(|action| {
+                action.pointer("/WFWorkflowActionParameters/WFTextActionText")
+                    == Some(&Value::String(
+                        "https://davis.example.com/shortcut".to_string(),
+                    ))
+            })
+            .unwrap();
+        let url_if_end_uuid = actions[url_if_idx + 1]
+            .pointer("/WFWorkflowActionParameters/UUID")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert_eq!(
+            actions[download_idx].pointer(
+                "/WFWorkflowActionParameters/WFURL/Value/attachmentsByRange/{0, 1}/OutputUUID"
+            ),
+            Some(&Value::String(url_if_end_uuid.to_string())),
+            "download URL should come from the LAN/external If Result"
+        );
+
+        let thread_id_item = actions[download_idx]
+            .pointer("/WFWorkflowActionParameters/WFJSONValues/Value/WFDictionaryFieldValueItems")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("WFKey").and_then(Value::as_str) == Some("thread_id"))
+            })
+            .expect("download action has thread_id item");
+        assert_eq!(
+            thread_id_item.pointer("/WFValue/WFSerializationType"),
+            Some(&Value::String("WFTextTokenString".to_string())),
+            "download must use the device-prefix token"
+        );
+        assert_eq!(
+            actions[download_idx + 1].pointer("/WFWorkflowActionIdentifier"),
+            Some(&Value::String(
+                "is.workflow.actions.detect.dictionary".to_string()
+            )),
+            "single download should feed the shared reply parser"
+        );
+        assert_eq!(
+            actions[download_idx + 2].pointer("/WFWorkflowActionIdentifier"),
+            Some(&Value::String(
+                "is.workflow.actions.getvalueforkey".to_string()
+            )),
+            "shared reply parser should read speak_text"
+        );
+    }
+
+    #[test]
+    fn reply_actions_use_shortcuts_variable_serialization_for_inputs_and_speech_text() {
+        let actions = build_reply_actions("err", "DL-UUID");
+        let dict = &actions[0];
+        let get_value = &actions[1];
+        let has_value_if = &actions[2];
+        let variable_speak = &actions[3];
+        let fallback_speak = &actions[5];
+
+        assert_eq!(
+            dict.pointer("/WFWorkflowActionParameters/WFInput/WFSerializationType"),
+            Some(&Value::String("WFTextTokenAttachment".to_string()))
+        );
+        assert_eq!(
+            dict.pointer("/WFWorkflowActionParameters/WFInput/Value/OutputUUID"),
+            Some(&Value::String("DL-UUID".to_string()))
+        );
+        assert_eq!(
+            get_value.pointer("/WFWorkflowActionParameters/WFInput/WFSerializationType"),
+            Some(&Value::String("WFTextTokenAttachment".to_string()))
+        );
+        let dict_uuid = dict
+            .pointer("/WFWorkflowActionParameters/UUID")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert_eq!(
+            get_value.pointer("/WFWorkflowActionParameters/WFInput/Value/OutputUUID"),
+            Some(&Value::String(dict_uuid.to_string()))
+        );
+        assert_eq!(
+            has_value_if.pointer("/WFWorkflowActionParameters/WFCondition"),
+            Some(&Value::from(100))
+        );
+        assert_eq!(
+            has_value_if.pointer("/WFWorkflowActionParameters/WFInput/Type"),
+            Some(&Value::String("Variable".to_string()))
+        );
+        let dictionary_value_uuid = get_value
+            .pointer("/WFWorkflowActionParameters/UUID")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert_eq!(
+            has_value_if.pointer("/WFWorkflowActionParameters/WFInput/Variable/Value/OutputUUID"),
+            Some(&Value::String(dictionary_value_uuid.to_string()))
+        );
+        assert!(
+            has_value_if
+                .pointer("/WFWorkflowActionParameters/WFConditionalActionString")
+                .is_none(),
+            "has-any-value If must not carry an empty comparison operand"
+        );
+        assert_eq!(
+            variable_speak.pointer("/WFWorkflowActionParameters/Text/WFSerializationType"),
+            Some(&Value::String("WFTextTokenString".to_string()))
+        );
+        assert_eq!(
+            variable_speak.pointer(
+                "/WFWorkflowActionParameters/Text/Value/attachmentsByRange/{0, 1}/OutputUUID"
+            ),
+            Some(&Value::String(dictionary_value_uuid.to_string()))
+        );
+        assert_eq!(
+            variable_speak.pointer(
+                "/WFWorkflowActionParameters/WFText/Value/attachmentsByRange/{0, 1}/OutputUUID"
+            ),
+            Some(&Value::String(dictionary_value_uuid.to_string()))
+        );
+        assert_eq!(
+            fallback_speak.pointer("/WFWorkflowActionParameters/Text"),
+            Some(&Value::String("err".to_string()))
+        );
+        assert_eq!(
+            fallback_speak.pointer("/WFWorkflowActionParameters/WFText"),
+            Some(&Value::String("err".to_string()))
         );
     }
 }
