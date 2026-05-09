@@ -223,8 +223,13 @@ impl RouterWorker {
 
     async fn record(&self, outcome: &RouterCheckOutcome) {
         let now = Utc::now();
-        let mut state = self.state.lock().await;
-        let decision = decide_and_advance(&mut state, outcome, now);
+        // Hold the state lock only long enough to advance the dedupe FSM.
+        // Diary write happens outside the lock so the (synchronous, internal-
+        // mutex-acquiring) sink path does not nest under our async lock.
+        let decision = {
+            let mut state = self.state.lock().await;
+            decide_and_advance(&mut state, outcome, now)
+        };
         match outcome {
             RouterCheckOutcome::Ok {
                 action,
@@ -336,6 +341,23 @@ mod tests {
         let _ = decide_and_advance(&mut state, &reported("login"), ts(1));
         let d = decide_and_advance(&mut state, &reported("iframe"), ts(2));
         assert!(matches!(d, DiaryDecision::Write(s) if s.contains("stage.iframe")));
+    }
+
+    #[test]
+    fn failure_counter_increments_even_on_dedupe_skip() {
+        // Pin the invariant the recovery test depends on: when rule 4 (same
+        // failure kind → skip) fires, the consecutive-failure counter still
+        // advances. Otherwise RECOVERED|prev.failed.N would be wrong.
+        let mut state = WorkerState::default();
+        let d1 = decide_and_advance(&mut state, &reported("login"), ts(1));
+        assert!(matches!(d1, DiaryDecision::Write(_)));
+        assert_eq!(state.consecutive_failures, 1);
+        let d2 = decide_and_advance(&mut state, &reported("login"), ts(2));
+        assert_eq!(d2, DiaryDecision::Skip);
+        assert_eq!(state.consecutive_failures, 2);
+        let d3 = decide_and_advance(&mut state, &reported("login"), ts(3));
+        assert_eq!(d3, DiaryDecision::Skip);
+        assert_eq!(state.consecutive_failures, 3);
     }
 
     #[test]
