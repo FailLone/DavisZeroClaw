@@ -51,8 +51,11 @@ struct HealthResponse {
     ingest_persist: crate::article_memory::PersistHealth,
     /// MemPalace projection sink counters. `status` ∈ {"live","silenced","disabled"}.
     mempalace: MempalaceHealth,
-    /// Router DHCP keeper status. `None` when disabled in local.toml.
-    router_dhcp: Option<crate::RouterHealthSnapshot>,
+    /// Router DHCP keeper status. Always emitted; `enabled=false` when
+    /// the worker isn't installed (no `[router_dhcp]` block or
+    /// `enabled=false` in local.toml). Per spec
+    /// `2026-05-09-router-dhcp-worker-design.md` §"/health exposure".
+    router_dhcp: crate::RouterHealthSnapshot,
 }
 
 #[derive(Serialize)]
@@ -319,8 +322,13 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         last_error: sink_snapshot.last_error,
     };
     let router_dhcp = match state.router_worker.as_ref() {
-        Some(w) => Some(w.health_snapshot().await),
-        None => None,
+        Some(w) => w.health_snapshot().await,
+        None => crate::RouterHealthSnapshot {
+            enabled: false,
+            last_run: None,
+            last_outcome: None,
+            consecutive_failures: 0,
+        },
     };
     Json(
         serde_json::to_value(HealthResponse {
