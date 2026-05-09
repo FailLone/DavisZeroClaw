@@ -299,8 +299,10 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
     });
 
     let router_worker = if local_config.router_dhcp.enabled {
-        let checker_opt =
-            crate::PythonRouterChecker::from_env(paths.clone(), local_config.router_dhcp.clone());
+        let checker_opt = crate::PythonRouterChecker::from_config(
+            paths.clone(),
+            local_config.router_dhcp.clone(),
+        );
         let sink_arc: std::sync::Arc<dyn crate::mempalace_sink::MempalaceEmitter> =
             std::sync::Arc::new(mempalace_sink.clone());
         let (checker_arc, creds_present): (std::sync::Arc<dyn crate::RouterChecker>, bool) =
@@ -317,7 +319,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
                         }
                     }
                     tracing::warn!(
-                        "router-dhcp enabled but creds env vars unset; worker self-disabled"
+                        "router-dhcp enabled but username/password unset; worker self-disabled"
                     );
                     (std::sync::Arc::new(ZeroChecker), false)
                 }

@@ -194,29 +194,17 @@ pub trait RouterChecker: Send + Sync {
 pub struct PythonRouterChecker {
     paths: RuntimePaths,
     config: RouterDhcpConfig,
-    /// Resolved `ROUTER_USERNAME` value at construction time. We snapshot
-    /// at construction so a config reload doesn't half-update the worker.
-    username: String,
-    /// Resolved `ROUTER_PASSWORD` value at construction time.
-    password: String,
 }
 
 impl PythonRouterChecker {
-    /// Construct from config + env. Returns `None` when the required env
-    /// vars are missing — caller (`RouterWorker`) interprets this as the
-    /// credential-gate failure described in the spec.
-    pub fn from_env(paths: RuntimePaths, config: RouterDhcpConfig) -> Option<Self> {
-        let username = std::env::var(&config.username_env).ok()?;
-        let password = std::env::var(&config.password_env).ok()?;
-        if username.is_empty() || password.is_empty() {
+    /// Construct from config. Returns `None` when credentials are missing —
+    /// caller (`RouterWorker`) interprets this as the credential-gate failure
+    /// described in the spec.
+    pub fn from_config(paths: RuntimePaths, config: RouterDhcpConfig) -> Option<Self> {
+        if config.username.is_empty() || config.password.is_empty() {
             return None;
         }
-        Some(Self {
-            paths,
-            config,
-            username,
-            password,
-        })
+        Some(Self { paths, config })
     }
 
     fn python_path(&self) -> PathBuf {
@@ -245,8 +233,8 @@ impl RouterChecker for PythonRouterChecker {
         cmd.arg("-m")
             .arg("router_adapter")
             .env("ROUTER_URL", &self.config.url)
-            .env("ROUTER_USERNAME", &self.username)
-            .env("ROUTER_PASSWORD", &self.password)
+            .env("ROUTER_USERNAME", &self.config.username)
+            .env("ROUTER_PASSWORD", &self.config.password)
             .env("PLAYWRIGHT_BROWSERS_PATH", self.playwright_browsers_path())
             .env("PYTHONPATH", self.paths.repo_root.display().to_string())
             .current_dir(&self.paths.repo_root)

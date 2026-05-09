@@ -160,10 +160,10 @@ pub struct RouterDhcpConfig {
     pub tick_timeout_secs: u64,
     #[serde(default = "default_router_dhcp_url")]
     pub url: String,
-    #[serde(default = "default_router_dhcp_username_env")]
-    pub username_env: String,
-    #[serde(default = "default_router_dhcp_password_env")]
-    pub password_env: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
 }
 
 impl Default for RouterDhcpConfig {
@@ -173,8 +173,8 @@ impl Default for RouterDhcpConfig {
             interval_secs: default_router_dhcp_interval_secs(),
             tick_timeout_secs: default_router_dhcp_tick_timeout_secs(),
             url: default_router_dhcp_url(),
-            username_env: default_router_dhcp_username_env(),
-            password_env: default_router_dhcp_password_env(),
+            username: String::new(),
+            password: String::new(),
         }
     }
 }
@@ -189,14 +189,6 @@ fn default_router_dhcp_tick_timeout_secs() -> u64 {
 
 fn default_router_dhcp_url() -> String {
     "http://192.168.0.1".to_string()
-}
-
-fn default_router_dhcp_username_env() -> String {
-    "ROUTER_USERNAME".to_string()
-}
-
-fn default_router_dhcp_password_env() -> String {
-    "ROUTER_PASSWORD".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1008,19 +1000,19 @@ fn validate_router_dhcp(cfg: &mut RouterDhcpConfig) -> Result<()> {
         return Ok(());
     }
     cfg.url = cfg.url.trim().to_string();
-    cfg.username_env = cfg.username_env.trim().to_string();
-    cfg.password_env = cfg.password_env.trim().to_string();
+    cfg.username = cfg.username.trim().to_string();
+    cfg.password = cfg.password.trim().to_string();
     if cfg.url.is_empty() {
         return Err(anyhow!("router_dhcp.url must not be empty when enabled"));
     }
-    if cfg.username_env.is_empty() {
+    if cfg.username.is_empty() {
         return Err(anyhow!(
-            "router_dhcp.username_env must name an env var when enabled"
+            "router_dhcp.username must not be empty when enabled"
         ));
     }
-    if cfg.password_env.is_empty() {
+    if cfg.password.is_empty() {
         return Err(anyhow!(
-            "router_dhcp.password_env must name an env var when enabled"
+            "router_dhcp.password must not be empty when enabled"
         ));
     }
     if cfg.interval_secs == 0 {
@@ -1560,8 +1552,8 @@ model = "m"
         assert_eq!(cfg.router_dhcp.interval_secs, 600);
         assert_eq!(cfg.router_dhcp.tick_timeout_secs, 90);
         assert_eq!(cfg.router_dhcp.url, "http://192.168.0.1");
-        assert_eq!(cfg.router_dhcp.username_env, "ROUTER_USERNAME");
-        assert_eq!(cfg.router_dhcp.password_env, "ROUTER_PASSWORD");
+        assert_eq!(cfg.router_dhcp.username, "");
+        assert_eq!(cfg.router_dhcp.password, "");
     }
 
     #[test]
@@ -1573,8 +1565,8 @@ enabled = true
 interval_secs = 1200
 tick_timeout_secs = 120
 url = "http://192.168.1.1"
-username_env = "MY_USER"
-password_env = "MY_PASS"
+username = "admin"
+password = "secret"
 "#,
             base = DHCP_BASE_TOML
         );
@@ -1583,8 +1575,8 @@ password_env = "MY_PASS"
         assert_eq!(cfg.router_dhcp.interval_secs, 1200);
         assert_eq!(cfg.router_dhcp.tick_timeout_secs, 120);
         assert_eq!(cfg.router_dhcp.url, "http://192.168.1.1");
-        assert_eq!(cfg.router_dhcp.username_env, "MY_USER");
-        assert_eq!(cfg.router_dhcp.password_env, "MY_PASS");
+        assert_eq!(cfg.router_dhcp.username, "admin");
+        assert_eq!(cfg.router_dhcp.password, "secret");
     }
 
     #[test]
@@ -1609,16 +1601,18 @@ password_env = "MY_PASS"
     }
 
     #[test]
-    fn validate_router_dhcp_rejects_empty_env_names() {
+    fn validate_router_dhcp_rejects_empty_credentials() {
         let mut cfg = RouterDhcpConfig {
             enabled: true,
-            username_env: "".into(),
+            username: "".into(),
+            password: "secret".into(),
             ..RouterDhcpConfig::default()
         };
         assert!(super::validate_router_dhcp(&mut cfg).is_err());
         let mut cfg = RouterDhcpConfig {
             enabled: true,
-            password_env: "".into(),
+            username: "admin".into(),
+            password: "".into(),
             ..RouterDhcpConfig::default()
         };
         assert!(super::validate_router_dhcp(&mut cfg).is_err());
@@ -1629,12 +1623,16 @@ password_env = "MY_PASS"
         let mut cfg = RouterDhcpConfig {
             enabled: true,
             interval_secs: 0,
+            username: "admin".into(),
+            password: "secret".into(),
             ..RouterDhcpConfig::default()
         };
         assert!(super::validate_router_dhcp(&mut cfg).is_err());
         let mut cfg = RouterDhcpConfig {
             enabled: true,
             tick_timeout_secs: 0,
+            username: "admin".into(),
+            password: "secret".into(),
             ..RouterDhcpConfig::default()
         };
         assert!(super::validate_router_dhcp(&mut cfg).is_err());
@@ -1646,6 +1644,8 @@ password_env = "MY_PASS"
             enabled: true,
             interval_secs: 60,
             tick_timeout_secs: 60,
+            username: "admin".into(),
+            password: "secret".into(),
             ..RouterDhcpConfig::default()
         };
         let err = super::validate_router_dhcp(&mut cfg).unwrap_err();
@@ -1657,14 +1657,14 @@ password_env = "MY_PASS"
         let mut cfg = RouterDhcpConfig {
             enabled: true,
             url: "  http://example  ".into(),
-            username_env: "  USR  ".into(),
-            password_env: "  PWD  ".into(),
+            username: "  admin  ".into(),
+            password: "  secret  ".into(),
             ..RouterDhcpConfig::default()
         };
         super::validate_router_dhcp(&mut cfg).expect("ok");
         assert_eq!(cfg.url, "http://example");
-        assert_eq!(cfg.username_env, "USR");
-        assert_eq!(cfg.password_env, "PWD");
+        assert_eq!(cfg.username, "admin");
+        assert_eq!(cfg.password, "secret");
     }
 }
 

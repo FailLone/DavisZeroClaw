@@ -88,15 +88,15 @@ DavisZeroClaw/
 ```
 T+0      tokio::time::interval fires (config.interval_secs, default 600)
 T+0      RouterWorker::run_one_tick()
-T+0      └─ check credential gate (env ROUTER_USERNAME, ROUTER_PASSWORD present?)
+T+0      └─ check credential gate (config username/password present?)
 T+0      │     missing → write diary "ROUTER.disabled.no.creds" once, self-disable, return
 T+0      └─ RouterChecker::check_once()  (PythonRouterChecker in prod)
 T+0      │     └─ Command::new(python_bin)
 T+0      │            .arg("-m").arg("router_adapter.router_dhcp_check")
 T+0      │            .env("PLAYWRIGHT_BROWSERS_PATH", shared_path)
 T+0      │            .env("ROUTER_URL", config.url)
-T+0      │            .env("ROUTER_USERNAME", <from env>)
-T+0      │            .env("ROUTER_PASSWORD", <from env>)
+T+0      │            .env("ROUTER_USERNAME", config.username)
+T+0      │            .env("ROUTER_PASSWORD", config.password)
 T+0      │            .stdout(Stdio::piped())
 T+0      │            .stderr(Stdio::piped())
 T+0      │            .kill_on_drop(true)
@@ -219,13 +219,13 @@ enabled = false                          # opt-in
 interval_secs = 600                      # 10 min
 tick_timeout_secs = 90                   # SIGKILL the Python child if a tick exceeds this
 url = "http://192.168.0.1"
-username_env = "ROUTER_USERNAME"
-password_env = "ROUTER_PASSWORD"
+username = "admin"
+password = "change-me"
 ```
 
-Credentials are read from the env vars named here; never stored in `local.toml` directly. Davis spawns the Python child with these env values forwarded.
+Credentials are read from `local.toml`. Davis forwards them to the Python child as process-local `ROUTER_USERNAME` / `ROUTER_PASSWORD` env vars.
 
-If `enabled = true` but the named env vars are unset at worker start, the worker writes one diary entry (`ROUTER.disabled.no.creds`) and self-disables; subsequent ticks are no-ops. A daemon restart re-checks.
+If `enabled = true` but `username` or `password` is unset at worker start, the worker writes one diary entry (`ROUTER.disabled.no.creds`) and self-disables; subsequent ticks are no-ops. A daemon restart re-checks.
 
 ### Failure semantics summary
 

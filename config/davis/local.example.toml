@@ -283,12 +283,13 @@ allow_private_hosts = []
 # Optional: periodic LAN router DHCP keeper (one specific check). Off by default.
 # When enabled, every interval_secs the daemon spawns a Python child to log into
 # the router admin UI at `url`, find the DHCP toggle, and disable it if on.
-# Credentials are read from the env vars named below; never put plaintext here.
+# Credentials are read from this local config and forwarded only to the
+# router-adapter child process.
 # See router_adapter/README.md for setup; CLAUDE.md for the Python boundary rule.
 # [router_dhcp]
 # enabled = false
 # interval_secs = 600
 # tick_timeout_secs = 90
 # url = "http://192.168.0.1"
-# username_env = "ROUTER_USERNAME"
-# password_env = "ROUTER_PASSWORD"
+# username = "admin"
+# password = "change-me"

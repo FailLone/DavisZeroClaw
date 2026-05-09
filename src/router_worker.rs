@@ -425,8 +425,8 @@ mod tests {
             interval_secs: 600,
             tick_timeout_secs: 90,
             url: "http://example".into(),
-            username_env: "ROUTER_USERNAME".into(),
-            password_env: "ROUTER_PASSWORD".into(),
+            username: "admin".into(),
+            password: "secret".into(),
         }
     }
 

@@ -98,8 +98,8 @@ pub(super) async fn run_once_router_check(paths: &RuntimePaths) -> Result<()> {
     if !cfg.enabled {
         println!("[router_dhcp].enabled is false in local.toml — running ad-hoc anyway.");
     }
-    let checker = PythonRouterChecker::from_env(paths.clone(), cfg)
-        .ok_or_else(|| anyhow!("ROUTER_USERNAME / ROUTER_PASSWORD env vars are not set"))?;
+    let checker = PythonRouterChecker::from_config(paths.clone(), cfg)
+        .ok_or_else(|| anyhow!("router_dhcp.username / router_dhcp.password are not set"))?;
     let outcome = checker.check_once().await;
     println!("{outcome:#?}");
     Ok(())
