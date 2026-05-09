@@ -996,8 +996,47 @@ fn validate_local_config(mut config: LocalConfig) -> Result<LocalConfig> {
     validate_article_memory_config(&mut config)?;
     validate_query_classification_override(&mut config.query_classification)?;
     validate_shortcut_reply(&mut config.shortcut.reply)?;
+    validate_router_dhcp(&mut config.router_dhcp)?;
 
     Ok(config)
+}
+
+/// Catch user-misedited `[router_dhcp]` blocks before the worker starts
+/// silently misbehaving. No-op when disabled — defaults are all valid.
+fn validate_router_dhcp(cfg: &mut RouterDhcpConfig) -> Result<()> {
+    if !cfg.enabled {
+        return Ok(());
+    }
+    cfg.url = cfg.url.trim().to_string();
+    cfg.username_env = cfg.username_env.trim().to_string();
+    cfg.password_env = cfg.password_env.trim().to_string();
+    if cfg.url.is_empty() {
+        return Err(anyhow!("router_dhcp.url must not be empty when enabled"));
+    }
+    if cfg.username_env.is_empty() {
+        return Err(anyhow!(
+            "router_dhcp.username_env must name an env var when enabled"
+        ));
+    }
+    if cfg.password_env.is_empty() {
+        return Err(anyhow!(
+            "router_dhcp.password_env must name an env var when enabled"
+        ));
+    }
+    if cfg.interval_secs == 0 {
+        return Err(anyhow!("router_dhcp.interval_secs must be > 0"));
+    }
+    if cfg.tick_timeout_secs == 0 {
+        return Err(anyhow!("router_dhcp.tick_timeout_secs must be > 0"));
+    }
+    if cfg.tick_timeout_secs >= cfg.interval_secs {
+        return Err(anyhow!(
+            "router_dhcp.tick_timeout_secs ({}) must be less than interval_secs ({}) so a stuck tick cannot starve the next one",
+            cfg.tick_timeout_secs,
+            cfg.interval_secs
+        ));
+    }
+    Ok(())
 }
 
 fn validate_shortcut_reply(reply: &mut Option<ShortcutReplyConfig>) -> Result<()> {
@@ -1546,6 +1585,86 @@ password_env = "MY_PASS"
         assert_eq!(cfg.router_dhcp.url, "http://192.168.1.1");
         assert_eq!(cfg.router_dhcp.username_env, "MY_USER");
         assert_eq!(cfg.router_dhcp.password_env, "MY_PASS");
+    }
+
+    #[test]
+    fn validate_router_dhcp_noop_when_disabled() {
+        // url is whitespace — would fail if enabled, but disabled bypasses checks.
+        let mut cfg = RouterDhcpConfig {
+            url: "  ".to_string(),
+            ..RouterDhcpConfig::default()
+        };
+        assert!(super::validate_router_dhcp(&mut cfg).is_ok());
+    }
+
+    #[test]
+    fn validate_router_dhcp_rejects_empty_url() {
+        let mut cfg = RouterDhcpConfig {
+            enabled: true,
+            url: "   ".into(),
+            ..RouterDhcpConfig::default()
+        };
+        let err = super::validate_router_dhcp(&mut cfg).unwrap_err();
+        assert!(err.to_string().contains("router_dhcp.url"));
+    }
+
+    #[test]
+    fn validate_router_dhcp_rejects_empty_env_names() {
+        let mut cfg = RouterDhcpConfig {
+            enabled: true,
+            username_env: "".into(),
+            ..RouterDhcpConfig::default()
+        };
+        assert!(super::validate_router_dhcp(&mut cfg).is_err());
+        let mut cfg = RouterDhcpConfig {
+            enabled: true,
+            password_env: "".into(),
+            ..RouterDhcpConfig::default()
+        };
+        assert!(super::validate_router_dhcp(&mut cfg).is_err());
+    }
+
+    #[test]
+    fn validate_router_dhcp_rejects_zero_intervals() {
+        let mut cfg = RouterDhcpConfig {
+            enabled: true,
+            interval_secs: 0,
+            ..RouterDhcpConfig::default()
+        };
+        assert!(super::validate_router_dhcp(&mut cfg).is_err());
+        let mut cfg = RouterDhcpConfig {
+            enabled: true,
+            tick_timeout_secs: 0,
+            ..RouterDhcpConfig::default()
+        };
+        assert!(super::validate_router_dhcp(&mut cfg).is_err());
+    }
+
+    #[test]
+    fn validate_router_dhcp_rejects_timeout_geq_interval() {
+        let mut cfg = RouterDhcpConfig {
+            enabled: true,
+            interval_secs: 60,
+            tick_timeout_secs: 60,
+            ..RouterDhcpConfig::default()
+        };
+        let err = super::validate_router_dhcp(&mut cfg).unwrap_err();
+        assert!(err.to_string().contains("less than interval_secs"));
+    }
+
+    #[test]
+    fn validate_router_dhcp_trims_whitespace() {
+        let mut cfg = RouterDhcpConfig {
+            enabled: true,
+            url: "  http://example  ".into(),
+            username_env: "  USR  ".into(),
+            password_env: "  PWD  ".into(),
+            ..RouterDhcpConfig::default()
+        };
+        super::validate_router_dhcp(&mut cfg).expect("ok");
+        assert_eq!(cfg.url, "http://example");
+        assert_eq!(cfg.username_env, "USR");
+        assert_eq!(cfg.password_env, "PWD");
     }
 }
 
