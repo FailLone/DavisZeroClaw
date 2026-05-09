@@ -279,3 +279,16 @@ allow_private_hosts = []
 # [shortcut.reply.phrases]
 # speak_brief_imessage_full = "详情我通过短信发你"
 # error_generic = "戴维斯好像出问题了"
+
+# Optional: periodic LAN router DHCP keeper (one specific check). Off by default.
+# When enabled, every interval_secs the daemon spawns a Python child to log into
+# the router admin UI at `url`, find the DHCP toggle, and disable it if on.
+# Credentials are read from the env vars named below; never put plaintext here.
+# See router_adapter/README.md for setup; CLAUDE.md for the Python boundary rule.
+# [router_dhcp]
+# enabled = false
+# interval_secs = 600
+# tick_timeout_secs = 90
+# url = "http://192.168.0.1"
+# username_env = "ROUTER_USERNAME"
+# password_env = "ROUTER_PASSWORD"

@@ -33,7 +33,11 @@ If a future reviewer re-raises "Davis duplicates zeroclaw" — point them here f
 - Target file size ≤ 800 lines; split if larger.
 - No `#[allow(dead_code)]`. If it's not used, delete it. "Future use" is not a reason.
 - TDD for new features and bug fixes. Run `cargo test --lib`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --all -- --check` before claiming done.
-- Python side (`crawl4ai_adapter/`) owns only: crawl4ai pruning + trafilatura + learned-rules CSS extraction. All LLM calls live in Rust (`src/article_memory/llm_client.rs`). Don't let LLM logic drift back into Python.
+- Python side exists for one reason: browser-layer automation (Chromium / Playwright / Puppeteer-style DOM operation, HTML extraction). Anything that does not need a browser belongs in Rust. Two adapters live there today:
+  - `crawl4ai_adapter/` — article crawling: crawl4ai pruning + trafilatura + learned-rules CSS extraction.
+  - `router_adapter/` — LAN device admin pages where the device only exposes a browser UI. Playwright-driven only; if a device offers a direct API, Davis talks to it from Rust.
+
+  All LLM calls stay in Rust (`src/article_memory/llm_client.rs`). New Python adapters are admissible only if they require a browser; otherwise the work goes in Rust.
 
 ## Runtime topology
 

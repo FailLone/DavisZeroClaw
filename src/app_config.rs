@@ -25,6 +25,8 @@ pub struct LocalConfig {
     pub tunnel: Option<TunnelConfig>,
     #[serde(default)]
     pub shortcut: ShortcutConfig,
+    #[serde(default)]
+    pub router_dhcp: RouterDhcpConfig,
 }
 
 /// User-editable settings rendered into zeroclaw's `config.toml` as
@@ -143,6 +145,58 @@ fn default_shortcut_wait_timeout_secs() -> u64 {
 
 fn default_pending_max_age_secs() -> u64 {
     300
+}
+
+/// Periodic worker that drives the LAN router admin page (Playwright
+/// flow lives in `router_adapter/`). Off by default. See
+/// `docs/superpowers/specs/2026-05-09-router-dhcp-worker-design.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouterDhcpConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_router_dhcp_interval_secs")]
+    pub interval_secs: u64,
+    #[serde(default = "default_router_dhcp_tick_timeout_secs")]
+    pub tick_timeout_secs: u64,
+    #[serde(default = "default_router_dhcp_url")]
+    pub url: String,
+    #[serde(default = "default_router_dhcp_username_env")]
+    pub username_env: String,
+    #[serde(default = "default_router_dhcp_password_env")]
+    pub password_env: String,
+}
+
+impl Default for RouterDhcpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: default_router_dhcp_interval_secs(),
+            tick_timeout_secs: default_router_dhcp_tick_timeout_secs(),
+            url: default_router_dhcp_url(),
+            username_env: default_router_dhcp_username_env(),
+            password_env: default_router_dhcp_password_env(),
+        }
+    }
+}
+
+fn default_router_dhcp_interval_secs() -> u64 {
+    600
+}
+
+fn default_router_dhcp_tick_timeout_secs() -> u64 {
+    90
+}
+
+fn default_router_dhcp_url() -> String {
+    "http://192.168.0.1".to_string()
+}
+
+fn default_router_dhcp_username_env() -> String {
+    "ROUTER_USERNAME".to_string()
+}
+
+fn default_router_dhcp_password_env() -> String {
+    "ROUTER_PASSWORD".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1429,6 +1483,69 @@ mod refresh_config_tests {
             ..RefreshConfig::default()
         };
         assert!(cfg.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod router_dhcp_config_tests {
+    use super::*;
+
+    const DHCP_BASE_TOML: &str = r#"
+[home_assistant]
+url = "http://example"
+token = "x"
+[imessage]
+allowed_contacts = ["+15550000000"]
+[[providers]]
+name = "p"
+api_key = "k"
+allowed_models = ["m"]
+[routing.profiles.home_control]
+provider = "p"
+model = "m"
+[routing.profiles.general_qa]
+provider = "p"
+model = "m"
+[routing.profiles.research]
+provider = "p"
+model = "m"
+[routing.profiles.structured_lookup]
+provider = "p"
+model = "m"
+"#;
+
+    #[test]
+    fn router_dhcp_config_defaults_when_section_missing() {
+        let cfg: LocalConfig = toml::from_str(DHCP_BASE_TOML).expect("parse");
+        assert!(!cfg.router_dhcp.enabled);
+        assert_eq!(cfg.router_dhcp.interval_secs, 600);
+        assert_eq!(cfg.router_dhcp.tick_timeout_secs, 90);
+        assert_eq!(cfg.router_dhcp.url, "http://192.168.0.1");
+        assert_eq!(cfg.router_dhcp.username_env, "ROUTER_USERNAME");
+        assert_eq!(cfg.router_dhcp.password_env, "ROUTER_PASSWORD");
+    }
+
+    #[test]
+    fn router_dhcp_config_explicit_values_respected() {
+        let toml_text = format!(
+            r#"{base}
+[router_dhcp]
+enabled = true
+interval_secs = 1200
+tick_timeout_secs = 120
+url = "http://192.168.1.1"
+username_env = "MY_USER"
+password_env = "MY_PASS"
+"#,
+            base = DHCP_BASE_TOML
+        );
+        let cfg: LocalConfig = toml::from_str(&toml_text).expect("parse");
+        assert!(cfg.router_dhcp.enabled);
+        assert_eq!(cfg.router_dhcp.interval_secs, 1200);
+        assert_eq!(cfg.router_dhcp.tick_timeout_secs, 120);
+        assert_eq!(cfg.router_dhcp.url, "http://192.168.1.1");
+        assert_eq!(cfg.router_dhcp.username_env, "MY_USER");
+        assert_eq!(cfg.router_dhcp.password_env, "MY_PASS");
     }
 }
 

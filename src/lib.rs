@@ -38,7 +38,7 @@ pub use app_config::{
     ArticleMemoryHostProfile, ArticleMemoryIngestConfig, ArticleMemoryNormalizeConfig,
     ArticleMemoryValueConfig, Crawl4aiConfig, HomeAssistantConfig, ImessageConfig, LocalConfig,
     McpConfig, McpServerConfig, McpTransport, ModelProviderConfig, OpenRouterLlmEngineConfig,
-    QualityGateToml, RoutingConfig, RoutingProfileConfig, RoutingProfilesConfig,
+    QualityGateToml, RouterDhcpConfig, RoutingConfig, RoutingProfileConfig, RoutingProfilesConfig,
     RuleLearningConfig, ShortcutConfig, ShortcutReplyConfig, ShortcutReplyPhrases, TranslateConfig,
     WebhookConfig,
 };

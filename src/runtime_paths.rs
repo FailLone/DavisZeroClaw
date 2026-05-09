@@ -164,6 +164,28 @@ impl RuntimePaths {
         self.crawl4ai_venv_dir().join("bin").join("python")
     }
 
+    pub fn router_adapter_venv_dir(&self) -> PathBuf {
+        self.runtime_dir.join("router-adapter-venv")
+    }
+
+    pub fn router_adapter_python_path(&self) -> PathBuf {
+        self.router_adapter_venv_dir().join("bin").join("python")
+    }
+
+    pub fn router_adapter_dir(&self) -> PathBuf {
+        self.repo_root.join("router_adapter")
+    }
+
+    /// Shared Playwright browser cache for ALL Python adapters that drive
+    /// Chromium. Both `crawl4ai_adapter/` and `router_adapter/` MUST point
+    /// here via `PLAYWRIGHT_BROWSERS_PATH=…` so we have exactly one
+    /// Chromium binary on disk. See
+    /// `docs/superpowers/specs/2026-05-09-router-dhcp-worker-design.md`
+    /// "Open risks" section.
+    pub fn playwright_browsers_path(&self) -> PathBuf {
+        self.runtime_dir.join("playwright-browsers")
+    }
+
     pub fn mempalace_palace_dir(&self) -> PathBuf {
         self.runtime_dir.join("mempalace")
     }
@@ -271,6 +293,30 @@ mod tests {
         };
         let got = paths.article_memory_ingest_jobs_path();
         assert_eq!(got, paths.article_memory_dir().join("ingest_jobs.json"));
+    }
+
+    #[test]
+    fn router_adapter_paths_are_under_runtime_dir() {
+        let paths = RuntimePaths {
+            repo_root: std::path::PathBuf::from("/tmp/repo"),
+            runtime_dir: std::path::PathBuf::from("/tmp/runtime"),
+        };
+        assert_eq!(
+            paths.router_adapter_venv_dir(),
+            std::path::PathBuf::from("/tmp/runtime/router-adapter-venv")
+        );
+        assert_eq!(
+            paths.router_adapter_python_path(),
+            std::path::PathBuf::from("/tmp/runtime/router-adapter-venv/bin/python")
+        );
+        assert_eq!(
+            paths.router_adapter_dir(),
+            std::path::PathBuf::from("/tmp/repo/router_adapter")
+        );
+        assert_eq!(
+            paths.playwright_browsers_path(),
+            std::path::PathBuf::from("/tmp/runtime/playwright-browsers")
+        );
     }
 
     #[test]
