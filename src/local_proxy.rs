@@ -298,6 +298,46 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         })
     });
 
+    let router_worker = if local_config.router_dhcp.enabled {
+        let checker_opt =
+            crate::PythonRouterChecker::from_env(paths.clone(), local_config.router_dhcp.clone());
+        let sink_arc: std::sync::Arc<dyn crate::mempalace_sink::MempalaceEmitter> =
+            std::sync::Arc::new(mempalace_sink.clone());
+        let (checker_arc, creds_present): (std::sync::Arc<dyn crate::RouterChecker>, bool) =
+            match checker_opt {
+                Some(c) => (std::sync::Arc::new(c), true),
+                None => {
+                    struct ZeroChecker;
+                    #[async_trait::async_trait]
+                    impl crate::RouterChecker for ZeroChecker {
+                        async fn check_once(&self) -> crate::RouterCheckOutcome {
+                            crate::RouterCheckOutcome::SpawnFailed {
+                                reason: "no creds; worker self-disabled".into(),
+                            }
+                        }
+                    }
+                    tracing::warn!(
+                        "router-dhcp enabled but creds env vars unset; worker self-disabled"
+                    );
+                    (std::sync::Arc::new(ZeroChecker), false)
+                }
+            };
+        let worker = crate::RouterWorker::new(
+            local_config.router_dhcp.clone(),
+            checker_arc,
+            sink_arc,
+            creds_present,
+        );
+        let loop_handle = worker.clone();
+        tokio::spawn(async move { loop_handle.run_loop().await });
+        if creds_present {
+            tracing::info!("router-dhcp worker started");
+        }
+        Some(worker)
+    } else {
+        None
+    };
+
     let state = AppState::new(
         client,
         mcp_client,
@@ -314,6 +354,7 @@ pub async fn run_local_proxy() -> anyhow::Result<()> {
         rule_stats,
         sample_store,
         shortcut_reply_state.clone(),
+        router_worker,
     )
     .with_mempalace_sink(mempalace_sink);
     let app = build_app(state.clone());

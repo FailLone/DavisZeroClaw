@@ -51,6 +51,8 @@ struct HealthResponse {
     ingest_persist: crate::article_memory::PersistHealth,
     /// MemPalace projection sink counters. `status` ∈ {"live","silenced","disabled"}.
     mempalace: MempalaceHealth,
+    /// Router DHCP keeper status. `None` when disabled in local.toml.
+    router_dhcp: Option<crate::RouterHealthSnapshot>,
 }
 
 #[derive(Serialize)]
@@ -110,6 +112,9 @@ pub struct AppState {
     /// in local.toml. `None` disables the synchronous-wait path — the
     /// bridge then falls back to the historical 202 Accepted behavior.
     pub shortcut_reply: Option<Arc<crate::shortcut_reply::ShortcutReplyState>>,
+    /// Optional handle to the router DHCP keeper worker. `None` when
+    /// `[router_dhcp].enabled = false` in local.toml.
+    pub router_worker: Option<Arc<crate::RouterWorker>>,
 }
 
 impl AppState {
@@ -130,6 +135,7 @@ impl AppState {
         rule_stats: Arc<crate::article_memory::RuleStatsStore>,
         sample_store: Arc<crate::article_memory::SampleStore>,
         shortcut_reply: Option<Arc<crate::shortcut_reply::ShortcutReplyState>>,
+        router_worker: Option<Arc<crate::RouterWorker>>,
     ) -> Self {
         Self {
             client,
@@ -151,6 +157,7 @@ impl AppState {
                 std::time::Duration::from_secs(30),
             )),
             shortcut_reply,
+            router_worker,
         }
     }
 
@@ -311,6 +318,10 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         child_restarts: sink_snapshot.child_restarts,
         last_error: sink_snapshot.last_error,
     };
+    let router_dhcp = match state.router_worker.as_ref() {
+        Some(w) => Some(w.health_snapshot().await),
+        None => None,
+    };
     Json(
         serde_json::to_value(HealthResponse {
             status: "ok",
@@ -332,10 +343,12 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
                 "ha_mcp_live_context",
                 "shortcut_bridge",
                 "mempalace_sink",
+                "router_dhcp",
             ],
             crawl4ai: crawl4ai_state,
             ingest_persist,
             mempalace,
+            router_dhcp,
         })
         .unwrap_or_else(|_| json!({"status":"ok"})),
     )

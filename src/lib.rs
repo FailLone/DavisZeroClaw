@@ -25,6 +25,7 @@ mod model_routing;
 mod models;
 mod observability;
 pub mod router_supervisor;
+pub mod router_worker;
 mod runtime_paths;
 mod server;
 pub mod server_digest;
@@ -117,6 +118,11 @@ pub use models::{
     ResolveEntityPayload, ServiceExecution, TopFailedQuery,
 };
 pub use observability::init_tracing;
+pub use router_supervisor::{
+    parse_outcome, OutcomeKind, PythonRouterChecker, RouterAction, RouterCheckOutcome,
+    RouterChecker,
+};
+pub use router_worker::{RouterHealthSnapshot, RouterWorker};
 pub use runtime_paths::RuntimePaths;
 pub use server::{build_app, build_shortcut_bridge_app, AppState, Crawl4aiProfileLocks};
 pub use support::{build_issue, isoformat, normalize_text};
