@@ -53,6 +53,11 @@ enum Commands {
         #[command(subcommand)]
         command: CrawlCommand,
     },
+    /// Manage the router DHCP keeper worker.
+    RouterDhcp {
+        #[command(subcommand)]
+        command: RouterDhcpCommand,
+    },
     /// Inspect Davis configuration.
     Config {
         #[command(subcommand)]
@@ -205,6 +210,14 @@ enum CrawlProfile {
     ExpressAli,
     #[value(name = "express-jd", alias = "jd")]
     ExpressJd,
+}
+
+#[derive(Debug, Subcommand)]
+enum RouterDhcpCommand {
+    /// Provision the router_adapter venv and shared Playwright Chromium.
+    Install,
+    /// Run the Playwright check once and print the outcome.
+    RunOnce,
 }
 
 #[derive(Debug, Subcommand)]
@@ -539,6 +552,10 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
                 CrawlServiceCommand::Stop => crawl_service_stop(&paths).await,
             },
         },
+        Commands::RouterDhcp { command } => match command {
+            RouterDhcpCommand::Install => install_router_adapter(&paths),
+            RouterDhcpCommand::RunOnce => run_once_router_check(&paths).await,
+        },
         Commands::Config { command } => match command {
             ConfigCommand::Check => {
                 check_local_config(&paths)?;
@@ -674,6 +691,9 @@ use shortcut::*;
 
 mod crawl;
 use crawl::*;
+
+mod router_dhcp;
+use router_dhcp::*;
 
 mod process;
 pub(crate) use process::tool_path_env;

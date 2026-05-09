@@ -355,7 +355,7 @@ pub(super) async fn crawl_profile_login(paths: &RuntimePaths, profile: CrawlProf
 /// to fail later during `pip install`. We scan every `python3*` file on PATH,
 /// ask each interpreter for its actual version (so we see through symlinks
 /// like `python3 → python3.13`), and pick the highest satisfying (>= 3.10).
-fn resolve_host_python3() -> Result<PathBuf> {
+pub(super) fn resolve_host_python3() -> Result<PathBuf> {
     const MIN_MINOR: u32 = 10;
 
     // Use the same augmented PATH as every other subprocess call in this
