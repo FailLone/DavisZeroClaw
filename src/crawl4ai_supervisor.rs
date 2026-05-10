@@ -181,6 +181,22 @@ impl Crawl4aiSupervisor {
         self.probe_health().await.is_ok()
     }
 
+    async fn ensure_spawned_child_alive(&self) -> Result<(), Crawl4aiError> {
+        let mut guard = self.inner.lock().await;
+        let Some(child) = guard.child.as_mut() else {
+            return Ok(());
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => Err(Crawl4aiError::ServerUnavailable {
+                details: format!("adapter process exited during startup: {status:?}"),
+            }),
+            Ok(None) => Ok(()),
+            Err(err) => Err(Crawl4aiError::ServerUnavailable {
+                details: format!("adapter process status check failed: {err}"),
+            }),
+        }
+    }
+
     async fn spawn_child(&self) -> Result<(), Crawl4aiError> {
         let mut guard = self.inner.lock().await;
         let log_path = guard.paths.crawl4ai_log_path();
@@ -260,6 +276,7 @@ impl Crawl4aiSupervisor {
     ) -> Result<(), Crawl4aiError> {
         let start = std::time::Instant::now();
         loop {
+            self.ensure_spawned_child_alive().await?;
             match self
                 .http
                 .get(&self.health_url)
@@ -275,6 +292,7 @@ impl Crawl4aiSupervisor {
                     // skip the JSON allocation.
                     if status.is_success() {
                         let body: Value = resp.json().await.unwrap_or(Value::Null);
+                        self.ensure_spawned_child_alive().await?;
                         // Emit a single-line summary with the adapter's package versions.
                         // Unpinned-by-design (see Task 5 rationale): if a crawl breaks
                         // next week, `grep 'crawl4ai adapter ready' daemon.log` tells
