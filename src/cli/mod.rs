@@ -28,6 +28,21 @@ enum Commands {
         #[command(subcommand)]
         command: ServiceCommand,
     },
+    /// Read Davis runtime logs from one guided entrypoint.
+    Logs {
+        /// Component to show. Omit for the most useful operator logs.
+        #[arg(long, value_enum, default_value_t = LogComponent::All)]
+        component: LogComponent,
+        /// Number of recent lines per log file.
+        #[arg(long, default_value_t = 200)]
+        tail: usize,
+        /// Follow logs continuously.
+        #[arg(short = 'f', long)]
+        follow: bool,
+        /// Only print the resolved log file paths.
+        #[arg(long)]
+        paths: bool,
+    },
     /// Manage runtime skills.
     Skills {
         #[command(subcommand)]
@@ -114,6 +129,30 @@ enum ServiceCommand {
     TunnelUninstall,
     /// Show Cloudflare tunnel launchd and connectivity status.
     TunnelStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum LogComponent {
+    All,
+    Proxy,
+    Crawl4ai,
+    Zeroclaw,
+    RouterDhcp,
+    Tunnel,
+}
+
+impl std::fmt::Display for LogComponent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::All => "all",
+            Self::Proxy => "proxy",
+            Self::Crawl4ai => "crawl4ai",
+            Self::Zeroclaw => "zeroclaw",
+            Self::RouterDhcp => "router-dhcp",
+            Self::Tunnel => "tunnel",
+        };
+        f.write_str(value)
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -504,6 +543,12 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             ServiceCommand::TunnelUninstall => tunnel_uninstall(&paths),
             ServiceCommand::TunnelStatus => tunnel_status(&paths).await,
         },
+        Commands::Logs {
+            component,
+            tail,
+            follow,
+            paths: paths_only,
+        } => show_logs(&paths, component, tail, follow, paths_only),
         Commands::Skills { command } => match command {
             SkillsCommand::Sync => sync_runtime_skills(&paths),
             SkillsCommand::Install => install_skills(&paths),
@@ -698,6 +743,9 @@ use router_dhcp::*;
 mod process;
 pub(crate) use process::tool_path_env;
 use process::*;
+
+mod logs;
+use logs::*;
 
 #[cfg(test)]
 mod tests;

@@ -36,8 +36,9 @@ struct IssueResponse {
 
 #[derive(Serialize)]
 struct HealthResponse {
-    status: &'static str,
+    status: String,
     service: &'static str,
+    issues: Vec<String>,
     features: Vec<&'static str>,
     /// Supervisor view of the long-lived crawl4ai adapter:
     /// `healthy` — /health probe last succeeded
@@ -45,6 +46,7 @@ struct HealthResponse {
     /// `starting` — enabled, not abandoned, but not healthy yet (boot or restart)
     /// `abandoned` — supervisor exhausted its retry budget; no further respawns
     crawl4ai: &'static str,
+    crawl4ai_detail: crate::crawl4ai_supervisor::Crawl4aiHealthSnapshot,
     /// Ingest queue's persistence state. "healthy" means recent persists
     /// succeeded. "degraded" means 3+ consecutive failures — user should
     /// investigate disk space. Mirrors `queue.persist_health()`.
@@ -288,22 +290,8 @@ fn proxy_issue_response(err: ProxyError, query_entity: &str) -> (StatusCode, Jso
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
-    // Supervisor state summary. Order matters:
-    // 1. `abandoned` wins over everything — we've explicitly given up, so
-    //    reporting "healthy" because a probe coincidentally succeeds would
-    //    mislead operators.
-    // 2. `disabled` before `healthy` because a probe against an
-    //    unconfigured supervisor is meaningless.
-    // 3. `healthy` vs `starting` is the live probe vs. not-ready distinction.
-    let crawl4ai_state = if state.crawl4ai_supervisor.is_abandoned().await {
-        "abandoned"
-    } else if !state.crawl4ai_config.enabled {
-        "disabled"
-    } else if state.crawl4ai_supervisor.is_healthy().await {
-        "healthy"
-    } else {
-        "starting"
-    };
+    let crawl4ai_detail = state.crawl4ai_supervisor.health_snapshot().await;
+    let crawl4ai_state = crawl4ai_detail.status;
     let ingest_persist = state.ingest_queue.persist_health();
     let sink_snapshot = state.mempalace_sink.metrics().await;
     let mempalace_status: &'static str = if !sink_snapshot.enabled {
@@ -324,16 +312,40 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
     let router_dhcp = match state.router_worker.as_ref() {
         Some(w) => w.health_snapshot().await,
         None => crate::RouterHealthSnapshot {
+            status: "disabled",
             enabled: false,
+            interval_secs: 0,
+            tick_timeout_secs: 0,
             last_run: None,
             last_outcome: None,
             consecutive_failures: 0,
+            next_expected_by: None,
+            last_error_summary: None,
         },
+    };
+    let mut issues = Vec::new();
+    if state.crawl4ai_config.enabled && crawl4ai_state != "healthy" {
+        issues.push(format!("crawl4ai:{crawl4ai_state}"));
+    }
+    if router_dhcp.enabled && router_dhcp.status != "ok" && router_dhcp.status != "starting" {
+        issues.push(format!("router_dhcp:{}", router_dhcp.status));
+    }
+    if mempalace_status == "silenced" {
+        issues.push("mempalace:silenced".to_string());
+    }
+    if ingest_persist.state != "healthy" {
+        issues.push(format!("ingest_persist:{}", ingest_persist.state));
+    }
+    let top_status = if issues.is_empty() {
+        "ok".to_string()
+    } else {
+        "degraded".to_string()
     };
     Json(
         serde_json::to_value(HealthResponse {
-            status: "ok",
+            status: top_status,
             service: "davis_local_proxy",
+            issues,
             features: vec![
                 "audit",
                 "control_resolution",
@@ -354,6 +366,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
                 "router_dhcp",
             ],
             crawl4ai: crawl4ai_state,
+            crawl4ai_detail,
             ingest_persist,
             mempalace,
             router_dhcp,

@@ -22,6 +22,7 @@ pub struct WorkerState {
     consecutive_failures: u32,
     last_run: Option<DateTime<Utc>>,
     last_outcome_label: Option<&'static str>,
+    last_error_summary: Option<String>,
 }
 
 /// Decision rules from the spec, evaluated top-down (first match wins):
@@ -140,10 +141,15 @@ fn outcome_label(outcome: &RouterCheckOutcome) -> &'static str {
 /// Read-only snapshot of worker health for the daemon's `/health` route.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RouterHealthSnapshot {
+    pub status: &'static str,
     pub enabled: bool,
+    pub interval_secs: u64,
+    pub tick_timeout_secs: u64,
     pub last_run: Option<DateTime<Utc>>,
     pub last_outcome: Option<&'static str>,
     pub consecutive_failures: u32,
+    pub next_expected_by: Option<DateTime<Utc>>,
+    pub last_error_summary: Option<String>,
 }
 
 /// Periodic worker. Holds a checker (prod or test), a MemPalace sink,
@@ -213,11 +219,38 @@ impl RouterWorker {
     /// Snapshot for `/health` JSON.
     pub async fn health_snapshot(&self) -> RouterHealthSnapshot {
         let state = self.state.lock().await;
+        let next_expected_by = state.last_run.map(|last| {
+            last + chrono::Duration::seconds(
+                (self.config.interval_secs + self.config.tick_timeout_secs) as i64,
+            )
+        });
+        let stale_after = state.last_run.map(|last| {
+            last + chrono::Duration::seconds(
+                (self.config.interval_secs.saturating_mul(2) + self.config.tick_timeout_secs)
+                    as i64,
+            )
+        });
+        let status = if !self.config.enabled {
+            "disabled"
+        } else if state.last_run.is_none() {
+            "starting"
+        } else if stale_after.is_some_and(|deadline| Utc::now() > deadline) {
+            "stale"
+        } else if state.consecutive_failures > 0 {
+            "failing"
+        } else {
+            "ok"
+        };
         RouterHealthSnapshot {
+            status,
             enabled: self.config.enabled,
+            interval_secs: self.config.interval_secs,
+            tick_timeout_secs: self.config.tick_timeout_secs,
             last_run: state.last_run,
             last_outcome: state.last_outcome_label,
             consecutive_failures: state.consecutive_failures,
+            next_expected_by,
+            last_error_summary: state.last_error_summary.clone(),
         }
     }
 
@@ -230,6 +263,10 @@ impl RouterWorker {
             let mut state = self.state.lock().await;
             decide_and_advance(&mut state, outcome, now)
         };
+        {
+            let mut state = self.state.lock().await;
+            state.last_error_summary = outcome_error_summary(outcome);
+        }
         match outcome {
             RouterCheckOutcome::Ok {
                 action,
@@ -258,6 +295,20 @@ impl RouterWorker {
         if let DiaryDecision::Write(line) = decision {
             self.sink.diary_write(DIARY_WING, &line);
         }
+    }
+}
+
+fn outcome_error_summary(outcome: &RouterCheckOutcome) -> Option<String> {
+    match outcome {
+        RouterCheckOutcome::Ok { .. } => None,
+        RouterCheckOutcome::Reported { stage, reason, .. } => {
+            Some(format!("reported at {stage}: {reason}"))
+        }
+        RouterCheckOutcome::Crashed {
+            exit_code,
+            stderr_tail,
+        } => Some(format!("crashed exit={exit_code:?}: {stderr_tail}")),
+        RouterCheckOutcome::SpawnFailed { reason } => Some(format!("spawn failed: {reason}")),
     }
 }
 
@@ -382,10 +433,15 @@ mod tests {
         let mut state = WorkerState::default();
         let _ = decide_and_advance(&mut state, &reported("login"), ts(1_700_000_000));
         let snap = RouterHealthSnapshot {
+            status: "failing",
             enabled: true,
+            interval_secs: 600,
+            tick_timeout_secs: 90,
             last_run: state.last_run,
             last_outcome: state.last_outcome_label,
             consecutive_failures: state.consecutive_failures,
+            next_expected_by: None,
+            last_error_summary: Some("reported at login: selector.timeout".into()),
         };
         assert_eq!(snap.last_outcome, Some("reported"));
         assert_eq!(snap.consecutive_failures, 1);

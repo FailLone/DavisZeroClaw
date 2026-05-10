@@ -6,6 +6,7 @@ use crate::runtime_paths::RuntimePaths;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::process::Command;
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Formatted, Item, Table, Value};
 
 const BUILTIN_QUERY_CLASSIFICATION_TOML: &str =
@@ -80,7 +81,18 @@ impl RoutingProfile {
 pub fn render_runtime_config(paths: &RuntimePaths, config: &LocalConfig) -> Result<()> {
     let template = std::fs::read_to_string(paths.config_template_path())
         .context("failed to read ZeroClaw config template")?;
-    let rendered = render_runtime_config_str(&template, &paths.repo_root, config)?;
+    let imessage_enabled = imessage_runtime_available();
+    if !imessage_enabled {
+        tracing::warn!(
+            "ZeroClaw iMessage channel disabled because Messages chat.db is not readable"
+        );
+    }
+    let rendered = render_runtime_config_str_with_imessage(
+        &template,
+        &paths.repo_root,
+        config,
+        imessage_enabled,
+    )?;
 
     std::fs::create_dir_all(&paths.runtime_dir)?;
     let runtime_path = paths.runtime_config_path();
@@ -92,10 +104,20 @@ pub fn render_runtime_config(paths: &RuntimePaths, config: &LocalConfig) -> Resu
 }
 
 /// Pure-string version of `render_runtime_config` for testing. No disk I/O.
+#[cfg(test)]
 fn render_runtime_config_str(
     template: &str,
     repo_root: &std::path::Path,
     config: &LocalConfig,
+) -> Result<String> {
+    render_runtime_config_str_with_imessage(template, repo_root, config, true)
+}
+
+fn render_runtime_config_str_with_imessage(
+    template: &str,
+    repo_root: &std::path::Path,
+    config: &LocalConfig,
+    imessage_enabled: bool,
 ) -> Result<String> {
     let mut doc: DocumentMut = template
         .parse()
@@ -104,7 +126,7 @@ fn render_runtime_config_str(
     patch_allowed_roots(&mut doc, repo_root)?;
     patch_webhook_secret(&mut doc, config);
     patch_webhook_send_url(&mut doc, config);
-    patch_imessage(&mut doc, config);
+    patch_imessage(&mut doc, config, imessage_enabled);
     patch_providers(&mut doc, config)?;
     patch_query_classification(&mut doc, config);
     patch_model_fallbacks(&mut doc, config);
@@ -118,6 +140,44 @@ fn render_runtime_config_str(
     rendered.push_str(&render_digest_cron_jobs(config));
     validate_rendered(&rendered)?;
     Ok(rendered)
+}
+
+#[cfg(target_os = "macos")]
+fn imessage_runtime_available() -> bool {
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    let messages_db = std::path::PathBuf::from(home)
+        .join("Library")
+        .join("Messages")
+        .join("chat.db");
+    if !messages_db.is_file() {
+        return false;
+    }
+    let Some(sqlite3) = command_path("sqlite3") else {
+        return false;
+    };
+    Command::new(sqlite3)
+        .arg("-readonly")
+        .arg(&messages_db)
+        .arg("select 1;")
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn imessage_runtime_available() -> bool {
+    false
+}
+
+fn command_path(name: &str) -> Option<std::path::PathBuf> {
+    for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
+        let path = dir.join(name);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 /// Final safety net. The template is parsed TOML and every patch writes
@@ -239,14 +299,14 @@ fn patch_webhook_send_url(doc: &mut DocumentMut, config: &LocalConfig) {
     }
 }
 
-fn patch_imessage(doc: &mut DocumentMut, config: &LocalConfig) {
+fn patch_imessage(doc: &mut DocumentMut, config: &LocalConfig, enabled: bool) {
     let channels = match doc.get_mut("channels").and_then(Item::as_table_mut) {
         Some(t) => t,
         None => return,
     };
     let mut imessage = Table::new();
     imessage.set_implicit(false);
-    imessage["enabled"] = Item::Value(Value::Boolean(Formatted::new(true)));
+    imessage["enabled"] = Item::Value(Value::Boolean(Formatted::new(enabled)));
     let mut contacts = Array::new();
     for contact in &config.imessage.allowed_contacts {
         contacts.push(contact.clone());
@@ -704,6 +764,28 @@ enabled = true
             toml::from_str(&rendered).expect("rendered output must be valid TOML");
         assert!(parsed.get("providers").is_some());
         assert!(parsed.get("query_classification").is_some());
+    }
+
+    #[test]
+    fn render_runtime_config_can_disable_imessage_channel() {
+        let rendered = render_runtime_config_str_with_imessage(
+            TEST_TEMPLATE,
+            std::path::Path::new("/tmp/davis-test"),
+            &sample_config(),
+            false,
+        )
+        .unwrap();
+        let parsed: toml::Value = toml::from_str(&rendered).unwrap();
+        assert_eq!(
+            parsed["channels"]["imessage"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert!(
+            parsed["channels"]["imessage"]["allowed_contacts"]
+                .as_array()
+                .is_some(),
+            "disabled channel should still preserve configured contacts"
+        );
     }
 
     #[test]

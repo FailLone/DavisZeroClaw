@@ -99,6 +99,8 @@ pub(super) fn render_tunnel_launchd_plist(spec: &TunnelServiceSpec) -> String {
 
 pub(super) async fn tunnel_install(paths: &RuntimePaths) -> Result<()> {
     ensure_macos("Davis tunnel management")?;
+    fs::create_dir_all(&paths.runtime_dir)?;
+    rotate_runtime_logs(paths)?;
 
     let cloudflared = require_command("cloudflared").context(
         "cloudflared not found. Install it first: brew install cloudflare/cloudflare/cloudflared",

@@ -27,6 +27,7 @@ pub(super) async fn start(paths: &RuntimePaths) -> Result<()> {
     let zeroclaw = require_command("zeroclaw")
         .context("zeroclaw was not found. Install it first: brew install zeroclaw")?;
     fs::create_dir_all(&paths.runtime_dir)?;
+    rotate_runtime_logs(paths)?;
 
     if !paths.config_template_path().is_file() {
         bail!(
@@ -149,6 +150,7 @@ pub(super) fn stop(paths: &RuntimePaths) -> Result<()> {
 pub(super) async fn install_davis_service(paths: &RuntimePaths) -> Result<()> {
     ensure_macos("Davis service management")?;
     fs::create_dir_all(&paths.runtime_dir)?;
+    rotate_runtime_logs(paths)?;
     if pid_file_is_alive(&paths.local_proxy_pid_path())
         || pid_file_is_alive(&paths.daemon_pid_path())
     {
@@ -390,7 +392,18 @@ pub(super) async fn status_davis_service(paths: &RuntimePaths) -> Result<()> {
     }
 
     match http_get_text("http://127.0.0.1:3010/health").await {
-        Ok(_) => println!("- proxy: ok (http://127.0.0.1:3010/health)"),
+        Ok(payload) => {
+            let health = serde_json::from_str::<Value>(&payload).ok();
+            let top_status = health
+                .as_ref()
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str)
+                .unwrap_or("ok");
+            println!("- proxy: {top_status} (http://127.0.0.1:3010/health)");
+            if let Some(health) = &health {
+                print_proxy_health_summary(health);
+            }
+        }
         Err(err) => println!("- proxy: unavailable ({err})"),
     }
 
@@ -402,6 +415,7 @@ pub(super) async fn status_davis_service(paths: &RuntimePaths) -> Result<()> {
         "- stderr: {}",
         paths.runtime_dir.join("proxy.launchd.stderr.log").display()
     );
+    println!("- logs: daviszeroclaw logs --follow");
     tunnel_status(paths).await?;
     Ok(())
 }
@@ -415,6 +429,7 @@ pub(super) async fn restart_davis_service(paths: &RuntimePaths) -> Result<()> {
     }
 
     ensure_release_binary(paths, "davis-local-proxy")?;
+    rotate_runtime_logs(paths)?;
     render_current_runtime_config(paths)?;
     let user_target = launchd_user_target()?;
 
@@ -691,6 +706,55 @@ pub(super) fn print_health_component(health: &Value, component: &str, label: &st
         println!("- {label}: {status} ({error})");
     } else {
         println!("- {label}: {status}");
+    }
+}
+
+pub(super) fn print_proxy_health_summary(health: &Value) {
+    if let Some(issues) = health.get("issues").and_then(Value::as_array) {
+        if !issues.is_empty() {
+            let rendered = issues
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            if !rendered.is_empty() {
+                println!("  issues: {rendered}");
+            }
+        }
+    }
+    if let Some(crawl4ai) = health.get("crawl4ai").and_then(Value::as_str) {
+        let pid = health
+            .pointer("/crawl4ai_detail/supervised_pid")
+            .and_then(Value::as_u64)
+            .map(|pid| format!(", pid={pid}"))
+            .unwrap_or_default();
+        let restarts = health
+            .pointer("/crawl4ai_detail/restart_count")
+            .and_then(Value::as_u64)
+            .map(|count| format!(", restarts={count}"))
+            .unwrap_or_default();
+        println!("  crawl4ai: {crawl4ai}{pid}{restarts}");
+        if crawl4ai != "healthy" && crawl4ai != "disabled" {
+            println!("    next: daviszeroclaw logs --component crawl4ai --tail 120");
+        }
+    }
+    if let Some(router) = health.get("router_dhcp") {
+        let status = router
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let last_run = router
+            .get("last_run")
+            .and_then(Value::as_str)
+            .unwrap_or("never");
+        let failures = router
+            .get("consecutive_failures")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        println!("  router_dhcp: {status}, last_run={last_run}, failures={failures}");
+        if let Some(err) = router.get("last_error_summary").and_then(Value::as_str) {
+            println!("    last_error: {err}");
+        }
     }
 }
 

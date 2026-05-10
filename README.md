@@ -92,6 +92,28 @@ daviszeroclaw service status
 daviszeroclaw service restart
 ```
 
+查看日志时优先使用统一入口：
+
+```bash
+daviszeroclaw logs
+daviszeroclaw logs --follow
+daviszeroclaw logs --component crawl4ai
+daviszeroclaw logs --component router-dhcp
+```
+
+`logs` 会显示它正在读取哪些 runtime 日志文件。一般排障先看
+`daviszeroclaw service status`，再按提示运行对应的 `daviszeroclaw logs ...`
+命令；不需要手动猜 `.runtime/davis/` 里哪个 `.log` 最重要。
+
+如果 ZeroClaw 的 iMessage channel 因为无法读取
+`~/Library/Messages/chat.db` 而反复重启，Davis 会在渲染 runtime config 时
+自动禁用该 channel，避免刷日志。修复权限后运行：
+
+```bash
+daviszeroclaw imessage check-permissions
+daviszeroclaw service restart
+```
+
 卸载后台服务：
 
 ```bash

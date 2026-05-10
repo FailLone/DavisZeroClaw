@@ -8,7 +8,9 @@
 //! non-recoverable error to the daemon.
 
 use crate::{Crawl4aiConfig, Crawl4aiError, RuntimePaths};
+use chrono::{DateTime, Utc};
 use reqwest::Client;
+use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -64,6 +66,25 @@ struct SupervisorInner {
     /// the surrounding Mutex already serializes every read/write; adding
     /// `AtomicBool` here would just be noise.
     gave_up: bool,
+    current_pid: Option<u32>,
+    restart_count: u64,
+    last_start: Option<DateTime<Utc>>,
+    last_exit_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Crawl4aiHealthSnapshot {
+    pub status: &'static str,
+    pub enabled: bool,
+    pub port: u16,
+    pub health_url: String,
+    pub probe_ok: bool,
+    pub supervised_pid: Option<u32>,
+    pub supervised_pid_alive: Option<bool>,
+    pub restart_count: u64,
+    pub last_start: Option<DateTime<Utc>>,
+    pub last_exit_status: Option<String>,
+    pub abandoned: bool,
 }
 
 impl Crawl4aiSupervisor {
@@ -87,6 +108,10 @@ impl Crawl4aiSupervisor {
             python,
             port,
             gave_up: false,
+            current_pid: None,
+            restart_count: 0,
+            last_start: None,
+            last_exit_status: None,
         };
         let supervisor = Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -121,6 +146,10 @@ impl Crawl4aiSupervisor {
             python: PathBuf::new(),
             port: 0,
             gave_up: false,
+            current_pid: None,
+            restart_count: 0,
+            last_start: None,
+            last_exit_status: None,
         };
         Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -136,6 +165,47 @@ impl Crawl4aiSupervisor {
     pub async fn is_abandoned(&self) -> bool {
         let guard = self.inner.lock().await;
         guard.gave_up
+    }
+
+    pub async fn health_snapshot(&self) -> Crawl4aiHealthSnapshot {
+        let (enabled, port, supervised_pid, restart_count, last_start, last_exit_status, abandoned) = {
+            let guard = self.inner.lock().await;
+            (
+                guard.config.enabled,
+                guard.port,
+                guard.current_pid,
+                guard.restart_count,
+                guard.last_start,
+                guard.last_exit_status.clone(),
+                guard.gave_up,
+            )
+        };
+        let supervised_pid_alive = supervised_pid.map(pid_is_alive);
+        let probe_ok = enabled && !abandoned && self.probe_health().await.is_ok();
+        let status = if !enabled {
+            "disabled"
+        } else if abandoned {
+            "abandoned"
+        } else if supervised_pid_alive == Some(false) {
+            "unhealthy"
+        } else if probe_ok && supervised_pid_alive == Some(true) {
+            "healthy"
+        } else {
+            "starting"
+        };
+        Crawl4aiHealthSnapshot {
+            status,
+            enabled,
+            port,
+            health_url: self.health_url.clone(),
+            probe_ok,
+            supervised_pid,
+            supervised_pid_alive,
+            restart_count,
+            last_start,
+            last_exit_status,
+            abandoned,
+        }
     }
 
     /// Returns the URL callers should POST /crawl to (e.g. `http://127.0.0.1:11235`).
@@ -249,7 +319,9 @@ impl Crawl4aiSupervisor {
         if let Some(pid) = child.id() {
             let pid_path = guard.paths.crawl4ai_pid_path();
             let _ = std::fs::write(&pid_path, pid.to_string());
+            guard.current_pid = Some(pid);
         }
+        guard.last_start = Some(Utc::now());
         guard.child = Some(child);
         tracing::info!(port = guard.port, "crawl4ai adapter server spawned");
         Ok(())
@@ -374,6 +446,12 @@ impl Crawl4aiSupervisor {
                     backoff_ms = backoff.as_millis() as u64,
                     "crawl4ai adapter exited; restarting"
                 );
+                {
+                    let mut guard = self.inner.lock().await;
+                    guard.current_pid = None;
+                    guard.restart_count += 1;
+                    guard.last_exit_status = Some(format!("{status:?}"));
+                }
                 sleep(backoff).await;
                 match self.spawn_child().await {
                     Ok(()) => match self.wait_until_healthy().await {
@@ -408,6 +486,10 @@ impl Crawl4aiSupervisor {
     }
 }
 
+fn pid_is_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
 #[cfg(any(test, feature = "test-util"))]
 impl Crawl4aiSupervisor {
     /// Test constructor: skips spawning a child, points `base_url()` and the
@@ -439,6 +521,10 @@ impl Crawl4aiSupervisor {
                 python: PathBuf::new(),
                 port,
                 gave_up: false,
+                current_pid: None,
+                restart_count: 0,
+                last_start: None,
+                last_exit_status: None,
             })),
             health_url,
             http,
