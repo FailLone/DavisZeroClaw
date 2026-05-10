@@ -99,11 +99,16 @@ daviszeroclaw logs
 daviszeroclaw logs --follow
 daviszeroclaw logs --component crawl4ai
 daviszeroclaw logs --component router-dhcp
+daviszeroclaw logs --clear
 ```
 
 `logs` 会显示它正在读取哪些 runtime 日志文件。一般排障先看
 `daviszeroclaw service status`，再按提示运行对应的 `daviszeroclaw logs ...`
 命令；不需要手动猜 `.runtime/davis/` 里哪个 `.log` 最重要。
+
+日志轮转使用日期后缀，例如 `proxy.launchd.stderr.log.2026-05-10`；
+同一天多次轮转会追加时间。Davis 在启动或重启服务前自动轮转超过 10MB 的日志，
+并清理超过 3 天的归档。`daviszeroclaw logs --clear` 会清空当前选择的日志并删除它们的归档。
 
 如果 ZeroClaw 的 iMessage channel 因为无法读取
 `~/Library/Messages/chat.db` 而反复重启，Davis 会在渲染 runtime config 时

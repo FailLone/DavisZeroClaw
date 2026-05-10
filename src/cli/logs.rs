@@ -1,13 +1,16 @@
 use super::*;
 use crate::RuntimePaths;
 use anyhow::{Context, Result};
+use chrono::Local;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, SystemTime};
 
 const LOG_ROTATE_MAX_BYTES: u64 = 10 * 1024 * 1024;
-const LOG_ROTATE_KEEP: u8 = 3;
+const LOG_ROTATE_KEEP_DAYS: u64 = 3;
 
 #[derive(Debug, Clone)]
 pub(super) struct LogFile {
@@ -78,12 +81,13 @@ pub(super) fn runtime_log_files(paths: &RuntimePaths) -> Vec<LogFile> {
 
 pub(super) fn rotate_runtime_logs(paths: &RuntimePaths) -> Result<()> {
     for log in runtime_log_files(paths) {
-        rotate_one_log(&log.path, LOG_ROTATE_MAX_BYTES, LOG_ROTATE_KEEP)?;
+        rotate_one_log(&log.path, LOG_ROTATE_MAX_BYTES, LOG_ROTATE_KEEP_DAYS)?;
     }
     Ok(())
 }
 
-fn rotate_one_log(path: &Path, max_bytes: u64, keep: u8) -> Result<()> {
+fn rotate_one_log(path: &Path, max_bytes: u64, keep_days: u64) -> Result<()> {
+    prune_archived_logs(path, keep_days)?;
     let Ok(metadata) = fs::metadata(path) else {
         return Ok(());
     };
@@ -91,26 +95,52 @@ fn rotate_one_log(path: &Path, max_bytes: u64, keep: u8) -> Result<()> {
         return Ok(());
     }
 
-    for index in (1..=keep).rev() {
-        let rotated = rotated_path(path, index);
-        if index == keep {
-            let _ = fs::remove_file(&rotated);
-            continue;
-        }
-        let next = rotated_path(path, index + 1);
-        if rotated.is_file() {
-            let _ = fs::rename(&rotated, &next);
-        }
-    }
-
-    let first = rotated_path(path, 1);
-    fs::rename(path, &first)
-        .with_context(|| format!("rotate log {} -> {}", path.display(), first.display()))?;
+    let rotated = rotated_path(path);
+    fs::rename(path, &rotated)
+        .with_context(|| format!("rotate log {} -> {}", path.display(), rotated.display()))?;
+    prune_archived_logs(path, keep_days)?;
     Ok(())
 }
 
-fn rotated_path(path: &Path, index: u8) -> PathBuf {
-    PathBuf::from(format!("{}.{}", path.display(), index))
+fn rotated_path(path: &Path) -> PathBuf {
+    let day = Local::now().format("%Y-%m-%d").to_string();
+    let base = PathBuf::from(format!("{}.{}", path.display(), day));
+    if !base.exists() {
+        return base;
+    }
+    let timestamp = Local::now().format("%Y-%m-%d-%H%M%S").to_string();
+    PathBuf::from(format!("{}.{}", path.display(), timestamp))
+}
+
+fn prune_archived_logs(path: &Path, keep_days: u64) -> Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(());
+    };
+    let prefix = format!("{file_name}.");
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(keep_days * 24 * 60 * 60))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .unwrap_or(SystemTime::now());
+        if modified < cutoff {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn show_logs(
@@ -119,9 +149,14 @@ pub(super) fn show_logs(
     tail: usize,
     follow: bool,
     paths_only: bool,
+    clear: bool,
 ) -> Result<()> {
     let files = selected_logs(paths, component);
     print_log_guide(paths, component, &files);
+    if clear {
+        clear_logs(&files)?;
+        return Ok(());
+    }
     if paths_only {
         return Ok(());
     }
@@ -132,6 +167,51 @@ pub(super) fn show_logs(
         print_logs(&files, tail, filter);
         Ok(())
     }
+}
+
+fn clear_logs(files: &[LogFile]) -> Result<()> {
+    for file in files {
+        if let Some(parent) = file.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&file.path)
+            .with_context(|| format!("truncate {}", file.path.display()))?;
+        let removed = remove_archived_logs(&file.path)?;
+        println!(
+            "cleared {} (removed {removed} archived file{})",
+            file.path.display(),
+            if removed == 1 { "" } else { "s" }
+        );
+    }
+    Ok(())
+}
+
+fn remove_archived_logs(path: &Path) -> Result<usize> {
+    let Some(parent) = path.parent() else {
+        return Ok(0);
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(0);
+    };
+    let prefix = format!("{file_name}.");
+    let mut removed = 0;
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with(&prefix) {
+            if fs::remove_file(entry.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
 }
 
 fn selected_logs(paths: &RuntimePaths, component: LogComponent) -> Vec<LogFile> {

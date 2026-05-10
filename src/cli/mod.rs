@@ -42,6 +42,9 @@ enum Commands {
         /// Only print the resolved log file paths.
         #[arg(long)]
         paths: bool,
+        /// Truncate selected current logs and remove their archived rotations.
+        #[arg(long, conflicts_with = "follow")]
+        clear: bool,
     },
     /// Manage runtime skills.
     Skills {
@@ -548,7 +551,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             tail,
             follow,
             paths: paths_only,
-        } => show_logs(&paths, component, tail, follow, paths_only),
+            clear,
+        } => show_logs(&paths, component, tail, follow, paths_only, clear),
         Commands::Skills { command } => match command {
             SkillsCommand::Sync => sync_runtime_skills(&paths),
             SkillsCommand::Install => install_skills(&paths),
