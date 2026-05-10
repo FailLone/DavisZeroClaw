@@ -25,6 +25,11 @@ fn compact_json(value: &Value) -> String {
 const HEALTH_PATH: &str = "/health";
 const STARTUP_PROBE_INTERVAL: Duration = Duration::from_millis(200);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+/// After `/health` first returns OK, keep the just-spawned child alive for a
+/// short settle window before declaring it ready. This prevents a port-squatter
+/// false positive: the probe can hit an older adapter on the same port while
+/// the new child is still in the process of failing its bind and exiting.
+const STARTUP_STABILITY_GRACE: Duration = Duration::from_secs(1);
 /// Grace window before a structured 503 from `/health` short-circuits the
 /// startup probe. Uvicorn can respond with 503 while the FastAPI app is
 /// still wiring up its lifespan; waiting ~5s is enough to rule out
@@ -181,6 +186,11 @@ impl Crawl4aiSupervisor {
         self.probe_health().await.is_ok()
     }
 
+    async fn has_spawned_child(&self) -> bool {
+        let guard = self.inner.lock().await;
+        guard.child.is_some()
+    }
+
     async fn ensure_spawned_child_alive(&self) -> Result<(), Crawl4aiError> {
         let mut guard = self.inner.lock().await;
         let Some(child) = guard.child.as_mut() else {
@@ -292,7 +302,11 @@ impl Crawl4aiSupervisor {
                     // skip the JSON allocation.
                     if status.is_success() {
                         let body: Value = resp.json().await.unwrap_or(Value::Null);
-                        self.ensure_spawned_child_alive().await?;
+                        if self.has_spawned_child().await {
+                            self.ensure_spawned_child_alive().await?;
+                            sleep(STARTUP_STABILITY_GRACE).await;
+                            self.ensure_spawned_child_alive().await?;
+                        }
                         // Emit a single-line summary with the adapter's package versions.
                         // Unpinned-by-design (see Task 5 rationale): if a crawl breaks
                         // next week, `grep 'crawl4ai adapter ready' daemon.log` tells
